@@ -1,96 +1,69 @@
 # 当前任务
 
-派发对象：Coding Agent。本文件只覆盖 T004。不要同时做 T005–T018。
+派发对象：Coding Agent。本文件只覆盖 T005。不要同时做 T006–T018。
 
-- 任务编号：T004
-- 任务名称：已核对的 eRob 错误码查表
+- 任务编号：T005
+- 任务名称：ENI 从站标识只读清点
 - 当前状态：DONE
-- 提交：`d6caceed43e24d72012eae28bd30d864b1a2c4c7`
-- 派发依据：T001–T003 已是 DONE。关键路径上的 P0 任务已经结束。T004 为 READY，无前置任务，并且可以用 gtest 自动判定。T005 仍为 READY，本轮不派发。T006–T018 保持 BLOCKED。
+- 提交：`cb52c981c005d00ebdc49ad0e6def0e38fff6c28`
+- 派发依据：T001–T004 已是 DONE。剩下的 READY 任务只有 T005。它没有前置任务。T006–T018 保持 BLOCKED，本轮不派发。
 
 ## 任务目标
 
-提供一个无 I/O 的函数，把协议规格第 8.4 节已经点名的 `0x603F` 数值映射到手册中的名称。未知数值返回“未收录”，不生成新名称。
+阅读仓库里已有的 `Gecat_15axis.eni`，列出文件中能直接读到的从站数量、厂商号和产品号。结果只作为配置文件记录。
 
 ## 输入文件
 
-- `specs/protocol_spec.md` 第 8.4 节
-- `src/x1_coffee_hardware_core/CMakeLists.txt`
-- `plans/tasks/T004.md`
+- `src/x1_coffee_integration/vendor/gtn/Gecat_15axis.eni`
+- `src/x1_coffee_integration/vendor/gtn/README.md`
+- `specs/unresolved.md`
+- `AGENTS.md` 中关于 `slavenum=15` 只适用于 `coffee_15_no_slide`、不得修改该 ENI 的约束
+- `plans/tasks/T005.md`
 
 ## 协议和接口依据
 
-只收录这些代码和短名：
+不新增 C++ 或 Python 接口。产出是 `plans/eni_inventory.md`。文内每条标识都要带文件中的位置。读不到的字段写成“文件中无此字段”。
 
-- `0x2214` 过流
-- `0x3210` 母线过压
-- `0x3220` 母线欠压
-- `0x7305`、`0x7306` 编码器数据错
-- `0x730F` 电池电压低
-- `0x8130` CAN 心跳错
-- `0x8500` 位置误差超限
-- `0xA000` 主站掉线
-- `0xF004` EtherCAT 初始化错误
-- `0xF005` STO 激活
-- `0xF008` 母线低于 19 V
-
-掉线后的抱闸动作未知。查表不得返回抱闸结论。
-
-```text
-optional<string> erobErrorName(uint16_t code)
-```
-
-只读，无副作用。不读取总线，不调用 `GTN_*`。名称使用规格里的中文短名。`0x0000` 不在上述清单中，必须走“未收录”。
+`slavenum=15` 只适用于 `coffee_15_no_slide`。不得把 Vendor ID 写成现场关节已经证实的型号。不得把清点结果写入 `specs/protocol_spec.md` 并标成 VERIFIED。
 
 ## 前置依赖及检查结果
 
 | 检查 | 结果 |
 |---|---|
-| T004 在索引中的状态 | 派发前为 READY |
+| T005 在索引中的状态 | 派发前为 READY |
 | 前置任务 | 无 |
-| T003 | DONE，提交 `d81e2f5`。`plans/current_task.md` 在派发前记录的是已完成任务，可以更换 |
-| Git | `master` 上已有提交。`.gitignore` 和计划文件有未提交修改。不要把它们纳入本任务 |
+| T004 | DONE，提交 `d6cacee`。`plans/current_task.md` 在派发前记录的是已完成任务，可以更换 |
+| Git | `master` 干净，另有未跟踪的 `Gecat.log`。不要把该日志纳入本任务 |
 | BLOCKED 任务 | 未跳过。T006–T018 仍为 BLOCKED |
 
 ## 允许修改的文件
 
-- `src/x1_coffee_hardware_core/include/x1_coffee_hardware_core/erob_error_names.hpp`
-- `src/x1_coffee_hardware_core/src/erob_error_names.cpp`
-- `src/x1_coffee_hardware_core/test/erob_error_names_test.cpp`
-- `src/x1_coffee_hardware_core/CMakeLists.txt`（只增加该库文件和测试）
+- `plans/eni_inventory.md`
 
 ## 禁止修改的文件
 
-- `production_gtn_transport.*`、`gtn_native_api.*`、`gtn_transport.hpp`
-- `pending_gtn_transport.*`、`command_guard.*`、`coffee_axis_model.*`
-- 消息、标定、`vendor/gtn`、`manual/`、MoveIt 快照
-- T005–T018 的范围
+- `Gecat_15axis.eni`、`gtn_core1.cfg`、`Gecat.xml`、`Googol.xml`、任何 `.so`
+- `specs/protocol_spec.md`、`specs/register_map.csv` 的状态列
+- 业务源码、标定、手册
+- `vendor/gtn/README.md`
 
 ## 实施范围
 
-头文件、一个编译单元、一个 gtest，并注册到 `x1_coffee_hardware_core` 的测试。不把查表接到传输层或 ROS 消息。
+只读 ENI 和同目录 `vendor/gtn/README.md` 里已有的校验和说明。可以引用，不可以改写。
 
 ## 测试命令
 
-```bash
-source environment/scripts/setup_sdk_environment.sh
-source install/setup.bash
-colcon test --packages-select x1_coffee_hardware_core --event-handlers console_direct+
-```
+清点完成后用搜索确认 `slavenum` 与条目数量的关系，并把命令写进 `plans/eni_inventory.md`。不运行 GTN，不启动 launch。
 
-`colcon test` 不负责编译。若新测试目标尚未生成，先编译 `x1_coffee_hardware_core`，再执行上述命令。
-
-断言清单中的每个代码命中预期短名，`0x0000` 和 `0xFFFF` 为未收录。已有三个 gtest 仍须通过。
+完成后用 `git diff` 确认 ENI 和动态库没有变更。
 
 ## 验收条件
 
-新测试退出码为 0。源码中的代码个数与上面的清单一致，没有额外错误码。仓库里对 `erobErrorName` 的引用只出现在该头文件、实现和测试中。
-
-查表若被接进周期线程或 SDO 写路径，任务失败。
+`plans/eni_inventory.md` 存在，并同时包含两句：文件内读到的从站数量；“本记录不是协议规格中的 VERIFIED”。没有把 Vendor ID 写成现场关节已经证实的型号。ENI 和动态库没有 diff。
 
 ## 硬件权限
 
-不允许打开控制卡，不允许 `GTN_Open`、`GTN_AxisOn`、实机 launch 或运动。本任务只编译和运行软件测试。
+不允许打开控制卡，不允许 `GTN_Open`、`GTN_AxisOn`、实机 launch 或运动。本任务只读仓库文件。
 
 ## 完成报告要求
 
@@ -103,4 +76,4 @@ colcon test --packages-select x1_coffee_hardware_core --event-handlers console_d
 - 是否满足验收标准
 - 是否可以进入下一任务
 
-回滚方法：删除三个新文件，并还原 `CMakeLists.txt`。
+回滚方法：删除 `plans/eni_inventory.md`。
