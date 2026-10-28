@@ -15,4 +15,12 @@ install(PROGRAMS
   scripts/joint_angle_check.py
   DESTINATION lib/${PROJECT_NAME})
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_test REQUIRED)
+  ament_add_test(test_startup_motion
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/test/test_startup_motion.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+endif()
+
 ament_package()

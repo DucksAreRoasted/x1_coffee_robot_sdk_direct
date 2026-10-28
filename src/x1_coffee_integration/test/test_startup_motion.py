@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline regressions for startup PVT protocol and measured arrival."""
 import ast
+import math
 from pathlib import Path
 import runpy
 import sys
@@ -21,12 +22,13 @@ for item in ast.walk(TREE):
         METHODS[item.name] = (scope[item.name], scope)
 
 class StartupRegression(unittest.TestCase):
-    def exercise(self, reply="1 ok", reaches=True):
+    def exercise(self, reply="1 ok", reaches=True, target=None, joint_value=0.2):
         clock = [0.0]
         logs = []
         sent = []
-        target = {name: 0.0 for name in NS["JOINTS"]}
-        node = types.SimpleNamespace(joint_states={name: 0.2 for name in target})
+        if target is None:
+            target = {name: 0.0 for name in NS["JOINTS"]}
+        node = types.SimpleNamespace(joint_states={name: joint_value for name in target})
         node.get_parameter = lambda key: types.SimpleNamespace(value=0.02 if key == "pose_tolerance_rad" else "unused")
         node.get_logger = lambda: types.SimpleNamespace(info=logs.append, error=logs.append)
         node.create_subscription = lambda kind, topic, callback, qos: setattr(node, "result_callback", callback)
@@ -61,6 +63,38 @@ class StartupRegression(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(sent[0][:3], [1.0, 0.8, 1.0])
         self.assertEqual(len(sent[0]), 18)
+
+    def test_pvt_payload_uses_radian_targets_in_joint_order(self):
+        # 各轴目标不同，才能看出顺序和弧度没有被换成角度。
+        target = {name: 0.1 * (index + 1) for index, name in enumerate(NS["JOINTS"])}
+        result, sent, logs = self.exercise(target=target)
+        farthest = max(abs(0.2 - value) for value in target.values())
+        self.assertTrue(result)
+        self.assertEqual(sent[0][0], 1.0)
+        self.assertEqual(sent[0][1], max(0.8, farthest / 0.4))
+        self.assertEqual(sent[0][2], 1.0)
+        self.assertEqual(sent[0][3:], [target[name] for name in NS["JOINTS"]])
+
+    def test_two_radian_limit_is_closed_at_two_and_open_beyond(self):
+        at_limit = {name: 0.0 for name in NS["JOINTS"]}
+        at_limit["Joint_Body"] = 2.0
+        result, sent, logs = self.exercise(target=at_limit, joint_value=0.0)
+        self.assertTrue(result)
+        self.assertEqual(sent[0][1], 5.0)
+        self.assertEqual(sent[0][3], 2.0)
+
+        beyond = dict(at_limit)
+        beyond["Joint_Body"] = math.nextafter(2.0, 3.0)
+        result, sent, logs = self.exercise(target=beyond, joint_value=0.0)
+        self.assertFalse(result)
+        self.assertEqual(sent, [])
+        self.assertTrue(any("超过 2 rad" in line for line in logs))
+
+    def test_already_at_mechanical_zero_does_not_publish(self):
+        result, sent, logs = self.exercise(joint_value=0.0)
+        self.assertTrue(result)
+        self.assertEqual(sent, [])
+        self.assertTrue(any("已在机械零位" in line for line in logs))
 
     def test_accepted_but_stationary_is_failure(self):
         result, _, logs = self.exercise(reaches=False)

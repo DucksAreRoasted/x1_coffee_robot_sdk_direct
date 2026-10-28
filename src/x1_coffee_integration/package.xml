@@ -27,5 +27,7 @@
   <exec_depend>x1_coffee_device_sdk</exec_depend>
   <exec_depend>x1_coffee_ros2_control</exec_depend>
 
+  <test_depend>ament_cmake_test</test_depend>
+
   <export><build_type>ament_cmake</build_type></export>
 </package>
