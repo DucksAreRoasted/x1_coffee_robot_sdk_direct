@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>arm_describle</name>
+  <version>0.3.0</version>
+  <description>用于 X1 Coffee HRB3Q-LC 的 URDF 和网格资源包。</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

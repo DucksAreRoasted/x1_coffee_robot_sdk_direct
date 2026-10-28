@@ -1,0 +1,122 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    openarm_compat_joint_state_broadcaster:
+      type: x1_openarm_compat/OpenArmJointStateBroadcaster
+    motor_state_broadcaster:
+      type: x1_coffee/MotorStateBroadcaster
+
+    # Existing Coffee MoveIt controller names are intentionally unchanged.
+    left_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    right_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    waist_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # OpenArm-compatible streaming endpoints.
+    left_forward_position_controller:
+      type: x1_openarm_compat/OpenArmPositionController
+    right_forward_position_controller:
+      type: x1_openarm_compat/OpenArmPositionController
+    waist_forward_position_controller:
+      type: x1_openarm_compat/OpenArmPositionController
+
+joint_state_broadcaster:
+  ros__parameters:
+    # Publish the synchronized 15-axis snapshot at the required 100 Hz.
+    publish_rate: 100.0
+
+left_group_controller:
+  ros__parameters:
+    joints: [Joint_l1, Joint_l2, Joint_l3, Joint_l4, Joint_l5, Joint_l6, Joint_l7]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    allow_nonzero_velocity_at_trajectory_end: true
+
+right_group_controller:
+  ros__parameters:
+    joints: [Joint_r1, Joint_r2, Joint_r3, Joint_r4, Joint_r5, Joint_r6, Joint_r7]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    allow_nonzero_velocity_at_trajectory_end: true
+
+waist_group_controller:
+  ros__parameters:
+    joints: [Joint_Body]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    allow_nonzero_velocity_at_trajectory_end: true
+
+
+left_forward_position_controller:
+  ros__parameters:
+    joints: [Joint_l1, Joint_l2, Joint_l3, Joint_l4, Joint_l5, Joint_l6, Joint_l7]
+    expected_command_size: 7
+    input_indices: [0, 1, 2, 3, 4, 5, 6]
+    # Calibrate these values once; customer OpenArm software remains unchanged.
+    command_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    command_offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    lower_limits: [-3.1415926, -0.15, -3.1415926, -1.5707963, -3.1415926, -1.7453292, -6.2831853]
+    upper_limits: [3.1415926, 3.1415926, 3.1415926, 2.0943951, 3.1415926, 1.7453292, 6.2831853]
+    max_velocities: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    command_timeout_ms: 100
+    initial_alignment_check: true
+    max_initial_difference: 0.35
+    alignment_duration_sec: 3.0
+
+right_forward_position_controller:
+  ros__parameters:
+    joints: [Joint_r1, Joint_r2, Joint_r3, Joint_r4, Joint_r5, Joint_r6, Joint_r7]
+    expected_command_size: 7
+    input_indices: [0, 1, 2, 3, 4, 5, 6]
+    command_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    command_offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    lower_limits: [-3.1415926, -3.1415926, -3.1415926, -2.0943951, -3.1415926, -1.7453292, -6.2831853]
+    upper_limits: [3.1415926, 0.15, 3.1415926, 1.5707963, 3.1415926, 1.7453292, 6.2831853]
+    max_velocities: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    command_timeout_ms: 100
+    initial_alignment_check: true
+    max_initial_difference: 0.35
+    alignment_duration_sec: 3.0
+
+waist_forward_position_controller:
+  ros__parameters:
+    joints: [Joint_Body]
+    expected_command_size: 1
+    lower_limits: [-6.2831852]
+    upper_limits: [6.2831852]
+    max_velocities: [0.5]
+    command_timeout_ms: 100
+    initial_alignment_check: true
+    max_initial_difference: 0.20
+    alignment_duration_sec: 2.0
+
+
+openarm_compat_joint_state_broadcaster:
+  ros__parameters:
+    source_joints:
+      [Joint_l1, Joint_l2, Joint_l3, Joint_l4, Joint_l5, Joint_l6, Joint_l7,
+       Joint_r1, Joint_r2, Joint_r3, Joint_r4, Joint_r5, Joint_r6, Joint_r7]
+    alias_joints:
+      [openarmx_left_joint1, openarmx_left_joint2, openarmx_left_joint3,
+       openarmx_left_joint4, openarmx_left_joint5, openarmx_left_joint6,
+       openarmx_left_joint7, openarmx_right_joint1, openarmx_right_joint2,
+       openarmx_right_joint3, openarmx_right_joint4, openarmx_right_joint5,
+       openarmx_right_joint6, openarmx_right_joint7]
+    topic_name: /x1/openarm_compat/joint_states
+    publish_rate: 100.0
+
+motor_state_broadcaster:
+  ros__parameters:
+    hardware_profile: coffee_15_no_slide
+    joints:
+      [Joint_Body,
+       Joint_l1, Joint_l2, Joint_l3, Joint_l4, Joint_l5, Joint_l6, Joint_l7,
+       Joint_r1, Joint_r2, Joint_r3, Joint_r4, Joint_r5, Joint_r6, Joint_r7]
+    topic_name: /x1/motor_states
+    publish_rate: 50.0
+

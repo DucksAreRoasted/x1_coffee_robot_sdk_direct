@@ -1,0 +1,4 @@
+# The source ROS2 + MoveIt2 requirement does not specify a camera.
+# Keep occupancy-map sensors disabled until an actual sensor contract, topics,
+# calibration, and TF frames are supplied by the application project.
+sensors: []

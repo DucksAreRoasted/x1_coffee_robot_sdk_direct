@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<library path="x1_coffee_openarm_compat">
+  <class
+    name="x1_openarm_compat/OpenArmPositionController"
+    type="x1_coffee_openarm_compat::OpenArmPositionController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>OpenArm Float64MultiArray compatibility endpoint with validation and watchdog.</description>
+  </class>
+  <class
+    name="x1_openarm_compat/OpenArmJointStateBroadcaster"
+    type="x1_coffee_openarm_compat::OpenArmJointStateBroadcaster"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>Publishes configurable OpenArm joint aliases without changing canonical joint_states.</description>
+  </class>
+  <class
+    name="x1_coffee/MotorStateBroadcaster"
+    type="x1_coffee_openarm_compat::MotorStateBroadcaster"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>Publishes real 15-axis motor diagnostics from custom ros2_control state interfaces.</description>
+  </class>
+</library>

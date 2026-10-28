@@ -1,0 +1,21 @@
+# 硬件限位对应的模型角度。程序只在这一侧限位信号已经为 1 时计算零点。
+#
+# side: positive 是固高轴状态字 0x20，negative 是 0x40。
+# angle_rad: 限位开关触发时，该关节在模型里的角度（弧度）。
+# 留空表示还没有测量。不要把 URDF 的软件限位直接填进来，除非机械测量确认开关就在那个角度。
+limit_reference:
+  Joint_Body: {side: null, angle_rad: null}
+  Joint_l1: {side: null, angle_rad: null}
+  Joint_l2: {side: null, angle_rad: null}
+  Joint_l3: {side: null, angle_rad: null}
+  Joint_l4: {side: null, angle_rad: null}
+  Joint_l5: {side: null, angle_rad: null}
+  Joint_l6: {side: null, angle_rad: null}
+  Joint_l7: {side: null, angle_rad: null}
+  Joint_r1: {side: null, angle_rad: null}
+  Joint_r2: {side: null, angle_rad: null}
+  Joint_r3: {side: null, angle_rad: null}
+  Joint_r4: {side: null, angle_rad: null}
+  Joint_r5: {side: null, angle_rad: null}
+  Joint_r6: {side: null, angle_rad: null}
+  Joint_r7: {side: null, angle_rad: null}

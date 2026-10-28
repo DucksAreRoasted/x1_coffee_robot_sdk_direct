@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_device_sdk</name>
+  <version>0.3.0</version>
+  <description>Qt-free callable interfaces for waist, slide, grippers, cameras, and motor state.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>control_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>x1_coffee_interfaces</depend>
+
+  <export><build_type>ament_cmake</build_type></export>
+</package>

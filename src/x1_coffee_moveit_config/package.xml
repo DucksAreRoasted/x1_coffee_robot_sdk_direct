@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_moveit_config</name>
+  <version>0.3.0</version>
+  <description>面向 X1 Coffee 真实硬件 SDK 的 MoveIt2 语义、控制器和验收配置副本。</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>arm_describle</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>moveit_kinematics</exec_depend>
+  <exec_depend>moveit_planners</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>x1_coffee_integration</exec_depend>
+  <exec_depend>x1_coffee_ros2_control</exec_depend>
+
+  <export><build_type>ament_cmake</build_type></export>
+</package>

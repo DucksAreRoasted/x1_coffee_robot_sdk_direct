@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_device_sdk_py</name>
+  <version>0.3.0</version>
+  <description>Python device clients for the X1 Coffee ROS 2 SDK.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>x1_coffee_interfaces</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

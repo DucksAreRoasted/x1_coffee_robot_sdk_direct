@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_moveit_cpp_examples</name>
+  <version>0.3.0</version>
+  <description>Coffee MoveIt2 C++ 验收示例，默认只规划不执行真实运动。</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>moveit_core</depend>
+  <depend>moveit_msgs</depend>
+  <depend>moveit_ros_planning_interface</depend>
+  <depend>rclcpp</depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>x1_coffee_moveit_config</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

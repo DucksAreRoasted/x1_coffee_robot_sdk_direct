@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="HRB3Q-LC">
+  <xacro:arg name="gtn_library_path" default="$(find x1_coffee_integration)/vendor/gtn/libgxn_x64.so"/>
+  <xacro:arg name="gtn_config_path" default="$(find x1_coffee_integration)/vendor/gtn/gtn_core1.cfg"/>
+  <xacro:arg name="ecat_config_path" default="$(find x1_coffee_integration)/vendor/gtn/Gecat_15axis.eni"/>
+  <xacro:arg name="initial_positions_file" default="$(find x1_coffee_integration)/config/initial_positions.yaml"/>
+  <xacro:arg name="zero_offsets_file" default="$(find x1_coffee_integration)/config/zero_offsets.yaml"/>
+  <xacro:arg name="motion_enabled" default="false"/>
+  <xacro:arg name="hardware_profile" default="coffee_15_no_slide"/>
+  <xacro:arg name="use_fake_hardware" default="false"/>
+  <xacro:arg name="fake_sensor_commands" default="false"/>
+
+  <!-- 使用现有 Coffee 几何模型；真实 ros2_control 插件来自独立 SDK。 -->
+  <xacro:include filename="$(find arm_describle)/urdf/HRB3Q-LC.urdf"/>
+  <xacro:include filename="$(find x1_coffee_ros2_control)/urdf/x1_coffee.ros2_control.xacro"/>
+  <xacro:x1_coffee_ros2_control
+    name="X1CoffeeRealSystem"
+    use_fake_hardware="$(arg use_fake_hardware)"
+    fake_sensor_commands="$(arg fake_sensor_commands)"
+    gtn_library_path="$(arg gtn_library_path)"
+    gtn_config_path="$(arg gtn_config_path)"
+    ecat_config_path="$(arg ecat_config_path)"
+    motion_enabled="$(arg motion_enabled)"
+    hardware_profile="$(arg hardware_profile)"
+    initial_positions_file="$(arg initial_positions_file)"
+    zero_offsets_file="$(arg zero_offsets_file)"/>
+</robot>

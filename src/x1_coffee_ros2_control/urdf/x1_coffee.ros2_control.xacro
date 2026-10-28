@@ -1,0 +1,208 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    One robot description is shared by real and fake bringup. Fake hardware is
+    selected explicitly; a failed GTN connection never falls back to fake.
+  -->
+  <xacro:macro name="x1_coffee_ros2_control"
+    params="name:=X1CoffeeSystem
+            use_fake_hardware:=false
+            fake_sensor_commands:=false
+            gtn_library_path:=/opt/x1/gtn/lib/libgxn_x64.so
+            gtn_config_path:=/etc/x1/gtn/gtn_core1.cfg
+            ecat_config_path:=/etc/x1/gtn/Gecat.eni
+            motion_enabled:=false
+            drives_enabled:=false
+            hardware_profile:=coffee_15_no_slide
+            initial_positions_file
+            zero_offsets_file">
+    <xacro:property name="physical_axis_count"
+      value="${15}"/>
+    <xacro:property name="model_zeros"
+      value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
+    <xacro:property name="zero_offsets"
+      value="${xacro.load_yaml(zero_offsets_file)['zero_offset_pulse']}"/>
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <xacro:if value="${use_fake_hardware}">
+          <plugin>mock_components/GenericSystem</plugin>
+          <param name="calculate_dynamics">true</param>
+          <param name="mock_sensor_commands">${fake_sensor_commands}</param>
+          <param name="state_following_offset">0.0</param>
+        </xacro:if>
+        <xacro:unless value="${use_fake_hardware}">
+          <plugin>x1_coffee_ros2_control/X1CoffeeSystemHardware</plugin>
+          <param name="transport">gtn_ethercat</param>
+          <param name="hardware_profile">${hardware_profile}</param>
+          <param name="axis_count">${physical_axis_count}</param>
+          <param name="core">1</param>
+          <param name="gtn_library_path">${gtn_library_path}</param>
+          <param name="gtn_config_path">${gtn_config_path}</param>
+          <param name="ecat_config_path">${ecat_config_path}</param>
+          <param name="ecat_ready_retries">50</param>
+          <param name="ecat_ready_interval_ms">100</param>
+          <!-- 与 16:54 到达 OP 的记录一致：就绪后 500 ms 再启动，启动后再等 200 ms 复位。 -->
+          <param name="ecat_step_delay_ms">200</param>
+          <param name="ecat_start_delay_ms">500</param>
+          <param name="ecat_init_attempts">2</param>
+          <!-- 启动总线后等 Gecat.log 出现 All slaves are in OP，再清状态和读轴。 -->
+          <param name="ecat_op_wait_ms">10000</param>
+          <!-- false 为真实总线只读；台架验收动态 PT FIFO 后才允许改为 true。 -->
+          <param name="motion_enabled">${motion_enabled}</param>
+          <!-- 只做 GTN_AxisOn。motion_enabled 仍是运动开关，默认两者都关闭。 -->
+          <param name="drives_enabled">${drives_enabled}</param>
+          <param name="pt_cycle_ms">10</param>
+          <!--
+            Keep the initial dynamic-PT burst deliberately small.  The
+            controller's FIFO capacity is firmware-dependent; 8 points gives
+            the 100 Hz update loop 80 ms of margin without assuming a 64-point
+            FIFO.  ProductionGtnTransport verifies remaining FIFO space before
+            every prebuffer write as a final hardware safety gate.
+          -->
+          <param name="pt_prebuffer_points">8</param>
+          <!-- 电流/力矩诊断按原 Qt 软件的 poll_div 逻辑分频；状态和编码器仍每周期读取。 -->
+          <!-- Keep non-safety-critical current/torque reads at about 5 Hz;
+               status and encoder reads remain on every control cycle. -->
+          <param name="diagnostic_poll_div">20</param>
+          <!-- OP 后反复调用 GTN_GetEcatAxisACT 会让 libgxn 段错误，实机先关闭电流/力矩读取。 -->
+          <param name="read_current_torque">false</param>
+          <!-- Disabled in the real-time path; enable temporarily for profiling. -->
+          <param name="timing_log_div">0</param>
+          <param name="state_timeout_ms">100</param>
+          <param name="command_timeout_ms">100</param>
+          <param name="motion_startup_grace_ms">3000</param>
+          <param name="stop_on_axis_alarm">true</param>
+          <param name="stop_on_emergency_input">true</param>
+
+        <!--
+          SI 到脉冲：pulse = zero_offset_pulse + (q - model_zero) * pulses_per_unit。
+          输出端 19 位编码器，一圈 524288 个脉冲，即 65536*8/(2*pi) pulse/rad。
+          机械减速比不参与这个换算。机械零位脉冲从 zero_offsets.yaml 读取。
+        -->
+        <param name="pulses_per_unit.Joint_Body">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l1">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l2">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l3">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l4">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l5">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l6">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_l7">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r1">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r2">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r3">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r4">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r5">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r6">83443.02680376362</param>
+        <param name="pulses_per_unit.Joint_r7">83443.02680376362</param>
+
+        <param name="zero_offset_pulse.Joint_Body">${zero_offsets['Joint_Body']}</param>
+        <param name="zero_offset_pulse.Joint_l1">${zero_offsets['Joint_l1']}</param>
+        <param name="zero_offset_pulse.Joint_l2">${zero_offsets['Joint_l2']}</param>
+        <param name="zero_offset_pulse.Joint_l3">${zero_offsets['Joint_l3']}</param>
+        <param name="zero_offset_pulse.Joint_l4">${zero_offsets['Joint_l4']}</param>
+        <param name="zero_offset_pulse.Joint_l5">${zero_offsets['Joint_l5']}</param>
+        <param name="zero_offset_pulse.Joint_l6">${zero_offsets['Joint_l6']}</param>
+        <param name="zero_offset_pulse.Joint_l7">${zero_offsets['Joint_l7']}</param>
+        <param name="zero_offset_pulse.Joint_r1">${zero_offsets['Joint_r1']}</param>
+        <param name="zero_offset_pulse.Joint_r2">${zero_offsets['Joint_r2']}</param>
+        <param name="zero_offset_pulse.Joint_r3">${zero_offsets['Joint_r3']}</param>
+        <param name="zero_offset_pulse.Joint_r4">${zero_offsets['Joint_r4']}</param>
+        <param name="zero_offset_pulse.Joint_r5">${zero_offsets['Joint_r5']}</param>
+        <param name="zero_offset_pulse.Joint_r6">${zero_offsets['Joint_r6']}</param>
+        <param name="zero_offset_pulse.Joint_r7">${zero_offsets['Joint_r7']}</param>
+
+        <!-- Model-space pose corresponding to the calibrated zero_offset_pulse. -->
+        <param name="model_zero.Joint_Body">${model_zeros['Joint_Body']}</param>
+        <param name="model_zero.Joint_l1">${model_zeros['Joint_l1']}</param>
+        <param name="model_zero.Joint_l2">${model_zeros['Joint_l2']}</param>
+        <param name="model_zero.Joint_l3">${model_zeros['Joint_l3']}</param>
+        <param name="model_zero.Joint_l4">${model_zeros['Joint_l4']}</param>
+        <param name="model_zero.Joint_l5">${model_zeros['Joint_l5']}</param>
+        <param name="model_zero.Joint_l6">${model_zeros['Joint_l6']}</param>
+        <param name="model_zero.Joint_l7">${model_zeros['Joint_l7']}</param>
+        <param name="model_zero.Joint_r1">${model_zeros['Joint_r1']}</param>
+        <param name="model_zero.Joint_r2">${model_zeros['Joint_r2']}</param>
+        <param name="model_zero.Joint_r3">${model_zeros['Joint_r3']}</param>
+        <param name="model_zero.Joint_r4">${model_zeros['Joint_r4']}</param>
+        <param name="model_zero.Joint_r5">${model_zeros['Joint_r5']}</param>
+        <param name="model_zero.Joint_r6">${model_zeros['Joint_r6']}</param>
+        <param name="model_zero.Joint_r7">${model_zeros['Joint_r7']}</param>
+
+        <!-- 15 个旋转轴按当前 524288 pulse/圈做等价圈归一化。 -->
+        <param name="wrap_period_pulse.Joint_Body">524288</param>
+        <param name="wrap_period_pulse.Joint_l1">524288</param>
+        <param name="wrap_period_pulse.Joint_l2">524288</param>
+        <param name="wrap_period_pulse.Joint_l3">524288</param>
+        <param name="wrap_period_pulse.Joint_l4">524288</param>
+        <param name="wrap_period_pulse.Joint_l5">524288</param>
+        <param name="wrap_period_pulse.Joint_l6">524288</param>
+        <param name="wrap_period_pulse.Joint_l7">524288</param>
+        <param name="wrap_period_pulse.Joint_r1">524288</param>
+        <param name="wrap_period_pulse.Joint_r2">524288</param>
+        <param name="wrap_period_pulse.Joint_r3">524288</param>
+        <param name="wrap_period_pulse.Joint_r4">524288</param>
+        <param name="wrap_period_pulse.Joint_r5">524288</param>
+        <param name="wrap_period_pulse.Joint_r6">524288</param>
+        <param name="wrap_period_pulse.Joint_r7">524288</param>
+        <!-- Conservative SDK guard values; replace only through signed hardware commissioning. -->
+        <param name="max_velocity.Joint_Body">0.50</param>
+        <param name="max_velocity.Joint_l1">1.0</param>
+        <param name="max_velocity.Joint_l2">1.0</param>
+        <param name="max_velocity.Joint_l3">1.0</param>
+        <param name="max_velocity.Joint_l4">1.0</param>
+        <param name="max_velocity.Joint_l5">1.0</param>
+        <param name="max_velocity.Joint_l6">1.0</param>
+        <param name="max_velocity.Joint_l7">1.0</param>
+        <param name="max_velocity.Joint_r1">1.0</param>
+        <param name="max_velocity.Joint_r2">1.0</param>
+        <param name="max_velocity.Joint_r3">1.0</param>
+        <param name="max_velocity.Joint_r4">1.0</param>
+        <param name="max_velocity.Joint_r5">1.0</param>
+        <param name="max_velocity.Joint_r6">1.0</param>
+          <param name="max_velocity.Joint_r7">1.0</param>
+        </xacro:unless>
+      </hardware>
+
+      <xacro:macro name="coffee_joint" params="joint lower_limit upper_limit">
+        <joint name="${joint}">
+          <command_interface name="position">
+            <param name="min">${lower_limit}</param>
+            <param name="max">${upper_limit}</param>
+          </command_interface>
+          <state_interface name="position"/>
+          <state_interface name="velocity"/>
+          <state_interface name="encoder_pulse_raw"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="status_bits"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="current_permille"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="torque_permille"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="enabled"><param name="initial_value">1.0</param></state_interface>
+          <state_interface name="moving"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="alarm"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="follow_error"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="emergency_input_active"><param name="initial_value">0.0</param></state_interface>
+          <state_interface name="encoder_valid"><param name="initial_value">1.0</param></state_interface>
+          <state_interface name="position_valid"><param name="initial_value">1.0</param></state_interface>
+          <state_interface name="velocity_valid"><param name="initial_value">1.0</param></state_interface>
+          <state_interface name="current_valid"><param name="initial_value">1.0</param></state_interface>
+          <state_interface name="torque_valid"><param name="initial_value">1.0</param></state_interface>
+        </joint>
+      </xacro:macro>
+
+      <xacro:coffee_joint joint="Joint_Body" lower_limit="-6.2831852" upper_limit="6.2831852"/>
+      <xacro:coffee_joint joint="Joint_l1" lower_limit="-3.1415926" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_l2" lower_limit="-0.15" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_l3" lower_limit="-3.1415926" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_l4" lower_limit="-1.5707963" upper_limit="2.0943951"/>
+      <xacro:coffee_joint joint="Joint_l5" lower_limit="-3.1415926" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_l6" lower_limit="-1.7453292" upper_limit="1.7453292"/>
+      <xacro:coffee_joint joint="Joint_l7" lower_limit="-6.2831853" upper_limit="6.2831853"/>
+      <xacro:coffee_joint joint="Joint_r1" lower_limit="-3.1415926" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_r2" lower_limit="-3.1415926" upper_limit="0.15"/>
+      <xacro:coffee_joint joint="Joint_r3" lower_limit="-3.1415926" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_r4" lower_limit="-2.0943951" upper_limit="1.5707963"/>
+      <xacro:coffee_joint joint="Joint_r5" lower_limit="-3.1415926" upper_limit="3.1415926"/>
+      <xacro:coffee_joint joint="Joint_r6" lower_limit="-1.7453292" upper_limit="1.7453292"/>
+      <xacro:coffee_joint joint="Joint_r7" lower_limit="-6.2831853" upper_limit="6.2831853"/>
+    </ros2_control>
+  </xacro:macro>
+</robot>

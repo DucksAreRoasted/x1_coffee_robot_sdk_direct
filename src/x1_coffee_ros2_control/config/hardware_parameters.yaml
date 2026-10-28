@@ -1,0 +1,12 @@
+x1_coffee_hardware:
+  ros__parameters:
+    transport: gtn_ethercat
+    hardware_profile: coffee_15_no_slide
+    axis_count: 15
+    # These values are an adapter contract, not a software-mode fallback.
+    cycle_hz: 100
+    state_timeout_ms: 100
+    command_timeout_ms: 100
+    require_all_drives_enabled: true
+    stop_on_axis_alarm: true
+    stop_on_emergency_input: true

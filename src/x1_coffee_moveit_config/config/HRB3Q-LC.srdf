@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="HRB3Q-LC">
+    <group name="left_group">
+        <joint name="Joint_l1"/>
+        <joint name="Joint_l2"/>
+        <joint name="Joint_l3"/>
+        <joint name="Joint_l4"/>
+        <joint name="Joint_l5"/>
+        <joint name="Joint_l6"/>
+        <joint name="Joint_l7"/>
+        <chain base_link="Body" tip_link="left_gripper_tcp"/>
+    </group>
+    <group name="right_group">
+        <joint name="Joint_r1"/>
+        <joint name="Joint_r2"/>
+        <joint name="Joint_r3"/>
+        <joint name="Joint_r4"/>
+        <joint name="Joint_r5"/>
+        <joint name="Joint_r6"/>
+        <joint name="Joint_r7"/>
+        <chain base_link="Body" tip_link="right_gripper_tcp"/>
+    </group>
+    <!-- 文档兼容别名：保留 Coffee 原有组名，同时提供 left_arm/right_arm。 -->
+    <group name="left_arm">
+        <group name="left_group"/>
+    </group>
+    <group name="right_arm">
+        <group name="right_group"/>
+    </group>
+    <!-- 纯双臂 14 轴联合规划组，不包含腰身。 -->
+    <group name="both_arms">
+        <group name="left_group"/>
+        <group name="right_group"/>
+    </group>
+    <!-- 当前设备没有纳入主总线的夹爪关节；规划末端使用已标定的静态 TCP。 -->
+    <group name="left_tool">
+        <link name="left_gripper_tcp"/>
+    </group>
+    <group name="right_tool">
+        <link name="right_gripper_tcp"/>
+    </group>
+    <end_effector name="left_end_effector" parent_link="left_gripper_tcp" group="left_tool" parent_group="left_arm"/>
+    <end_effector name="right_end_effector" parent_link="right_gripper_tcp" group="right_tool" parent_group="right_arm"/>
+    <group name="waist_group">
+        <joint name="Joint_Body"/>
+        <chain base_link="Waist" tip_link="Body"/>
+    </group>
+    <group name="tri_group">
+        <group name="left_group"/>
+        <group name="right_group"/>
+        <group name="waist_group"/>
+    </group>
+    <disable_collisions link1="Body" link2="Waist" reason="Adjacent"/>
+    <disable_collisions link1="Body" link2="arml1" reason="Adjacent"/>
+    <disable_collisions link1="Body" link2="armr1" reason="Adjacent"/>
+    <disable_collisions link1="Waist" link2="arml1" reason="Never"/>
+    <disable_collisions link1="Waist" link2="arml2" reason="Never"/>
+    <disable_collisions link1="Waist" link2="arml3" reason="Never"/>
+    <disable_collisions link1="Waist" link2="arml4" reason="Never"/>
+    <disable_collisions link1="Waist" link2="armr1" reason="Never"/>
+    <disable_collisions link1="Waist" link2="armr2" reason="Never"/>
+    <disable_collisions link1="Waist" link2="armr3" reason="Never"/>
+    <disable_collisions link1="Waist" link2="armr4" reason="Never"/>
+    <disable_collisions link1="arml1" link2="arml2" reason="Adjacent"/>
+    <disable_collisions link1="arml1" link2="arml3" reason="Never"/>
+    <disable_collisions link1="arml1" link2="armr1" reason="Never"/>
+    <disable_collisions link1="arml1" link2="armr2" reason="Never"/>
+    <disable_collisions link1="arml1" link2="armr3" reason="Never"/>
+    <disable_collisions link1="arml2" link2="arml3" reason="Adjacent"/>
+    <disable_collisions link1="arml2" link2="armr1" reason="Never"/>
+    <disable_collisions link1="arml2" link2="armr2" reason="Never"/>
+    <disable_collisions link1="arml3" link2="arml4" reason="Adjacent"/>
+    <disable_collisions link1="arml3" link2="arml5" reason="Never"/>
+    <disable_collisions link1="arml3" link2="arml6" reason="Never"/>
+    <disable_collisions link1="arml3" link2="armr1" reason="Never"/>
+    <disable_collisions link1="arml4" link2="arml5" reason="Adjacent"/>
+    <disable_collisions link1="arml5" link2="arml6" reason="Adjacent"/>
+    <disable_collisions link1="arml6" link2="arml7" reason="Adjacent"/>
+    <disable_collisions link1="armr1" link2="armr2" reason="Adjacent"/>
+    <disable_collisions link1="armr1" link2="armr3" reason="Never"/>
+    <disable_collisions link1="armr2" link2="armr3" reason="Adjacent"/>
+    <disable_collisions link1="armr3" link2="armr4" reason="Adjacent"/>
+    <disable_collisions link1="armr3" link2="armr5" reason="Never"/>
+    <disable_collisions link1="armr3" link2="armr6" reason="Never"/>
+    <disable_collisions link1="armr4" link2="armr5" reason="Adjacent"/>
+    <disable_collisions link1="armr5" link2="armr6" reason="Adjacent"/>
+    <disable_collisions link1="armr6" link2="armr7" reason="Adjacent"/>
+    <group_state name="home1" group="tri_group">
+        <joint name="Joint_Body" value="-0.000080"/>
+        <joint name="Joint_l1" value="0.000045"/>
+        <joint name="Joint_l2" value="-0.000001"/>
+        <joint name="Joint_l3" value="0.000062"/>
+        <joint name="Joint_l4" value="0.000031"/>
+        <joint name="Joint_l5" value="0.000020"/>
+        <joint name="Joint_l6" value="-0.000042"/>
+        <joint name="Joint_l7" value="0.000056"/>
+        <joint name="Joint_r1" value="-0.000021"/>
+        <joint name="Joint_r2" value="0.000050"/>
+        <joint name="Joint_r3" value="0.000078"/>
+        <joint name="Joint_r4" value="-0.000027"/>
+        <joint name="Joint_r5" value="0.000005"/>
+        <joint name="Joint_r6" value="0.000025"/>
+        <joint name="Joint_r7" value="-0.000032"/>
+    </group_state>
+    <group_state name="ready" group="tri_group">
+        <joint name="Joint_Body" value="0.000000"/>
+        <joint name="Joint_l1" value="-0.111966"/>
+        <joint name="Joint_l2" value="0.733321"/>
+        <joint name="Joint_l3" value="-0.405751"/>
+        <joint name="Joint_l4" value="0.088893"/>
+        <joint name="Joint_l5" value="-0.226469"/>
+        <joint name="Joint_l6" value="-0.105334"/>
+        <joint name="Joint_l7" value="0.979998"/>
+        <joint name="Joint_r1" value="0.000000"/>
+        <joint name="Joint_r2" value="0.000000"/>
+        <joint name="Joint_r3" value="0.000000"/>
+        <joint name="Joint_r4" value="0.000000"/>
+        <joint name="Joint_r5" value="0.000000"/>
+        <joint name="Joint_r6" value="0.000000"/>
+        <joint name="Joint_r7" value="0.000000"/>
+    </group_state>
+    <group_state name="home" group="tri_group">
+        <joint name="Joint_Body" value="0.000000"/>
+        <joint name="Joint_l1" value="-0.061873"/>
+        <joint name="Joint_l2" value="0.486656"/>
+        <joint name="Joint_l3" value="-0.344519"/>
+        <joint name="Joint_l4" value="0.152200"/>
+        <joint name="Joint_l5" value="-0.282253"/>
+        <joint name="Joint_l6" value="-0.328478"/>
+        <joint name="Joint_l7" value="0.802442"/>
+        <joint name="Joint_r1" value="0.061678"/>
+        <joint name="Joint_r2" value="-0.486366"/>
+        <joint name="Joint_r3" value="0.344167"/>
+        <joint name="Joint_r4" value="-0.152203"/>
+        <joint name="Joint_r5" value="0.282492"/>
+        <joint name="Joint_r6" value="0.328297"/>
+        <joint name="Joint_r7" value="-0.802594"/>
+    </group_state>
+</robot>

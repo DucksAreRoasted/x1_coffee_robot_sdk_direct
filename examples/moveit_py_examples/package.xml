@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_moveit_py_examples</name>
+  <version>0.3.0</version>
+  <description>基于 MoveItPy 的 Coffee 单臂和双臂验收示例。</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>moveit_py</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>x1_coffee_moveit_config</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

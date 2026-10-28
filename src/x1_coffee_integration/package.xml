@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_integration</name>
+  <version>0.3.0</version>
+  <description>Integration configuration for Coffee MoveIt and OpenArm-compatible teleoperation.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>controller_manager_msgs</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>x1_coffee_interfaces</exec_depend>
+  <exec_depend>arm_describle</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>x1_coffee_openarm_compat</exec_depend>
+  <exec_depend>x1_coffee_device_sdk</exec_depend>
+  <exec_depend>x1_coffee_ros2_control</exec_depend>
+
+  <export><build_type>ament_cmake</build_type></export>
+</package>

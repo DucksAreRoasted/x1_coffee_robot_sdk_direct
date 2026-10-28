@@ -1,0 +1,20 @@
+# Kept compatible with dual_arm_moveit_config_coffee/config/moveit_controllers.yaml.
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - left_group_controller
+    - right_group_controller
+    - waist_group_controller
+  left_group_controller:
+    type: FollowJointTrajectory
+    joints: [Joint_l1, Joint_l2, Joint_l3, Joint_l4, Joint_l5, Joint_l6, Joint_l7]
+    action_ns: follow_joint_trajectory
+  right_group_controller:
+    type: FollowJointTrajectory
+    joints: [Joint_r1, Joint_r2, Joint_r3, Joint_r4, Joint_r5, Joint_r6, Joint_r7]
+    action_ns: follow_joint_trajectory
+  waist_group_controller:
+    type: FollowJointTrajectory
+    joints: [Joint_Body]
+    action_ns: follow_joint_trajectory

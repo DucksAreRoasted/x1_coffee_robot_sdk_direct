@@ -1,0 +1,18 @@
+# HRB3Q-LC 的初始位置；真实硬件激活时会以实测编码器位置重新初始化命令缓存。
+
+initial_positions:
+  Joint_Body: 0
+  Joint_l1: 0
+  Joint_l2: 0
+  Joint_l3: 0
+  Joint_l4: 0
+  Joint_l5: 0
+  Joint_l6: 0
+  Joint_l7: 0
+  Joint_r1: 0
+  Joint_r2: 0
+  Joint_r3: 0
+  Joint_r4: 0
+  Joint_r5: 0
+  Joint_r6: 0
+  Joint_r7: 0

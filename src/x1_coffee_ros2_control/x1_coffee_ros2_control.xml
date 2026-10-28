@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<library path="x1_coffee_ros2_control">
+  <class
+    name="x1_coffee_ros2_control/X1CoffeeSystemHardware"
+    type="x1_coffee_ros2_control::X1CoffeeSystemHardware"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>One real-hardware SystemInterface for the shared 15-axis GTN/EtherCAT bus.</description>
+  </class>
+</library>

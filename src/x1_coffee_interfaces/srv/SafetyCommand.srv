@@ -1,0 +1,10 @@
+uint8 PAUSE=1
+uint8 RESUME=2
+uint8 FAULT_RESET=3
+uint8 EMERGENCY_STOP=4
+
+uint8 command
+string reason
+---
+bool accepted
+string message

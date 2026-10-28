@@ -1,0 +1,19 @@
+# Boot target in radians. This is not the encoder zero-offset table.
+# Real motion stays disabled until zero_offsets.yaml contains a commissioned
+# calibration and the launch is started with motion_enabled:=true move_to_initial:=true.
+startup_pose:
+  Joint_Body: 0.0
+  Joint_l1: 0.0
+  Joint_l2: 0.0
+  Joint_l3: 0.0
+  Joint_l4: 0.0
+  Joint_l5: 0.0
+  Joint_l6: 0.0
+  Joint_l7: 0.0
+  Joint_r1: 0.0
+  Joint_r2: 0.0
+  Joint_r3: 0.0
+  Joint_r4: 0.0
+  Joint_r5: 0.0
+  Joint_r6: 0.0
+  Joint_r7: 0.0

@@ -1,0 +1,9 @@
+std_msgs/Header header
+string controller_name
+bool active
+bool aligned
+bool command_fresh
+uint32 accepted_frames
+uint32 rejected_frames
+uint32 last_error_code
+string last_error_detail

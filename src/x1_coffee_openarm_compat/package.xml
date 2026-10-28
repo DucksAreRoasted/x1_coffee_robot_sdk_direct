@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_openarm_compat</name>
+  <version>0.3.0</version>
+  <description>Clean-room OpenArm-compatible streaming controllers for X1 Coffee.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>controller_interface</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>realtime_tools</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>x1_coffee_interfaces</depend>
+  <depend>x1_coffee_hardware_core</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <controller_interface plugin="${prefix}/x1_coffee_openarm_compat.xml"/>
+  </export>
+</package>

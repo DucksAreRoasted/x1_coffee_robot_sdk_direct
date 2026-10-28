@@ -1,0 +1,35 @@
+# Physical-machine calibration: encoder pulses at each joint's model_zero pose.
+#
+# This file is intentionally separate from initial_positions.yaml:
+# - initial_positions.yaml: model-space startup/reference positions (rad/m)
+# - zero_offsets.yaml: hardware encoder pulse offsets (pulse)
+#
+# Commissioning procedure:
+# 1. Keep motion_enabled=false.
+# 2. Put the physical joint at the mechanically agreed zero pose.
+# 3. Read encoder_pulse_raw from /x1/motor_states.
+#    If the joint is held on a measured hardware limit, limit_zero_calibration.py
+#    can compute the pulse below from that limit angle. It never moves the robot.
+# 4. Write that raw pulse value below for the corresponding joint.
+# 5. Rebuild and repeat read-only verification before enabling motion.
+#
+# Do not change the existing multi-turn algorithm. Keep wrap_period_pulse values
+# consistent with the current software/hardware encoder configuration.
+# Values below come from robot_yingzhi config/common_config.xml
+# (waist_zero_target, arm14_zero_targets).
+zero_offset_pulse:
+  Joint_Body: 283690
+  Joint_l1: 351858
+  Joint_l2: 288960
+  Joint_l3: 219556
+  Joint_l4: 283244
+  Joint_l5: 88900
+  Joint_l6: 116185
+  Joint_l7: 510050
+  Joint_r1: 232971
+  Joint_r2: 214124
+  Joint_r3: 270711
+  Joint_r4: 156691
+  Joint_r5: 377978
+  Joint_r6: 408002
+  Joint_r7: 28750

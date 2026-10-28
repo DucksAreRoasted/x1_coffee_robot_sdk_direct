@@ -1,0 +1,1860 @@
+<EtherCATConfig>
+  <Config>
+    <Master AdapterIndex="0" IoUpdateFreq="4" StackDebugLevel="0">
+      <Info>
+        <Name>GOOGOL EtherCAT Master</Name>
+        <Destination>FFFFFFFFFFFF</Destination>
+        <Source>000000000000</Source>
+        <EtherType>A488</EtherType>
+      </Info>
+    </Master>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+    <Slave>
+      <Info>
+        <Name>TianTai-BLDCM EtherCAT(CoE) Drive Rev4</Name>
+        <VendorId>3593</VendorId>
+        <ProductCode>37458</ProductCode>
+        <RevisionNo>539100694</RevisionNo>
+        <SerialNo>539100694</SerialNo>
+        <DevType>1</DevType>
+        <NChannel>1</NChannel>
+      </Info>
+      <ProcessData>
+        <Sm2>
+          <Type>Outputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>4352</StartAddress>
+          <ControlByte>100</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>5633</Pdo>
+        </Sm2>
+        <Sm3>
+          <Type>Inputs</Type>
+          <MinSize>1</MinSize>
+          <MaxSize>256</MaxSize>
+          <DefaultSize>6</DefaultSize>
+          <StartAddress>5120</StartAddress>
+          <ControlByte>32</ControlByte>
+          <Enable>true</Enable>
+          <Pdo>6657</Pdo>
+        </Sm3>
+        <RxPdo Fixed="false" Mandatory="false" Sm="2" Virtual="false">
+          <Index>#x1601</Index>
+          <Name LcId="1033">2nd RxPDO Mapping</Name>
+          <Exclude>#x1600</Exclude>
+          <Exclude>#x1602</Exclude>
+          <Exclude>#x1603</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6040</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Control Word</Name>
+            <Comment>object 0x6040:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x607a</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">TargetPosition</Name>
+            <Comment>object 0x607A:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="false" Mandatory="false" Sm="3" Virtual="false">
+          <Index>#x1a01</Index>
+          <Name LcId="1033">2nd TxPDO Mapping</Name>
+          <Exclude>#x1a00</Exclude>
+          <Exclude>#x1a02</Exclude>
+          <Exclude>#x1a03</Exclude>
+          <Entry Fixed="false">
+            <Index>#x6041</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>16</BitLen>
+            <Name LcId="1033">Status Word</Name>
+            <Comment>object 0x6041:0</Comment>
+            <DataType>UINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+          <Entry Fixed="false">
+            <Index>#x6064</Index>
+            <SubIndex>#x0</SubIndex>
+            <BitLen>32</BitLen>
+            <Name LcId="1033">ActualPosition</Name>
+            <Comment>object 0x6064:0</Comment>
+            <DataType>DINT</DataType>
+            <DefaultValue>0</DefaultValue>
+          </Entry>
+        </TxPdo>
+      </ProcessData>
+      <Mailbox>
+        <Send>
+          <Start>4096</Start>
+          <Length>128</Length>
+        </Send>
+        <Recv>
+          <Start>4224</Start>
+          <Length>128</Length>
+        </Recv>
+        <Protocol>CoE</Protocol>
+        <CoE>
+          <InitCmds>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Op mode</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24672</Index>
+              <SubIndex>0</SubIndex>
+              <Data>08</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time period</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>1</SubIndex>
+              <Data>01</Data>
+            </InitCmd>
+            <InitCmd Fixed="false">
+              <Transition>PS</Transition>
+              <Comment>Interpolation time index</Comment>
+              <Timeout>0</Timeout>
+              <Ccs>1</Ccs>
+              <Index>24770</Index>
+              <SubIndex>2</SubIndex>
+              <Data>FD</Data>
+            </InitCmd>
+          </InitCmds>
+        </CoE>
+      </Mailbox>
+      <DC>
+        <AssignActivate>768</AssignActivate>
+        <CycleTime0>1000000</CycleTime0>
+        <CycleTime1>1000000</CycleTime1>
+        <ShiftTime0>0</ShiftTime0>
+        <ShiftTime1>0</ShiftTime1>
+      </DC>
+    </Slave>
+  </Config>
+</EtherCATConfig>

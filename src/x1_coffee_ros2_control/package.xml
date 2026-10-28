@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_ros2_control</name>
+  <version>0.3.0</version>
+  <description>ros2_control SystemInterface for the real 15-axis X1 Coffee robot.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>x1_coffee_hardware_core</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <hardware_interface plugin="${prefix}/x1_coffee_ros2_control.xml"/>
+  </export>
+</package>

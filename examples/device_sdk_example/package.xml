@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_device_sdk_example</name>
+  <version>0.3.0</version>
+  <description>Minimal consumer example for the X1 Coffee device SDK.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>x1_coffee_device_sdk</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

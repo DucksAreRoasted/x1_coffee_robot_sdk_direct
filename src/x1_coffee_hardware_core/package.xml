@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>x1_coffee_hardware_core</name>
+  <version>0.3.0</version>
+  <description>Qt-free 15-axis hardware core for the X1 Coffee robot.</description>
+  <maintainer email="sdk-maintainers@example.com">X1 SDK Maintainers</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

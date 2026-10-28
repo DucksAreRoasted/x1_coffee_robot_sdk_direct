@@ -1,0 +1,20 @@
+# Model-space joint angles in radians, not encoder pulses.
+# Each value is the URDF angle at that joint's factory zero_offset_pulse.
+# 2026-10-27 15:02 alignment: model_zero = mechanical reading - URDF-picture reading.
+# Output encoder position does not use the mechanical gear ratio.
+initial_positions:
+  Joint_Body: -0.260094
+  Joint_l1: 0.970147
+  Joint_l2: 0.026126
+  Joint_l3: 0.015304
+  Joint_l4: -0.199921
+  Joint_l5: -1.607001
+  Joint_l6: -1.166077
+  Joint_l7: 1.643025
+  Joint_r1: -0.989921
+  Joint_r2: 0.000180
+  Joint_r3: -0.039967
+  Joint_r4: 0.200208
+  Joint_r5: 1.640077
+  Joint_r6: 1.150102
+  Joint_r7: -1.660103
