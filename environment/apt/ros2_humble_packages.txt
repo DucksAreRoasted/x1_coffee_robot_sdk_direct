@@ -1,0 +1,28 @@
+# Ubuntu 22.04 基础工具
+build-essential
+cmake
+git
+python3-colcon-common-extensions
+python3-rosdep
+python3-vcstool
+
+# ROS2 Humble 基础运行时
+ros-humble-rclcpp
+ros-humble-rclpy
+ros-humble-xacro
+ros-humble-robot-state-publisher
+ros-humble-joint-state-publisher
+ros-humble-joint-state-publisher-gui
+ros-humble-tf2-ros
+ros-humble-rviz2
+
+# ros2_control
+ros-humble-ros2-control
+ros-humble-ros2-controllers
+ros-humble-controller-manager
+ros-humble-joint-state-broadcaster
+ros-humble-joint-trajectory-controller
+
+# MoveIt2 使用 environment/moveit_source_ws 中随 SDK 交付的源码快照构建。
+# 当前验证机器的软件源没有可用的 ros-humble-moveit* 二进制包，因此不在
+# 本清单中声明不可用的 apt 包。

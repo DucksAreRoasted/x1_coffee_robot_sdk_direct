@@ -1,0 +1,13 @@
+repositories:
+  moveit2:
+    type: git
+    url: https://github.com/moveit/moveit2.git
+    version: 3a26ac8d6c834e944526a13fb9b00a8590abe7b6
+  moveit_msgs:
+    type: git
+    url: https://github.com/moveit/moveit_msgs.git
+    version: a76e0d67f356735b0a59313eca2c9a3fe2e17da7
+  moveit_resources:
+    type: git
+    url: https://github.com/moveit/moveit_resources.git
+    version: 595f04ee736c9547ab1e7253e46005107277e36c
