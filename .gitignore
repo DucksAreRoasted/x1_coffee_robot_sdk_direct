@@ -1,6 +1,9 @@
 build/
 install/
 log/
+environment/**/build.before-*/
+environment/**/install.before-*/
+environment/**/log.before-*/
 .colcon/
 *.swp
 *.user
