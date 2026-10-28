@@ -47,3 +47,14 @@ ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_dependencies(
   control_msgs rclcpp rclcpp_action std_msgs std_srvs x1_coffee_interfaces)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(device_sdk_contract_test test/device_sdk_contract_test.cpp)
+  target_link_libraries(device_sdk_contract_test ${PROJECT_NAME})
+  ament_target_dependencies(
+    device_sdk_contract_test rclcpp std_msgs std_srvs x1_coffee_interfaces)
+  add_dependencies(device_sdk_contract_test safety_service_server)
+endif()
+
+ament_package()
