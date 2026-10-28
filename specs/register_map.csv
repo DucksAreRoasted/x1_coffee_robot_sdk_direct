@@ -1,0 +1,122 @@
+item_id,layer,name,access,data_type,unit,range_or_values,device_scope,source_file,location,evidence,status
+GTN_RET_0,gtn_return,指令执行成功,return,short,N/A,0,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,指令执行成功,VERIFIED
+GTN_RET_1,gtn_return,指令执行错误,return,short,N/A,1,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,检查当前指令的执行条件,VERIFIED
+GTN_RET_2,gtn_return,license不支持,return,short,N/A,2,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,需要此功能时联系生产厂商,VERIFIED
+GTN_RET_7,gtn_return,指令参数错误,return,short,N/A,7,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,检查输入参数取值,VERIFIED
+GTN_RET_-1,gtn_return,主机和运动控制器通讯失败,return,short,N/A,-1,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,检查驱动安装、插卡、主机或控制器。与 InitEcat 的 -1 不是同一张表,VERIFIED
+GTN_RET_-6,gtn_return,打开控制器失败,return,short,N/A,-6,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,含重复 GTN_Open 或其他进程已打开,VERIFIED
+GTN_RET_-7,gtn_return,运动控制器没有响应,return,short,N/A,-7,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,更换运动控制器,VERIFIED
+GTN_RET_-10_GLOBAL,gtn_return,主机和运动控制器通讯失败,return,short,N/A,-10,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,PCI-E 松动或需重启并固定主卡。与指令128的 -10 冲突,VERIFIED
+GTN_RET_-13,gtn_return,编码器初始化失败 core1,return,short,N/A,-13,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,检测 core1 所连模块,VERIFIED
+GTN_RET_-14,gtn_return,编码器初始化失败 core2,return,short,N/A,-14,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,检测 core2 所连模块,VERIFIED
+GTN_RET_-15,gtn_return,动态库版本不匹配且不能工作,return,short,N/A,-15,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,需要更新 gt_rn.dll,VERIFIED
+GTN_RET_15,gtn_return,动态库版本不匹配但部分功能可用,return,short,N/A,15,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,某些功能不能使用，需要更新 gt_rn.dll,VERIFIED
+GTN_RET_16,gtn_return,不具备版本匹配功能,return,short,N/A,16,GEN GTN 指令通用返回,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页18 印页17 表3-1,固件版本比较老，建议更新专用处理器固件,VERIFIED
+INIT_ECAT_0,gtn_command,GTN_InitEcatComm成功,return,short,N/A,0,GTN_InitEcatComm 与 GTN_InitEcatCommEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页198 印页197 指令128和129,0 初始化成功,VERIFIED
+INIT_ECAT_-8,gtn_command,eni与从站不匹配,return,short,N/A,-8,GTN_InitEcatComm 与 GTN_InitEcatCommEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页198 印页197 指令128和129,配置错误，检查 eni 与实际从站,VERIFIED
+INIT_ECAT_-9,gtn_command,未找到eni,return,short,N/A,-9,GTN_InitEcatComm 与 GTN_InitEcatCommEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页198 印页197 指令128和129,未找到 eni，默认要求与可执行文件同目录,VERIFIED
+INIT_ECAT_-10,gtn_command,未找到从站,return,short,N/A,-10,GTN_InitEcatComm 与 GTN_InitEcatCommEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页198 印页197 指令128和129,未找到从站，检查接线。与表3-1的 -10 冲突,VERIFIED
+ECAT_READY_0,gtn_status,EtherCAT通讯未完全建立,read,short,N/A,pStatus=0,GTN_IsEcatReady,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页199 印页198 指令131,通讯未完全建立,VERIFIED
+ECAT_READY_1,gtn_status,EtherCAT通讯完全建立,read,short,N/A,pStatus=1,GTN_IsEcatReady,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页199 印页198 指令131,通讯完全建立,VERIFIED
+AXIS_STS_0,axis_status,保留,read,bit,N/A,bit0,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,保留,VERIFIED
+AXIS_STS_1,axis_status,驱动器报警,read,bit,N/A,bit1=1报警,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,驱动器报警时置1。例程6-1用掩码0x2,VERIFIED
+AXIS_STS_2,axis_status,保留,read,bit,N/A,bit2,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,保留,VERIFIED
+AXIS_STS_3,axis_status,保留,read,bit,N/A,bit3,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,保留,VERIFIED
+AXIS_STS_4,axis_status,跟随误差越限,read,bit,N/A,bit4=1越限,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,规划位置与实际位置误差大于设定极限,VERIFIED
+AXIS_STS_5,axis_status,正限位触发,read,bit,N/A,bit5=1,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,正限位电平或规划位置大于正向软限位,VERIFIED
+AXIS_STS_6,axis_status,负限位触发,read,bit,N/A,bit6=1,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,负限位电平或规划位置小于负向软限位,VERIFIED
+AXIS_STS_7,axis_status,IO平滑停止触发,read,bit,N/A,bit7=1,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,平滑停止IO触发电平时置1并自动平滑停止,VERIFIED
+AXIS_STS_8,axis_status,IO急停触发,read,bit,N/A,bit8=1,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,急停IO触发电平时置1并自动急停,VERIFIED
+AXIS_STS_9,axis_status,电机使能,read,bit,N/A,bit9=1使能,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,电机使能时置1。例程5-2等待该位,VERIFIED
+AXIS_STS_10,axis_status,规划运动,read,bit,N/A,bit10=1运动,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,只表示规划器运动，不表示机械已停止,VERIFIED
+AXIS_STS_11,axis_status,电机到位,read,bit,N/A,bit11=1到位,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48-49 印页47-48 表6-2,复位后默认功能未开启。规划静止且误差带内保持设定时间,VERIFIED
+AXIS_STS_12_29,axis_status,保留,read,bit,N/A,bit12至bit29,GTN_GetSts 32位轴状态,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页48 印页47 表6-2,保留。bit30和bit31未在该表出现,VERIFIED
+HOME_STS_0,homing_status,回零完成位,read,bit,N/A,bit0 0正在回零 1回零完成,GTN_GetEcatHomingStatus,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页173 印页172 指令67,位定义原文。例程5-2另外等待整数值3,VERIFIED
+HOME_STS_1,homing_status,回零成功位,read,bit,N/A,bit1 1回零成功完成,GTN_GetEcatHomingStatus,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页173 印页172 指令67,0为无意义,VERIFIED
+HOME_STS_2,homing_status,回零出错位,read,bit,N/A,bit2 1回零过程出错,GTN_GetEcatHomingStatus,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页173 印页172 指令67,0为无意义,VERIFIED
+MODE_GTHD_1,drive_mode,Profile position,write_read,short,N/A,1,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页171和211 指令63和156,手册写明以GTHD为例，不是eRob定义,VERIFIED
+MODE_GTHD_3,drive_mode,Profile velocity,write_read,short,N/A,3,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页171和211 指令63和156,以GTHD为例,VERIFIED
+MODE_GTHD_4,drive_mode,Profile torque,write_read,short,N/A,4,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页171和211 指令63和156,以GTHD为例,VERIFIED
+MODE_GTHD_6,drive_mode,Homing,write_read,short,N/A,6,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页171和211 指令63和156,例程5-2把6传给GTN_SetHomingMode,VERIFIED
+MODE_GTHD_8,drive_mode,Cyclic sync position,write_read,short,N/A,8,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页172和211 指令63和156,例程5-2在回零后写入8并注释为位置控制模式,VERIFIED
+MODE_GTHD_9,drive_mode,Cyclic sync velocity,write_read,short,N/A,9,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页172和211 指令63和156,以GTHD为例,VERIFIED
+MODE_GTHD_10,drive_mode,Cyclic sync torque,write_read,short,N/A,10,GTN_SetEcatAxisMode / Get，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页172和211 指令63和156,以GTHD为例,VERIFIED
+OBJ_6040,coe_object,控制字,unknown,unknown,unknown,索引0x6040,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,功能名：控制字（如使能）。位定义要求查阅缺失的《402协议》,VERIFIED
+OBJ_6041,coe_object,状态字,unknown,unknown,unknown,索引0x6041,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,功能名：获取轴状态。位定义不在该页,VERIFIED
+OBJ_6060,coe_object,设定控制模式,unknown,unknown,unknown,索引0x6060,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,必须添加。星号说明PT/PV/PP由伺服完成，CST/CSV/CSP/Home由主站周期完成,VERIFIED
+OBJ_6061,coe_object,当前控制模式,unknown,unknown,unknown,索引0x6061,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,必须添加。GetEcatAxisMode返回1时要求6061h配成PDO,VERIFIED
+OBJ_607A,coe_object,位置设定值,unknown,unknown,unknown,索引0x607A,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名。单位UNKNOWN,VERIFIED
+OBJ_6064,coe_object,实际位置值,unknown,unknown,unknown,索引0x6064,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名。GetEcatEncPos以GTHD的6064h为例,VERIFIED
+OBJ_60FE,coe_object,数字量输出,unknown,unknown,unknown,索引0x60FE,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,功能名。GetEcatAxisDO以GTHD的60FEh为例,VERIFIED
+OBJ_60FD,coe_object,数字量输入,unknown,unknown,unknown,索引0x60FD,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,功能名含原点限位。基本功能PDF页24写正限位来自bit1、负限位来自bit0，示例对象为数字量输入0x60FD,VERIFIED
+OBJ_6098,coe_object,回零模式,unknown,unknown,unknown,索引0x6098,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名,VERIFIED
+OBJ_6099,coe_object,回零速度,unknown,unknown,unknown,索引0x6099,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名,VERIFIED
+OBJ_609A,coe_object,回零加速度,unknown,unknown,unknown,索引0x609A,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名,VERIFIED
+OBJ_607C,coe_object,回零偏置,unknown,unknown,unknown,索引0x607C,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名,VERIFIED
+OBJ_603F,coe_object,报警代码,read,unknown,unknown,索引0x603F,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,PDO配置读取。代码含义UNKNOWN,VERIFIED
+OBJ_60B8,coe_object,探针功能控制字,unknown,unknown,unknown,索引0x60B8,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名,VERIFIED
+OBJ_60B9,coe_object,探针功能状态字,unknown,unknown,unknown,索引0x60B9,EtherCAT伺服对象字功能名,manual/GEN快速使用手册20231229.pdf,PDF页23 2.6节,只有功能名,VERIFIED
+OBJ_6071,coe_object,目标力矩对象,write,unknown,unknown,索引6071h,SetEcatAxisPT要求该对象为PDO，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页211 指令157,未给出力矩单位和缩放,VERIFIED
+OBJ_60FF,coe_object,目标速度对象,write,unknown,unknown,索引60FFh,SetEcatAxisPV要求该对象为PDO，以GTHD为例,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页212 指令158,单位请参见驱动器手册,VERIFIED
+SDO_RET_0,sdo_return,SDO成功,return,short,N/A,0,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,0成功,VERIFIED
+SDO_RET_-1,sdo_return,主站未初始化,return,short,N/A,-1,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,主站未初始化,VERIFIED
+SDO_RET_-65,sdo_return,通讯错误,return,short,N/A,-65,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,通讯错误,VERIFIED
+SDO_RET_-14,sdo_return,准备邮箱发送数据失败,return,short,N/A,-14,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,与总表中编码器初始化失败的 -14 不是同一条说明,VERIFIED
+SDO_RET_-22,sdo_return,从站不存在,return,short,N/A,-22,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,从站不存在,VERIFIED
+SDO_RET_-71,sdo_return,协议数据错误,return,short,N/A,-71,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,协议数据错误,VERIFIED
+SDO_RET_-75,sdo_return,目标大小不匹配,return,short,N/A,-75,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,目标大小不匹配,VERIFIED
+SDO_RET_-93,sdo_return,从站不支持CoE,return,short,N/A,-93,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,从站不支持CoE,VERIFIED
+SDO_RET_-110,sdo_return,SDO超时,return,short,N/A,-110,GTN_EcatSDODownload与GTN_EcatSDOUpload,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页161-162 指令34和35,只写SDO超时，没有毫秒数,VERIFIED
+EROB_6040_80,coe_object,控制字清错误,write,uint16,N/A,6040h写入0x80,eRob多圈关节不接电池时的清错误写法,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页49 印页第38页 9.4节,只证实这一写入值。控制字其他位UNKNOWN,VERIFIED
+EROB_6041_11,coe_object,位置超限指示,read,bit,N/A,6041h bit11,eRob位置限制,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 印页第43页 表9-1前正文,用户手册只写该位表示超出限位。通信手册的其余位见EROB_6041_TYPE,VERIFIED
+EROB_MODE_01,drive_mode,轮廓位置模式,write,uint8,N/A,6060h=0x01,eRob表9-1,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 印页第43页 表9-1,超限时以6084h减速停在限位并保持力矩,VERIFIED
+EROB_MODE_04,drive_mode,轮廓扭矩模式,write,uint8,N/A,6060h=0x04,eRob表9-1,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 印页第43页 表9-1,超限时关电机电源但制动器不闭合,VERIFIED
+EROB_MODE_08,drive_mode,周期同步位置模式,write,uint8,N/A,6060h=0x08,eRob表9-1,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 印页第43页 表9-1,超限时快速减速回到限位并保持力矩,VERIFIED
+EROB_MODE_0A,drive_mode,周期同步扭矩模式,write,uint8,N/A,6060h=0x0A,eRob表9-1,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 印页第43页 表9-1,超限时关电机电源但制动器不闭合,VERIFIED
+EROB_607A,coe_object,目标位置,write,unknown,unknown,607Ah,eRob表9-1提及的对象,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 表9-1,只说明超限时如何对待该目标。类型和单位UNKNOWN,VERIFIED
+EROB_6064,coe_object,实际位置,read,unknown,unknown,6064h,eRob表9-1提及的对象,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 表9-1,扭矩模式用它判断是否到达限位。单位UNKNOWN,VERIFIED
+EROB_6071,coe_object,目标力矩,write,unknown,unknown,6071h,eRob表9-1提及的对象,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 表9-1,只说明限位方向过滤。单位UNKNOWN,VERIFIED
+EROB_6077,coe_object,实际力矩,read,unknown,unknown,6077h,eRob表9-1提及的对象,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 表9-1,扭矩模式超限后为0。单位UNKNOWN,VERIFIED
+EROB_6078,coe_object,电机电流,read,unknown,unknown,6078h,eRob表9-1提及的对象,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 表9-1,扭矩模式超限后为0。单位UNKNOWN,VERIFIED
+EROB_6084,coe_object,轮廓减速度,read,unknown,unknown,6084h,eRob轮廓位置模式,manual/eRob机器人关节模组用户手册_V3.39.pdf,PDF页54 表9-1,到达限位前按该减速度减速。数值范围UNKNOWN,VERIFIED
+LIMIT_60FD_BIT0,coe_object,负限位来源位,read,bit,N/A,0x60FD bit0,GEN轴配置对EtherCAT数字量输入的解析,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页25 印页24,负限位由0x60FD的bit0解析,VERIFIED
+LIMIT_60FD_BIT1,coe_object,正限位来源位,read,bit,N/A,0x60FD bit1,GEN轴配置对EtherCAT数字量输入的解析,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页24 印页23,正限位由0x60FD的bit1解析,VERIFIED
+FAULT_6041_BIT3,coe_object,驱动报警来源位,read,bit,N/A,0x6041 Fault bit3,GEN轴配置,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页24 印页23,驱动报警由状态字0x6041的Fault位bit3解析,VERIFIED
+PVT_TIME,motion_point,PVT时间,write,double,ms,数据表1至32，每表最多1024点,GTN_PvtTable,manual/GEN系列运动控制器编程手册之高级功能.pdf,PDF页82 印页82 指令39,数组单位ms,VERIFIED
+PVT_POS,motion_point,PVT位置,write,double,pulse,与时间数组等长,GTN_PvtTable,manual/GEN系列运动控制器编程手册之高级功能.pdf,PDF页82 印页82 指令39,单位pulse,VERIFIED
+PVT_VEL,motion_point,PVT速度,write,double,pulse/ms,与时间数组等长,GTN_PvtTable,manual/GEN系列运动控制器编程手册之高级功能.pdf,PDF页82 印页82 指令39,单位pulse/ms,VERIFIED
+PT_POS,motion_point,PT段末位置,write,double,pulse,N/A,GTN_PtData,manual/GEN系列运动控制器编程手册之高级功能.pdf,PDF页78 指令中的GTN_PtData,单位pulse,VERIFIED
+PT_TIME,motion_point,PT段末时间,write,long,ms,N/A,GTN_PtData,manual/GEN系列运动控制器编程手册之高级功能.pdf,PDF页78 指令中的GTN_PtData,单位ms,VERIFIED
+PT_TYPE,motion_point,PT段类型,write,short,N/A,0普通 1匀速 2减速到0,GTN_PtData,manual/GEN系列运动控制器编程手册之高级功能.pdf,PDF页78 指令中的GTN_PtData,PT_SEGMENT_NORMAL/EVEN/STOP,VERIFIED
+SCALE_ALPHA_BETA,axis_scale,规划器或编码器当量,write,short,ratio,"[-32767,0)或(0,32767]，默认1/1",GTN_ProfileScale与GTN_EncScale,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页25-26 印页24-25,Delta profile/Delta axis = Alpha/Beta,VERIFIED
+STOP_DEC_DEFAULT,axis_limit,默认停止减速度,read,N/A,pulse/ms^2,平滑1，急停1000,GTN_Reset后的profile默认,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页30 印页29 表4-3,复位后的默认值，可用GTN_SetStopDec修改,VERIFIED
+DC_ERR,ecat_status,DC错误标志,read,integer,N/A,0没有 1有错误,GTN_GetEcatDcErrorEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页196 印页195 指令123,字段dcError,VERIFIED
+ECAT_OFFLINE,ecat_status,总线断线标志,read,integer,N/A,0正常 1有断线,GTN_GetEcatDcErrorEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页196 印页195 指令123,offlineFlag。断线后的设备动作UNKNOWN,VERIFIED
+ECAT_COMM_STS,ecat_status,控制器是否正在控制总线,read,integer,N/A,0未控制 1正在控制,GTN_GetEcatDcErrorEx,manual/GEN系列运动控制器编程手册之基本功能20231218.pdf,PDF页196 印页195 指令123,ecatCommStatus,VERIFIED
+EROB_NMT_FRAME,canopen_frame,NMT报文,write,2 bytes,N/A,CAN-ID 0x000；Byte0=CMD；Byte1=Node ID,eRob CANopen,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页12 印页第7页 表3-1,CMD数值在图中，文本未列出,VERIFIED
+EROB_BOOTUP,canopen_frame,Boot-up,read,1 byte,N/A,COB-ID 0x700+Node ID；数据00,eRob CANopen,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页14 印页第9页 表3-4,Initialization之后进入Pre-Operational时发送,VERIFIED
+EROB_EMCY,canopen_frame,紧急报文,read,8 bytes,N/A,COB-ID 0x80+Node ID；Byte0-1错误码；Byte2为0x1001对象的内容；Byte4-7为0,eRob CANopen,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页16 印页第11页 表3-6,Byte2是错误寄存器对象0x1001，不是数值0x1001。eRob只作为生产者,VERIFIED
+EROB_SDO_WR_1,canopen_frame,SDO写1字节,write,uint8,N/A,Byte0=2Fh；索引小端,eRob CANopen SDO,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页19 表3-8,示例：2F 60 60 00 01 00 00 00 把0x6060写成1,VERIFIED
+EROB_SDO_WR_2,canopen_frame,SDO写2字节,write,uint16,N/A,Byte0=2Bh；数据小端,eRob CANopen SDO,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页19 表3-8,示例：2B 40 60 00 07 00 00 00 把控制字写成7,VERIFIED
+EROB_SDO_WR_4,canopen_frame,SDO写4字节,write,uint32,N/A,Byte0=23h；数据小端,eRob CANopen SDO,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页19 表3-8,请求字节已核对：23 7A 60 00 BE 15 00 00。同页应答索引冲突另见C16，不改变这条请求,VERIFIED
+EROB_SDO_RD,canopen_frame,SDO读,read,1/2/4 bytes,N/A,请求40h；应答4Fh/4Bh/47h/43h；异常80h,eRob CANopen SDO,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页20 表3-9,3字节应答是47h。状态字示例返回4B 41 60 00 22 01 00 00,VERIFIED
+EROB_ABORT_TIMEOUT,sdo_abort,SDO超时,return,uint32,N/A,0x05040000,eRob CANopen abort code,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页122 印页第117页,没有毫秒数,VERIFIED
+EROB_ABORT_MISSING,sdo_abort,对象不存在,return,uint32,N/A,0x06020000,eRob CANopen abort code,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页122 印页第117页,索引或子索引错误,VERIFIED
+EROB_ABORT_LEN,sdo_abort,长度不匹配,return,uint32,N/A,0x06070010,eRob CANopen abort code,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页123 印页第118页,数据类型或服务参数长度不匹配,VERIFIED
+EROB_ABORT_STATE,sdo_abort,设备状态不允许,return,uint32,N/A,0x08000022,eRob CANopen abort code,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页123 印页第118页,当前设备状态导致不能传送或保存,VERIFIED
+EROB_6040_TYPE,coe_object,控制字对象类型,write,UINT,N/A,0x0000至0xFFFF；RW；RxPDO,eRob 0x6040:00,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页193 印页第188页 8.2.60,UINT，0x0000-0xFFFF，RW，RxPDO。bit2快速停机0有效1无效见PDF页58表5-5,VERIFIED
+EROB_6040_BIT7,coe_object,故障复位,write,bit,N/A,bit7上升沿,eRob 0x6040,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页58 印页第53页 表5-5,上升沿有效。用户手册0x80只用于特定清错场景,VERIFIED
+EROB_6041_TYPE,coe_object,状态字对象类型,read,UINT,N/A,0x0000至0xFFFF；RO；TxPDO,eRob 0x6041:00,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页194-195 印页第189-190页 8.2.62,类型UINT。bit0至bit11的中文名在该对象页。bit5见C13，bit6中英文见C17,VERIFIED
+EROB_6060_TYPE,drive_mode,运行模式对象,write,enum,N/A,0x01 PP；0x03 PV；0x04 PT；0x06回零暂不支持；0x07插补暂不支持；0x08 CSP；0x09 CSV；0x0A CST,eRob 0x6060,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页49 印页第44页 表5-1,中英文模式名一致，改后立即生效。类型词冲突在C18，不写入本行,VERIFIED
+EROB_6060_WIDTH,drive_mode,0x6060类型词,write,Integer8/SINT/INT,N/A,表5-1 Integer 8；8.2.67 SINT 0x00-0x0A；表5-8 INT,eRob 0x6060,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页49表5-1；PDF页197 8.2.67；PDF页62表5-8,0x04英文在对象页写成Profile position mode，中文为轮廓转矩。见C18,CONFLICT
+EROB_6064_TYPE,coe_object,实际位置,read,DINT/INT,plus,有符号32位；RO；TxPDO,eRob 0x6064:00,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页199 印页第194页 8.2.71；PDF页62表5-8,对象字典写DINT、plus、0x80000000至0x7FFFFFFF。表5-8写INT。见C18,CONFLICT
+EROB_607A_TYPE,coe_object,目标位置,write,DINT/INT,plus,有符号32位；RW；RxPDO,eRob 0x607A:00,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页206 印页第201页 8.2.92；PDF页62表5-8,对象字典写DINT、plus、RW、RxPDO。表5-8写INT。见C18,CONFLICT
+EROB_6064_FORMULA,position_scale,位置合成,read,DINT,pulse,圈数乘分辨率加单圈位置,eRob 6064h,manual/eRob机器人关节模组用户手册_V3.43.pdf,PDF页53 印页第42页,单位脉冲。负载端单圈分辨率524288见通信手册PDF页48,VERIFIED
+EROB_CSP_STEPS,state_command,CSP使能位,write,bitfield,N/A,00110然后00111然后01111,eRob CSP 0x6040 bit4-bit0,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页61 印页第56页,Shutdown、Switch on、Enable operation。其余位未在该表给出,VERIFIED
+EROB_BRAKE,coe_object,刹车控制,write,UDINT,N/A,值表定义0闭合、1释放；对象最大数据0x10；不可在使能时写,eRob 0x4602:00,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页192 印页第187页 8.2.58,2至16的含义未列出。正常使能由关节内部操作刹车,VERIFIED
+EROB_ERR_A000,error_code,主站掉线,read,uint16,N/A,0xA000,eRob 0x603F,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页125 印页第120页,The master station goes offline。后续抱闸动作未写,VERIFIED
+EROB_ERR_F004,error_code,EtherCAT初始化错误,read,uint16,N/A,0xF004,eRob 0x603F,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页125,EtherCAT initialization error,VERIFIED
+EROB_ERR_F005,error_code,STO激活,read,uint16,N/A,0xF005,eRob 0x603F,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页125,STO function is activated,VERIFIED
+EROB_ERR_F008,error_code,母线低于19V,read,uint16,N/A,0xF008,eRob 0x603F,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页125,低于允许的最小供电电压19V,VERIFIED
+EROB_ESM_TRANS,ecat_state,ESM转换名,state,enum,N/A,IP PI PS SP SO OS OP SI OI IB BI,eRob EtherCAT从站,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页33 印页第28页 表4-3,图4-2未转成文字，只记录表内转换,VERIFIED
+EROB_READY_TIME,timing,上电到伺服准备好,timing,seconds,s,X4012911X之前8秒，之后5秒,eRob固件时序,manual/eRob CANopen and EtherCAT用户手册v1.9.pdf,PDF页46 印页第41页 注2,本机固件号UNKNOWN。使能后再等至少500ms,VERIFIED
