@@ -6,8 +6,8 @@
 |---|---|---|---|---|---|
 | T001 | C++ 设备 SDK 契约测试 | 无 | P0 | DONE | `colcon test --packages-select x1_coffee_device_sdk` 退出码 0，且覆盖腰、夹爪和安全失败关闭。提交 `2230291` |
 | T002 | Python 设备 SDK 契约测试 | 无 | P0 | DONE | `python3 -m unittest` 针对新增测试退出码 0。提交 `88708f0` |
-| T003 | 启动回归纳入包测试 | 无 | P0 | READY | `colcon test --packages-select x1_coffee_integration` 会执行 `test_startup_motion.py` 且退出码 0 |
-| T004 | 已核对的 eRob 错误码查表 | 无 | P1 | READY | 新 gtest 只包含协议规格第 8.4 节已点名的代码，未知代码没有自造名称 |
+| T003 | 启动回归纳入包测试 | 无 | P0 | DONE | `colcon test --packages-select x1_coffee_integration` 会执行 `test_startup_motion.py` 且退出码 0。提交 `d81e2f5` |
+| T004 | 已核对的 eRob 错误码查表 | 无 | P1 | DONE | 新 gtest 只包含协议规格第 8.4 节已点名的代码，未知代码没有自造名称。提交 `d6cacee` |
 | T005 | ENI 从站标识只读清点 | 无 | P1 | READY | 写出 `plans/eni_inventory.md`，并声明这不是协议 VERIFIED |
 | T006 | 初始化与返回值 -10/-14 的新证据 | 无 | P2 | BLOCKED | 新的原文或授权记录进入 `specs/unresolved.md`，或明确仍无新证据 |
 | T007 | 关节身份、回零、位极性与整数宽度的新证据 | 无 | P2 | BLOCKED | 铭牌、厂商答复或授权抓包写入未决项；冲突未消解则保持 CONFLICT |
