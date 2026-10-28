@@ -1,0 +1,249 @@
+# 正指令和 URDF 预测相反的关节记为 reversed。
+# 编码器增量只证明电机跟着这条指令转了，方向是否符合 URDF 由操作者确认。
+joints:
+  Joint_Body:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.000120
+        angle_after: 0.049974
+        encoder_before: 283681
+        encoder_after: 287862
+        encoder_delta: 4181
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.010180, 0.026213, 0.000000]
+        predicted_right_m: [0.008855, 0.026826, 0.000000]
+  Joint_l1:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.003032
+        angle_after: 0.053054
+        encoder_before: 352109
+        encoder_after: 356286
+        encoder_delta: 4177
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.013245, -0.000664, -0.026136]
+  Joint_l2:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.001774
+        angle_after: 0.048260
+        encoder_before: 288812
+        encoder_after: 292987
+        encoder_delta: 4175
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.000610, 0.012504, 0.000311]
+      - command_rad: -0.050000
+        angle_before: 0.048213
+        angle_after: -0.001917
+        encoder_before: 292983
+        encoder_after: 288801
+        encoder_delta: -4182
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [0.000610, -0.012504, -0.000311]
+      - command_rad: 0.050000
+        angle_before: -0.001846
+        angle_after: 0.048225
+        encoder_before: 288806
+        encoder_after: 292985
+        encoder_delta: 4179
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.000610, 0.012503, 0.000310]
+  Joint_l3:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.001702
+        angle_after: 0.051760
+        encoder_before: 219697
+        encoder_after: 223875
+        encoder_delta: 4178
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.001938, 0.026394, 0.001310]
+  Joint_l4:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.002025
+        angle_after: 0.047973
+        encoder_before: 283077
+        encoder_after: 287249
+        encoder_delta: 4172
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.002069, 0.001143, -0.026392]
+      - command_rad: -0.050000
+        angle_before: 0.047997
+        angle_after: -0.002073
+        encoder_before: 287250
+        encoder_after: 283071
+        encoder_delta: -4179
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [0.002069, -0.001141, 0.026392]
+      - command_rad: 0.050000
+        angle_before: -0.002013
+        angle_after: 0.047997
+        encoder_before: 283073
+        encoder_after: 287249
+        encoder_delta: 4176
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [-0.002069, 0.001142, -0.026392]
+  Joint_l5:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.003212
+        angle_after: 0.053270
+        encoder_before: 89167
+        encoder_after: 93343
+        encoder_delta: 4176
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [0.000002, -0.000000, 0.000025]
+  Joint_l6:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.001774
+        angle_after: 0.051856
+        encoder_before: 116334
+        encoder_after: 120511
+        encoder_delta: 4177
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [0.001061, -0.013607, 0.000065]
+  Joint_l7:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.005081
+        angle_after: 0.045025
+        encoder_before: 509627
+        encoder_after: 513804
+        encoder_delta: 4177
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_left_m: [0.000000, 0.000000, 0.000000]
+  Joint_r1:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.000036
+        angle_after: 0.050082
+        encoder_before: 232972
+        encoder_after: 237149
+        encoder_delta: 4177
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [0.011887, 0.000594, 0.026904]
+  Joint_r2:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.000072
+        angle_after: 0.050178
+        encoder_before: 214131
+        encoder_after: 218311
+        encoder_delta: 4180
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [-0.000644, 0.012550, 0.000315]
+  Joint_r3:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.000000
+        angle_after: 0.050058
+        encoder_before: 270711
+        encoder_after: 274888
+        encoder_delta: 4177
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [-0.002057, 0.026486, 0.001297]
+  Joint_r4:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: 0.000120
+        angle_after: 0.050154
+        encoder_before: 156699
+        encoder_after: 160877
+        encoder_delta: 4178
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [-0.001923, -0.001462, 0.026487]
+      - command_rad: 0.050000
+        angle_before: 0.050118
+        angle_after: 0.100140
+        encoder_before: 160874
+        encoder_after: 165046
+        encoder_delta: 4172
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [-0.003240, -0.001590, 0.026351]
+  Joint_r5:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.000372
+        angle_after: 0.049794
+        encoder_before: 377947
+        encoder_after: 382134
+        encoder_delta: 4187
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [0.000000, 0.000000, -0.000000]
+  Joint_r6:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.000072
+        angle_after: 0.050022
+        encoder_before: 407997
+        encoder_after: 412177
+        encoder_delta: 4180
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [0.000965, -0.013715, -0.000029]
+  Joint_r7:
+    verdict: matched
+    samples:
+      - command_rad: 0.050000
+        angle_before: -0.000048
+        angle_after: 0.050058
+        encoder_before: 28746
+        encoder_after: 32928
+        encoder_delta: 4182
+        encoder_followed: true
+        status_before: 512
+        status_after: 512
+        predicted_right_m: [0.000000, 0.000000, 0.000000]

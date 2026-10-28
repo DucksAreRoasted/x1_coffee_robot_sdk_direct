@@ -1,0 +1,93 @@
+# 误差 = 摆成 URDF 零位时的关节读数。
+# 新 model_zero = 机械零位读数 - URDF 图读数。不用文件里的旧角度。
+joints:
+  Joint_Body:
+    mechanical_rad: -0.260226
+    urdf_match_rad: -0.000132
+    travel_rad: 0.260094
+    error_rad: -0.000132
+    model_zero: -0.260094
+  Joint_l1:
+    mechanical_rad: 0.970039
+    urdf_match_rad: -0.000108
+    travel_rad: -0.970147
+    error_rad: -0.000108
+    model_zero: 0.970147
+  Joint_l2:
+    mechanical_rad: 0.000228
+    urdf_match_rad: -0.025898
+    travel_rad: -0.026126
+    error_rad: -0.025898
+    model_zero: 0.026126
+  Joint_l3:
+    mechanical_rad: 0.010019
+    urdf_match_rad: -0.005285
+    travel_rad: -0.015304
+    error_rad: -0.005285
+    model_zero: 0.015304
+  Joint_l4:
+    mechanical_rad: -0.199993
+    urdf_match_rad: -0.000072
+    travel_rad: 0.199921
+    error_rad: -0.000072
+    model_zero: -0.199921
+  Joint_l5:
+    mechanical_rad: -1.619836
+    urdf_match_rad: -0.012835
+    travel_rad: 1.607001
+    error_rad: -0.012835
+    model_zero: -1.607001
+  Joint_l6:
+    mechanical_rad: -1.200472
+    urdf_match_rad: -0.034395
+    travel_rad: 1.166077
+    error_rad: -0.034395
+    model_zero: -1.166077
+  Joint_l7:
+    mechanical_rad: 1.630178
+    urdf_match_rad: -0.012847
+    travel_rad: -1.643025
+    error_rad: -0.012847
+    model_zero: 1.643025
+  Joint_r1:
+    mechanical_rad: -0.990005
+    urdf_match_rad: -0.000084
+    travel_rad: 0.989921
+    error_rad: -0.000084
+    model_zero: -0.989921
+  Joint_r2:
+    mechanical_rad: 0.000228
+    urdf_match_rad: 0.000048
+    travel_rad: -0.000180
+    error_rad: 0.000048
+    model_zero: 0.000180
+  Joint_r3:
+    mechanical_rad: -0.039907
+    urdf_match_rad: 0.000060
+    travel_rad: 0.039967
+    error_rad: 0.000060
+    model_zero: -0.039967
+  Joint_r4:
+    mechanical_rad: 0.200113
+    urdf_match_rad: -0.000096
+    travel_rad: -0.200208
+    error_rad: -0.000096
+    model_zero: 0.200208
+  Joint_r5:
+    mechanical_rad: 1.640053
+    urdf_match_rad: -0.000024
+    travel_rad: -1.640077
+    error_rad: -0.000024
+    model_zero: 1.640077
+  Joint_r6:
+    mechanical_rad: 1.150018
+    urdf_match_rad: -0.000084
+    travel_rad: -1.150102
+    error_rad: -0.000084
+    model_zero: 1.150102
+  Joint_r7:
+    mechanical_rad: 1.490178
+    urdf_match_rad: 3.150281
+    travel_rad: 1.660103
+    error_rad: 3.150281
+    model_zero: -1.660103
