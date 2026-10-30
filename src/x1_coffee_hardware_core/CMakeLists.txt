@@ -11,6 +11,7 @@ add_library(${PROJECT_NAME} SHARED
   src/coffee_axis_model.cpp
   src/command_guard.cpp
   src/erob_error_names.cpp
+  src/ecat_coe_codec.cpp
   src/gtn_native_api.cpp
   src/pending_gtn_transport.cpp
   src/production_gtn_transport.cpp
@@ -41,6 +42,8 @@ if(BUILD_TESTING)
   target_link_libraries(production_gtn_transport_test ${PROJECT_NAME})
   ament_add_gtest(erob_error_names_test test/erob_error_names_test.cpp)
   target_link_libraries(erob_error_names_test ${PROJECT_NAME})
+  ament_add_gtest(ecat_coe_codec_test test/ecat_coe_codec_test.cpp)
+  target_link_libraries(ecat_coe_codec_test ${PROJECT_NAME})
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
