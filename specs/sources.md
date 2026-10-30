@@ -55,3 +55,29 @@
 - 86EVA 用户手册。DMP 手册 PDF页 8 指向它，且该主站与本机无关
 
 仓库里的 `src/`、`vendor/gtn` 和 SDK 注释不是本阶段的手册证据，不写入 VERIFIED。
+
+2026-10-28 现场决定：固高指令和开卡以 `manual/固高最新手册/` 为准。同题内容与更早的固高 PDF、PPT 或香农操作说明书不一致时，采用该目录中的文字。该目录内部仍不一致的地方继续保留为冲突。
+
+## 2026-10-28 授权读取的下位机日志
+
+这些文件不在本仓库。2026-10-28 16:57 只读登录后摘录，没有启动控制进程。内容记在 `specs/unresolved.md` 的 T006 一节，等级不是 VERIFIED。
+
+| 文件 | 对象 | 阅读结果 |
+|---|---|---|
+| `/home/szxn/Desktop/MotionStudio_Linux64_Develop_V2.4.6.1/MotionStudio/motionData/CommandLogs/20260511.txt` | MotionStudio 命令记录 | 已读开卡、`ScanBus`、`NetInit` 相关行 |
+| 同目录 `20260615.txt` | 同上 | 已读开卡、`ScanBus`、`NetInit` 相关行 |
+| 同目录 `20261026.txt` | 同上 | 已读三次 `OpenCard` 到 `NetInit` 的行。回零行只确认存在，未当作 C7 证据 |
+| 同目录 `20261028.txt` | 同上 | 全文 19 行已读 |
+| 同目录 `../log/2026-05-11.log`、`2026-06-15.log`、`2026-10-26.log`、`2026-10-28.log` | MotionStudio 应用日志 | 检索了初始化函数名和返回值 -10/-14。`2026-10-28.log` 全文已读 |
+| 2026-10-28 17:16 的网卡与命令日志 | 同一台下位机 | MotionStudio 在运行，命令日志没有新增 SDO 上传。`eno1`、`enp3s0` 上没有抓到 EtherCAT 帧。不是协议 VERIFIED |
+| 2026-10-28 17:18 的 `MotionStudio/Gecat.log`、`CardInfo.log`、`CommandErrorInfo.log` | 同一次启动 | 15 个从站进入 OP。SII 只记录读了 147 字节，没有对象上传数据。不是协议 VERIFIED |
+| 2026-10-28 17:29 `/tmp/x1_sdo_probe` 的标准输出和 `Gecat.log` | 同一次只读上传 | 从站进入 OP。21 次 `GTN_EcatSDOUpload` 返回 7，没有数据。不是协议 VERIFIED |
+| `manual/固高最新手册/20240611111501_26829.pdf` | 固高 GEN 基本功能，封面 2023 年 08 月 | 已核对例程 5-1 和 `GTN_EcatSDOUpload` 原型。原型与旧基本功能手册相同 |
+| `manual/固高最新手册/20240611111201_52131.pdf` | 固高 EtherCAT 扩展指令 R1.3，2021 年 11 月 | 已核对 `GTN_GetEcatAxisPdoData` 和 `GTN_GetEcatSlaveObjectData`。不是 SDO 上传的替代原型 |
+| 2026-10-28 18:51 下位机 `enp3s0` 的直接读取 | 同一台下位机的空闲网口 | 15 个从站的 EEPROM 和 `0x1018`、`0x1008`、`0x1009`、`0x100A`。没有请求 OP。结果记在 `specs/unresolved.md`，不是协议 VERIFIED |
+| 2026-10-28 19:09 SOEM `49fc349` | 本机 `/tmp/SOEM`，不在仓库里 | 在 `enp3s0` 上只到 PREOP。读了 EEPROM 名称、`0x1000`–`0x1018`，以及 `0x2000`–`0x21FF` 里有返回的对象。不是协议 VERIFIED |
+| `manual/eRob最新手册/eRob CANopen and EtherCAT用户手册v1.11.pdf` | ZeroErr，封面 V1.11，2026-10-17 | 已核对模式 `0x06`、状态字表 5-4、对象 `0x6064`/`0x607A`/`0x200A`/`0x20A0`。回零不支持按此手册 |
+| `manual/eRob最新手册/eRob机器人关节模组用户手册_V3.45.pdf` | ZeroErr，封面 V3.45 | 机械手册。前 30 页没有回零步骤，没有把 15 个关节分成 70/80/90/110 |
+| `/home/ducks/Downloads/eRob系列关节模组的参数总表1.xlsx` | 关节参数表 | 扭矩、转速、惯量按型号和减速比列出。没有 EtherCAT 对象，对不上 `0x200A` 的毫安读数 |
+| `/home/ducks/Downloads/EtherCAT设备描述文件.zip` 内 `ZeroErr Driver_V3.2.0.xml` | Vendor `0x5a65726f`，Product `0x00029252` | 与实机 EEPROM 相同。`0x6064`、`0x607A` 写 DINT 32 位。不单独取消手册表里的 INT |
+| 2026-10-30 现场拍板 | 不是手册页 | bit5 为 0 表示快速停机；bit6 为 1 表示无故障；`0x6064`、`0x607A` 按 DINT。原文冲突保留在 `specs/unresolved.md` |
