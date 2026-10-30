@@ -10,7 +10,7 @@
 | T004 | 已核对的 eRob 错误码查表 | 无 | P1 | DONE | 新 gtest 只包含协议规格第 8.4 节已点名的代码，未知代码没有自造名称。提交 `d6cacee` |
 | T005 | ENI 从站标识只读清点 | 无 | P1 | DONE | 写出 `plans/eni_inventory.md`，并声明这不是协议 VERIFIED。提交 `cb52c98` |
 | T006 | 初始化与返回值 -10/-14 的新证据 | 无 | P2 | BLOCKED | 新的原文或授权记录进入 `specs/unresolved.md`，或明确仍无新证据 |
-| T007 | 关节身份、回零、位极性与整数宽度的新证据 | 无 | P2 | BLOCKED | 铭牌、厂商答复或授权抓包写入未决项；冲突未消解则保持 CONFLICT |
+| T007 | 关节身份、回零、位极性与整数宽度的新证据 | 无 | P2 | DONE | 结论已写入未决项。回零不支持；bit5 为 0 表示快速停机；bit6 为 1 表示无故障；位置对象用 DINT。提交 `5c0b9e8` |
 | T008 | 夹爪手册与 WebSocket 字段 | 无 | P2 | BLOCKED | 手册或报文说明进入 `manual/`，并更新 `specs/sources.md` |
 | T009 | 动态 PT 诊断材料 | 无 | P2 | BLOCKED | 找到或收到诊断记录；没有记录则保持缺失 |
 | T010 | 单一初始化序列 | T006 | P3 | BLOCKED | 仅当 T006 给出唯一 VERIFIED 顺序后才允许实现 |
