@@ -77,8 +77,7 @@ def ensure_active(node, name):
 def ensure_inactive(node, name):
     state = ensure_configured(node, name)
     if state == "active":
-        raise RuntimeError(f"{name} 应当保持未激活，但当前已激活")
-    node.get_logger().info(f"● {label(name)} 已加载，未激活")
+        raise RuntimeError(f"{label(name)} 不应启动，但当前已启动")
 
 
 def main():

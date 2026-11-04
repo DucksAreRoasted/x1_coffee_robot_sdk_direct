@@ -91,8 +91,8 @@ def cia402_state_name(status_bits: int) -> str:
     }.get(int(status_bits) & 0x006F, "未知")
 
 
-# 与传输层的 8 秒准备时间一致。这段时间里不把未使能当成故障来刷屏。
-SERVO_READY_SEC = 8.0
+# 与传输层的 5 秒准备时间一致。这段时间里不把未使能当成故障来刷屏。
+SERVO_READY_SEC = 5.0
 
 
 def enable_wait_line(states: Sequence[object], elapsed_sec: float) -> Optional[str]:
@@ -110,7 +110,7 @@ def enable_wait_line(states: Sequence[object], elapsed_sec: float) -> Optional[s
         return None
     if elapsed_sec < SERVO_READY_SEC:
         return ""
-    return "! 接通中，还差 " + str(len(pending)) + " 轴: " + "、".join(pending)
+    return "● 还在接通，还差 " + str(len(pending)) + " 轴: " + "、".join(pending)
 
 
 def drive_enable_faults(states: Sequence[object], require_enabled: bool) -> List[str]:
@@ -203,8 +203,8 @@ def _self_check() -> None:
     disabled[1] = State("Joint_l1", 2, enabled=False, status_bits=0)
     assert any("未使能" in item for item in drive_enable_faults(disabled, True))
     assert enable_wait_line(disabled, 0.2) == ""
-    assert enable_wait_line(disabled, 7.1) == ""
-    assert enable_wait_line(disabled, 8.0).startswith("! 接通中，还差 1 轴")
+    assert enable_wait_line(disabled, 4.1) == ""
+    assert enable_wait_line(disabled, 5.0).startswith("● 还在接通，还差 1 轴")
     assert enable_wait_line(healthy, 0.0) is None
     moving = healthy[:]
     moving[1] = State("Joint_l1", 2, enabled=True, moving=True, status_bits=0x200)
@@ -305,7 +305,7 @@ def main() -> int:
             self.get_logger().info("✓ 硬件检查通过：15 轴反馈有效，无报警、跟随误差或急停")
             require_enabled = bool(self.get_parameter("drives_enabled").value)
             if require_enabled:
-                self.get_logger().info("● 进总线后先等 8 秒再接通")
+                self.get_logger().info("● 进总线后先等 5 秒再接通。倒数结束前关节未使能是正常的")
                 wait_started = time.monotonic()
                 last_line = None
                 next_repeat = 0.0
@@ -329,7 +329,7 @@ def main() -> int:
                 bool(self.get_parameter("motion_enabled").value)
                 and not bool(self.get_parameter("use_fake_hardware").value)
             ):
-                self.get_logger().info("✓ 15 轴已使能并保持，未下发运动")
+                self.get_logger().info("✓ 15 轴都已使能，停在当前位置。上位机可以发轨迹")
             use_fake_hardware = bool(self.get_parameter("use_fake_hardware").value)
             motion_enabled = bool(self.get_parameter("motion_enabled").value)
             if motion_enabled and not use_fake_hardware:
@@ -352,7 +352,7 @@ def main() -> int:
                         return 1
                     self.get_logger().info("已对齐 URDF 零位，运动已允许。可以打开 RViz 规划执行")
                 else:
-                    self.get_logger().info("✓ 控制节点保持运行。未允许运动，轨迹不会写到驱动器")
+                    self.get_logger().info("✓ 保持程序继续运行。看到上一行就可以在上位机移动")
                 return 0
             controllers_ready = self.wait_until(timeout, self.controllers_active)
             if not controllers_ready:
