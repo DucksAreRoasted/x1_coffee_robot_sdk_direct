@@ -20,6 +20,17 @@ public:
   bool torques(
     const std::array<double, kCoffeeAxisCount> & q_rad,
     std::array<double, kCoffeeAxisCount> * tau_nm) const;
+  // 只改右臂 7 节。质量倍率相对 CAD，质心偏移在连杆坐标系，单位米。
+  bool setRightArmCorrection(
+    const std::array<double, 7> & mass_scale,
+    const std::array<std::array<double, 3>, 7> & com_delta);
+  // 用静止姿态上的右臂力矩辨识质量倍率和质心偏移。tau 单位 N·m，对应 r1..r7。
+  bool identifyRightArm(
+    const std::vector<std::array<double, kCoffeeAxisCount>> & q_rad,
+    const std::vector<std::array<double, 7>> & tau_nm,
+    std::array<double, 7> * mass_scale,
+    std::array<std::array<double, 3>, 7> * com_delta,
+    std::string * error) const;
 
 private:
   struct Link
@@ -64,10 +75,16 @@ private:
     int subtree_count{0};
   };
   std::vector<FlatLink> flat_links_;
+  std::vector<FlatLink> cad_links_;
+  int right_link_[7]{-1, -1, -1, -1, -1, -1, -1};
   std::vector<FlatJoint> flat_joints_;
   std::vector<std::vector<int>> flat_children_;
   int root_id_{-1};
   void buildFlat();
+  bool torquesOf(
+    const std::vector<FlatLink> & links,
+    const std::array<double, kCoffeeAxisCount> & q_rad,
+    std::array<double, kCoffeeAxisCount> * tau_nm) const;
 };
 
 }  // namespace x1_coffee_hardware_core

@@ -45,3 +45,41 @@ TEST(UrdfGravity, zeroPoseAndBentPoseMatchThePointMassModel)
   EXPECT_NEAR(tau[static_cast<std::size_t>(indexOf("Joint_l6"))], 4.31, 0.08);
   EXPECT_NEAR(tau[static_cast<std::size_t>(indexOf("Joint_r1"))], 16.63, 0.08);
 }
+
+TEST(UrdfGravity, rightArmIdentificationRecoversAMassScale)
+{
+  UrdfGravity truth;
+  std::string error;
+  ASSERT_TRUE(truth.load(X1_GRAVITY_URDF, &error)) << error;
+  std::array<double, 7> scale{};
+  scale.fill(1.0);
+  scale[6] = 1.4;
+  std::array<std::array<double, 3>, 7> delta{};
+  ASSERT_TRUE(truth.setRightArmCorrection(scale, delta));
+
+  std::vector<std::array<double, kCoffeeAxisCount>> poses;
+  std::vector<std::array<double, 7>> torques;
+  for (int slot = 0; slot < 7; ++slot) {
+    for (double angle : {-0.8, 0.6}) {
+      std::array<double, kCoffeeAxisCount> q{};
+      q[static_cast<std::size_t>(8 + slot)] = angle;
+      std::array<double, kCoffeeAxisCount> tau{};
+      ASSERT_TRUE(truth.torques(q, &tau));
+      std::array<double, 7> right{};
+      for (int joint = 0; joint < 7; ++joint) {
+        right[static_cast<std::size_t>(joint)] = tau[static_cast<std::size_t>(8 + joint)];
+      }
+      poses.push_back(q);
+      torques.push_back(right);
+    }
+  }
+  UrdfGravity cad;
+  ASSERT_TRUE(cad.load(X1_GRAVITY_URDF, &error)) << error;
+  std::array<double, 7> found_scale{};
+  std::array<std::array<double, 3>, 7> found_delta{};
+  ASSERT_TRUE(cad.identifyRightArm(poses, torques, &found_scale, &found_delta, &error)) << error;
+  EXPECT_NEAR(found_scale[6], 1.4, 0.15);
+  for (int slot = 0; slot < 6; ++slot) {
+    EXPECT_NEAR(found_scale[static_cast<std::size_t>(slot)], 1.0, 0.15);
+  }
+}

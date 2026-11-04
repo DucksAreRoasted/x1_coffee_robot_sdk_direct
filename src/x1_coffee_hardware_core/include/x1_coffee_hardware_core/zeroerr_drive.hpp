@@ -20,6 +20,8 @@ struct ZeroErrInput
   std::int32_t actual_position;
   std::uint32_t digital_inputs;
   std::uint16_t status_word;
+  // 0x6077，额定电流的千分比。位置模式和 MIT 都读它。
+  std::int16_t actual_torque;
 } __attribute__((packed));
 
 // 接收 PDO 0x1600 的三条映射，顺序与该示例相同。

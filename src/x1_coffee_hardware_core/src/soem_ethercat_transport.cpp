@@ -7,6 +7,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
+#include <fstream>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -693,6 +694,18 @@ private:
     if (rc <= 0 || display != mode) {
       std::fprintf(stderr, "slave=%u sdo 0x6061=0x%02x rc=%d\n", slave, display, rc);
     }
+    std::uint32_t rated_mnm = 0;
+    int rated_size = static_cast<int>(sizeof(rated_mnm));
+    rc = ecx_SDOread(
+      context, slave, 0x6076, 0x00, FALSE, &rated_size, &rated_mnm, EC_TIMEOUTRXM);
+    if (rc > 0 && rated_size == 2) {
+      rated_mnm &= 0xFFFF;
+    }
+    if (rc > 0) {
+      say("● 轴 %u 额定力矩 %.2f N·m", slave, static_cast<double>(rated_mnm) / 1000.0);
+    } else {
+      say("! 轴 %u 读不到额定力矩 0x6076", slave);
+    }
 
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
     value32 = kZeroErrRxTargetPosition;
@@ -714,7 +727,9 @@ private:
     writePdoEntry(context, slave, 0x1A00, 2, sizeof(value32), &value32);
     value32 = kZeroErrTxStatusWord;
     writePdoEntry(context, slave, 0x1A00, 3, sizeof(value32), &value32);
-    value8 = 3;
+    value32 = kZeroErrTxActualTorque;
+    writePdoEntry(context, slave, 0x1A00, 4, sizeof(value32), &value32);
+    value8 = 4;
     rc = writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
     if (rc <= 0) {
       std::fprintf(stderr, "slave=%u pdo map rc=%d\n", slave, rc);
@@ -754,6 +769,7 @@ private:
         } else if (position_in_[slave] != nullptr) {
           item.status_word = position_in_[slave]->status_word;
           item.actual_position = position_in_[slave]->actual_position;
+          item.actual_torque = position_in_[slave]->actual_torque;
         }
         item.valid = wkc > 0 && item.status_word != 0;
         if (item.valid) {
@@ -843,6 +859,7 @@ private:
         } else if (position_in_[slave] != nullptr) {
           item.status_word = position_in_[slave]->status_word;
           item.actual_position = position_in_[slave]->actual_position;
+          item.actual_torque = position_in_[slave]->actual_torque;
         }
         item.valid = wkc > 0;
       }
@@ -1040,6 +1057,47 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
       return Result::fail(CoreError::kInvalidConfiguration, "gravity_scale 必须是有限数值");
     }
   }
+  if (gravity_ready_) {
+    if (const std::string * yaml = findParameter(parameters, "right_arm_gravity_yaml")) {
+      std::array<double, 7> mass_scale{};
+      mass_scale.fill(1.0);
+      std::array<std::array<double, 3>, 7> com_delta{};
+      std::ifstream input(*yaml);
+      if (!input) {
+        say("! 没有右臂重力修正文件，仍用 CAD：%s", yaml->c_str());
+      } else {
+        std::string line;
+        while (std::getline(input, line)) {
+          if (line.empty() || line[0] == '#') {
+            continue;
+          }
+          std::istringstream stream(line);
+          std::string key;
+          stream >> key;
+          if (!key.empty() && key.back() == ':') {
+            key.pop_back();
+          }
+          double values[7]{};
+          for (double & value : values) {
+            stream >> value;
+          }
+          if (key == "mass_scale") {
+            for (int slot = 0; slot < 7; ++slot) {
+              mass_scale[static_cast<std::size_t>(slot)] = values[slot];
+            }
+          } else if (key == "com_dx" || key == "com_dy" || key == "com_dz") {
+            const int axis = key == "com_dx" ? 0 : key == "com_dy" ? 1 : 2;
+            for (int slot = 0; slot < 7; ++slot) {
+              com_delta[static_cast<std::size_t>(slot)][axis] = values[slot];
+            }
+          }
+        }
+        if (gravity_.setRightArmCorrection(mass_scale, com_delta)) {
+          say("✓ 已读右臂质量倍率和质心偏移");
+        }
+      }
+    }
+  }
   torque_axis_.fill(false);
   if (const std::string * axes = findParameter(parameters, "zero_torque_axes")) {
     std::stringstream stream(*axes);
@@ -1196,11 +1254,11 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
     axis.moving = false;
     axis.follow_error = false;
     axis.emergency_input_active = false;
+    axis.torque_permille = item.actual_torque;
+    axis.torque_valid = true;
     if (torque_axis_[index]) {
       axis.current_permille = item.actual_current;
-      axis.torque_permille = item.actual_torque;
       axis.current_valid = true;
-      axis.torque_valid = true;
     }
   }
   has_previous_position_ = true;
@@ -1591,21 +1649,8 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   mit_have_sample_[index] = true;
   mit_velocity_[index] += 0.05 * (velocity - mit_velocity_[index]);
   const double error = desired - measured;
-  const double spring =
+  double command =
     mit_kp_ * error - mit_kd_ * mit_velocity_[index] + mit_gravity_permille_[index];
-  const double proposed = spring + mit_integral_[index];
-  const bool winding_up =
-    (proposed >= mit_limit_ && error > 0.0) || (proposed <= -mit_limit_ && error < 0.0);
-  if (!winding_up) {
-    mit_integral_[index] += mit_ki_ * error * kEthercatCycleSec;
-  }
-  if (mit_integral_[index] > mit_i_limit_) {
-    mit_integral_[index] = mit_i_limit_;
-  }
-  if (mit_integral_[index] < -mit_i_limit_) {
-    mit_integral_[index] = -mit_i_limit_;
-  }
-  double command = spring + mit_integral_[index];
   if (command > mit_limit_) {
     command = mit_limit_;
   }
@@ -1643,7 +1688,6 @@ Result SoemEthercatTransport::enterMitHold()
   motion_armed_ = false;
   mit_have_sample_.fill(false);
   mit_velocity_.fill(0.0);
-  mit_integral_.fill(0.0);
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     mit_hold_pulse_[index] = latest_[index].actual_position;
     held_pulse_[index] = latest_[index].actual_position;

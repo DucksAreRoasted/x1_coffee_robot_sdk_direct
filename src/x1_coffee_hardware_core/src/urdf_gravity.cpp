@@ -299,9 +299,30 @@ void UrdfGravity::buildFlat()
   for (FlatJoint & joint : flat_joints_) {
     collect(collect, joint.child, &joint);
   }
+  for (int slot = 0; slot < 7; ++slot) {
+    right_link_[slot] = -1;
+  }
+  for (const Joint & joint : joints_) {
+    if (joint.axis_index < 8 || joint.axis_index > 14) {
+      continue;
+    }
+    const auto found = ids.find(joint.child);
+    if (found != ids.end()) {
+      right_link_[joint.axis_index - 8] = found->second;
+    }
+  }
+  cad_links_ = flat_links_;
 }
 
 bool UrdfGravity::torques(
+  const std::array<double, kCoffeeAxisCount> & q_rad,
+  std::array<double, kCoffeeAxisCount> * tau_nm) const
+{
+  return torquesOf(flat_links_, q_rad, tau_nm);
+}
+
+bool UrdfGravity::torquesOf(
+  const std::vector<FlatLink> & links,
   const std::array<double, kCoffeeAxisCount> & q_rad,
   std::array<double, kCoffeeAxisCount> * tau_nm) const
 {
@@ -309,17 +330,17 @@ bool UrdfGravity::torques(
     return false;
   }
   tau_nm->fill(0.0);
-  if (root_id_ < 0 || flat_links_.empty()) {
+  if (root_id_ < 0 || links.empty()) {
     return false;
   }
   Pose poses[kMaxLinks];
   double com_world[kMaxLinks][3];
   const auto walk = [&](auto && self, int link, const Pose & pose) -> void {
-      if (link < 0 || link >= static_cast<int>(flat_links_.size()) || link >= kMaxLinks) {
+      if (link < 0 || link >= static_cast<int>(links.size()) || link >= kMaxLinks) {
         return;
       }
       poses[link] = pose;
-      const FlatLink & body = flat_links_[static_cast<std::size_t>(link)];
+      const FlatLink & body = links[static_cast<std::size_t>(link)];
       for (int row = 0; row < 3; ++row) {
         com_world[link][row] = pose.p[row];
         for (int col = 0; col < 3; ++col) {
@@ -356,7 +377,7 @@ bool UrdfGravity::torques(
     double tau = 0.0;
     for (int count = 0; count < joint.subtree_count; ++count) {
       const int link = joint.subtree[count];
-      const double mass = flat_links_[static_cast<std::size_t>(link)].mass;
+      const double mass = links[static_cast<std::size_t>(link)].mass;
       if (!(mass > 0.0)) {
         continue;
       }
@@ -369,6 +390,182 @@ bool UrdfGravity::torques(
     }
     // tau 是重力拖关节的力矩。电机前馈要把它抵消掉。
     (*tau_nm)[static_cast<std::size_t>(joint.axis_index)] = -tau;
+  }
+  return true;
+}
+
+bool UrdfGravity::setRightArmCorrection(
+  const std::array<double, 7> & mass_scale,
+  const std::array<std::array<double, 3>, 7> & com_delta)
+{
+  if (!ready_ || cad_links_.size() != flat_links_.size()) {
+    return false;
+  }
+  flat_links_ = cad_links_;
+  for (int slot = 0; slot < 7; ++slot) {
+    const int link = right_link_[slot];
+    if (link < 0) {
+      return false;
+    }
+    const double scale = std::min(2.0, std::max(0.5, mass_scale[static_cast<std::size_t>(slot)]));
+    FlatLink & body = flat_links_[static_cast<std::size_t>(link)];
+    const FlatLink & cad = cad_links_[static_cast<std::size_t>(link)];
+    body.mass = scale * cad.mass;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double delta = std::min(0.08, std::max(-0.08, com_delta[static_cast<std::size_t>(slot)][axis]));
+      body.com[axis] = cad.com[axis] + delta;
+    }
+  }
+  return true;
+}
+
+bool UrdfGravity::identifyRightArm(
+  const std::vector<std::array<double, kCoffeeAxisCount>> & q_rad,
+  const std::vector<std::array<double, 7>> & tau_nm,
+  std::array<double, 7> * mass_scale,
+  std::array<std::array<double, 3>, 7> * com_delta,
+  std::string * error) const
+{
+  if (!ready_ || mass_scale == nullptr || com_delta == nullptr || q_rad.size() != tau_nm.size() ||
+    q_rad.size() < 8)
+  {
+    if (error != nullptr) {
+      *error = "右臂辨识至少需要 8 个静止姿态";
+    }
+    return false;
+  }
+  constexpr int kParam = 28;
+  std::vector<double> rows(q_rad.size() * 7 * kParam, 0.0);
+  std::vector<double> target(q_rad.size() * 7, 0.0);
+  std::array<double, kCoffeeAxisCount> base{};
+  std::array<double, kCoffeeAxisCount> bumped{};
+  for (std::size_t sample = 0; sample < q_rad.size(); ++sample) {
+    std::vector<FlatLink> stripped = cad_links_;
+    for (int slot = 0; slot < 7; ++slot) {
+      stripped[static_cast<std::size_t>(right_link_[slot])].mass = 0.0;
+    }
+    std::array<double, kCoffeeAxisCount> known{};
+    if (!torquesOf(stripped, q_rad[sample], &known)) {
+      return false;
+    }
+    for (int joint = 0; joint < 7; ++joint) {
+      target[sample * 7 + static_cast<std::size_t>(joint)] =
+        tau_nm[sample][static_cast<std::size_t>(joint)] -
+        known[static_cast<std::size_t>(8 + joint)];
+    }
+    for (int slot = 0; slot < 7; ++slot) {
+      const int link = right_link_[slot];
+      auto column = [&](int param, const std::array<double, kCoffeeAxisCount> & tau_at_one,
+          const std::array<double, kCoffeeAxisCount> & tau_at_zero) {
+          for (int joint = 0; joint < 7; ++joint) {
+            const std::size_t row = sample * 7 + static_cast<std::size_t>(joint);
+            rows[row * kParam + static_cast<std::size_t>(slot * 4 + param)] =
+              tau_at_one[static_cast<std::size_t>(8 + joint)] -
+              tau_at_zero[static_cast<std::size_t>(8 + joint)];
+          }
+        };
+      std::vector<FlatLink> trial = cad_links_;
+      trial[static_cast<std::size_t>(link)].mass = 0.0;
+      if (!torquesOf(trial, q_rad[sample], &base)) {
+        return false;
+      }
+      trial[static_cast<std::size_t>(link)].mass = 1.0;
+      trial[static_cast<std::size_t>(link)].com[0] = 0.0;
+      trial[static_cast<std::size_t>(link)].com[1] = 0.0;
+      trial[static_cast<std::size_t>(link)].com[2] = 0.0;
+      if (!torquesOf(trial, q_rad[sample], &bumped)) {
+        return false;
+      }
+      column(0, bumped, base);
+      for (int axis = 0; axis < 3; ++axis) {
+        trial[static_cast<std::size_t>(link)].com[axis] = 1.0;
+        if (!torquesOf(trial, q_rad[sample], &bumped)) {
+          return false;
+        }
+        column(1 + axis, bumped, base);
+        for (int joint = 0; joint < 7; ++joint) {
+          const std::size_t row = sample * 7 + static_cast<std::size_t>(joint);
+          const std::size_t mass_col = static_cast<std::size_t>(slot * 4);
+          rows[row * kParam + mass_col + static_cast<std::size_t>(1 + axis)] -=
+            rows[row * kParam + mass_col];
+        }
+        trial[static_cast<std::size_t>(link)].com[axis] = 0.0;
+      }
+    }
+  }
+  double theta0[kParam]{};
+  double sigma[kParam]{};
+  for (int slot = 0; slot < 7; ++slot) {
+    const FlatLink & cad = cad_links_[static_cast<std::size_t>(right_link_[slot])];
+    theta0[slot * 4] = cad.mass;
+    sigma[slot * 4] = 0.30 * std::max(cad.mass, 1e-3);
+    for (int axis = 0; axis < 3; ++axis) {
+      theta0[slot * 4 + 1 + axis] = cad.mass * cad.com[axis];
+      sigma[slot * 4 + 1 + axis] = 0.03 * std::max(cad.mass, 1e-3);
+    }
+  }
+  double ata[kParam][kParam]{};
+  double atb[kParam]{};
+  const double noise = 0.05;
+  for (std::size_t row = 0; row < target.size(); ++row) {
+    for (int col = 0; col < kParam; ++col) {
+      const double a = rows[row * kParam + static_cast<std::size_t>(col)] / noise;
+      atb[col] += a * target[row] / noise;
+      for (int col2 = 0; col2 < kParam; ++col2) {
+        ata[col][col2] += a * rows[row * kParam + static_cast<std::size_t>(col2)] / noise;
+      }
+    }
+  }
+  for (int col = 0; col < kParam; ++col) {
+    const double w = 1.0 / sigma[col];
+    ata[col][col] += w * w;
+    atb[col] += w * w * theta0[col];
+  }
+  for (int col = 0; col < kParam; ++col) {
+    int pivot = col;
+    for (int row = col + 1; row < kParam; ++row) {
+      if (std::fabs(ata[row][col]) > std::fabs(ata[pivot][col])) {
+        pivot = row;
+      }
+    }
+    if (std::fabs(ata[pivot][col]) < 1e-12) {
+      if (error != nullptr) {
+        *error = "右臂重力回归矩阵奇异，姿态不够丰富";
+      }
+      return false;
+    }
+    if (pivot != col) {
+      for (int k = 0; k < kParam; ++k) {
+        std::swap(ata[pivot][k], ata[col][k]);
+      }
+      std::swap(atb[pivot], atb[col]);
+    }
+    const double div = ata[col][col];
+    for (int k = col; k < kParam; ++k) {
+      ata[col][k] /= div;
+    }
+    atb[col] /= div;
+    for (int row = 0; row < kParam; ++row) {
+      if (row == col) {
+        continue;
+      }
+      const double factor = ata[row][col];
+      for (int k = col; k < kParam; ++k) {
+        ata[row][k] -= factor * ata[col][k];
+      }
+      atb[row] -= factor * atb[col];
+    }
+  }
+  for (int slot = 0; slot < 7; ++slot) {
+    const FlatLink & cad = cad_links_[static_cast<std::size_t>(right_link_[slot])];
+    const double mass = std::min(2.0 * cad.mass, std::max(0.5 * cad.mass, atb[slot * 4]));
+    (*mass_scale)[static_cast<std::size_t>(slot)] = mass / cad.mass;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double moment = atb[slot * 4 + 1 + axis];
+      const double com = moment / mass;
+      (*com_delta)[static_cast<std::size_t>(slot)][axis] =
+        std::min(0.08, std::max(-0.08, com - cad.com[axis]));
+    }
   }
   return true;
 }
