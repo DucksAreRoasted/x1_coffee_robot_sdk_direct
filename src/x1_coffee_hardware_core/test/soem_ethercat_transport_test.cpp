@@ -357,8 +357,8 @@ TEST(SoemEthercatTransport, mit_hold_pulls_back_toward_the_latched_pose)
   const auto entered = transport.enterMitHold();
   ASSERT_TRUE(entered) << entered.detail;
   raw->replay();
+  EXPECT_EQ(raw->last[8].target_torque, 0);
   EXPECT_EQ(raw->last[0].target_torque, 0);
-  EXPECT_EQ(raw->last[0].target_position, 1000);
 
   std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
@@ -366,16 +366,18 @@ TEST(SoemEthercatTransport, mit_hold_pulls_back_toward_the_latched_pose)
     feedback[index].status_word = 0x1237;
     feedback[index].actual_position = 1000 * static_cast<std::int32_t>(index + 1);
   }
-  feedback[0].actual_position = 1100;
+  feedback[8].actual_position = 9100;
   raw->cycle(feedback, &raw->last);
-  EXPECT_LT(raw->last[0].target_torque, 0);
-  EXPECT_GE(raw->last[0].target_torque, -200);
-  EXPECT_EQ(raw->last[0].target_position, 1100);
+  EXPECT_LT(raw->last[8].target_torque, 0);
+  EXPECT_GE(raw->last[8].target_torque, -200);
+  EXPECT_EQ(raw->last[8].target_position, 9100);
+  EXPECT_EQ(raw->last[0].target_torque, 0);
+  EXPECT_EQ(raw->last[1].target_torque, 0);
 
   const auto left = transport.exitMitHold();
   ASSERT_TRUE(left) << left.detail;
   raw->cycle(feedback, &raw->last);
-  EXPECT_EQ(raw->last[0].target_torque, 0);
+  EXPECT_EQ(raw->last[8].target_torque, 0);
 }
 
 TEST(EnableTrace, preserves_previous_submitted_target_and_counts_transient_bus_errors)

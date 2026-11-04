@@ -422,9 +422,11 @@ public:
     return Result::ok();
   }
 
-  void requestDriveMode(std::uint8_t mode) override
+  void requestDriveMode(std::uint8_t mode, std::uint16_t axis_mask) override
   {
-    pending_drive_mode_.store(static_cast<int>(mode));
+    const std::uint32_t packed =
+      (static_cast<std::uint32_t>(axis_mask) << 8) | static_cast<std::uint32_t>(mode);
+    pending_drive_mode_.store(packed);
   }
 
   Result shutdownToInit() override
@@ -875,13 +877,20 @@ private:
 
   void applyPendingDriveMode()
   {
-    const int mode = pending_drive_mode_.exchange(-1);
-    if (mode < 0) {
+    const std::uint32_t packed = pending_drive_mode_.exchange(0);
+    if (packed == 0) {
       return;
     }
+    const int mode = static_cast<int>(packed & 0xFF);
+    const std::uint16_t mask = static_cast<std::uint16_t>(packed >> 8);
     std::uint8_t value = static_cast<std::uint8_t>(mode);
     int failed = 0;
+    int written = 0;
     for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
+      if ((mask & (1u << (slave - 1))) == 0) {
+        continue;
+      }
+      ++written;
       const int rc = ecx_SDOwrite(
         &context_, static_cast<std::uint16_t>(slave), 0x6060, 0x00, FALSE,
         sizeof(value), &value, EC_TIMEOUTRXM);
@@ -891,14 +900,14 @@ private:
     }
     if (failed == 0) {
       say(mode == static_cast<int>(kZeroErrCyclicTorqueMode) ?
-        "✓ 15 轴已切到周期同步扭矩" : "✓ 15 轴已切回周期同步位置");
+        "✓ 右臂 %d 轴已切到周期同步扭矩" : "✓ 右臂 %d 轴已切回周期同步位置", written);
     } else {
       say("✗ %d 台运行模式写入失败，目标 0x%02x", failed, mode);
     }
   }
 
   ecx_contextt context_{};
-  std::atomic<int> pending_drive_mode_{-1};
+  std::atomic<std::uint32_t> pending_drive_mode_{0};
   std::uint8_t iomap_[8192]{};
   bool opened_{false};
   std::array<bool, kCoffeeAxisCount> torque_axis_{};
@@ -1558,7 +1567,8 @@ void SoemEthercatTransport::onCycle(
       zeroErrCspControlWord(item.status_word);
     out.target_torque = 0;
     // MIT 时位置目标始终贴着编码器，切回 CSP 才不会猛拉。扭矩由主站刚度律给出。
-    if (mit_active_ && !torque_axis_[index] && item.valid && operation_enabled) {
+    const bool mit_axis = mit_active_ && (mit_mask_ & (1u << index)) != 0;
+    if (mit_axis && !torque_axis_[index] && item.valid && operation_enabled) {
       held_pulse_[index] = item.actual_position;
       goal_pulse_[index] = item.actual_position;
       out.target_position = item.actual_position;
@@ -1623,12 +1633,12 @@ Result SoemEthercatTransport::enterMitHold()
     goal_pulse_[index] = latest_[index].actual_position;
   }
   mit_active_ = true;
-  link_->requestDriveMode(kZeroErrCyclicTorqueMode);
+  link_->requestDriveMode(kZeroErrCyclicTorqueMode, mit_mask_);
   return Result{
     CoreError::kOk,
     gravity_ready_ ?
-    "MIT 已保持当前位置，并按当前角度补偿重力。扭矩不超过额定的 20%。请扶着手臂" :
-    "MIT 已保持当前位置。扭矩不超过额定的 20%，请扶着手臂。按 n 回到位置模式"};
+    "只松开右臂，左臂和腰仍按位置保持。右臂已加重力补偿，请扶着右臂" :
+    "只松开右臂，左臂和腰仍按位置保持。请扶着右臂"};
 }
 
 Result SoemEthercatTransport::exitMitHold()
@@ -1645,8 +1655,8 @@ Result SoemEthercatTransport::exitMitHold()
     held_pulse_[index] = latest_[index].actual_position;
     goal_pulse_[index] = latest_[index].actual_position;
   }
-  link_->requestDriveMode(kZeroErrCyclicPositionMode);
-  return Result{CoreError::kOk, "已回到位置保持，目标对齐当前编码器"};
+  link_->requestDriveMode(kZeroErrCyclicPositionMode, mit_mask_);
+  return Result{CoreError::kOk, "右臂已回到位置保持"};
 }
 
 double SoemEthercatTransport::pulseToPosition(std::size_t index, std::int32_t pulse) const

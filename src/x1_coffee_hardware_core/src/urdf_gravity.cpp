@@ -357,7 +357,8 @@ bool UrdfGravity::torques(
       const double mz = rx * fy - ry * fx;
       tau += axis_w[0] * mx + axis_w[1] * my + axis_w[2] * mz;
     }
-    (*tau_nm)[static_cast<std::size_t>(joint.axis_index)] = tau;
+    // tau 是重力拖关节的力矩。电机前馈要把它抵消掉。
+    (*tau_nm)[static_cast<std::size_t>(joint.axis_index)] = -tau;
   }
   return true;
 }

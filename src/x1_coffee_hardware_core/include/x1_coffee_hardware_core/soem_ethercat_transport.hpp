@@ -45,10 +45,11 @@ public:
     const std::array<bool, kCoffeeAxisCount> & torque_axis,
     const Cycle & on_cycle) = 0;
   virtual Result shutdownToInit() = 0;
-  // 运行中改 0x6060。0x08 位置，0x0A 扭矩。替身什么也不做。
-  virtual void requestDriveMode(std::uint8_t mode)
+  // 运行中改指定轴的 0x6060。axis_mask 的 bit i 对应轴 i。替身什么也不做。
+  virtual void requestDriveMode(std::uint8_t mode, std::uint16_t axis_mask)
   {
     (void)mode;
+    (void)axis_mask;
   }
 };
 
@@ -147,6 +148,8 @@ private:
   bool servo_wait_done_logged_{false};
   // 主站 MIT。扭矩单位是额定电流的千分比。上限 200，即额定的 20%。
   bool mit_active_{false};
+  // 单人调试只松开右臂 r1–r7，bit 8..14。左臂和腰保持周期同步位置。
+  std::uint16_t mit_mask_{0x7F00};
   double mit_kp_{180.0};
   double mit_kd_{6.0};
   double mit_limit_{200.0};

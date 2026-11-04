@@ -739,7 +739,7 @@ HELP = """
   h h     连按两次：回到机械零位（出厂脉冲对应的 URDF 角度，不是全零）
   0 0     连按两次：回到 URDF 零位（15 个关节角全部为 0）
   z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
-  m m     连按两次：MIT 保持当前位置。关节变软，请扶着
+  m m     连按两次：只对右臂做 MIT。左臂和腰保持位置，请扶右臂
   n       退出 MIT，回到位置保持
   b       关断并重新抱闸
   空格    停在当前目标，不再追加
@@ -1058,7 +1058,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.mit_confirm_until:
                     node.mit_confirm_until = now + 3.0
-                    print("\n再按一次 m：MIT 保持当前位置。关节会变软，请扶着手臂。")
+                    print("\n再按一次 m：只松开右臂做 MIT。左臂和腰保持位置，请扶着右臂。")
                     continue
                 node.mit_confirm_until = 0.0
                 if node.call_trigger(node.mit_hold_client, "/x1/mit_hold"):
@@ -1083,7 +1083,7 @@ def run_teleop() -> int:
                 print("\n当前是零力矩。先按 b 抱闸，才能位置控制。")
                 continue
             if node.mit_hold:
-                print("\n当前是 MIT。按 n 回到位置保持，才能点动。")
+                print("\n当前右臂是 MIT。按 n 回到位置保持，才能点动。")
                 continue
             linear = {
                 "w": (STEP_METERS, 0.0, 0.0),
