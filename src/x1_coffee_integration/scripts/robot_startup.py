@@ -91,8 +91,8 @@ def cia402_state_name(status_bits: int) -> str:
     }.get(int(status_bits) & 0x006F, "未知")
 
 
-# 与传输层的 5 秒准备时间一致。这段时间里不把未使能当成故障来刷屏。
-SERVO_READY_SEC = 5.0
+# 与传输层的 8 秒准备时间一致。这段时间里不把未使能当成故障来刷屏。
+SERVO_READY_SEC = 8.0
 
 
 def enable_wait_line(states: Sequence[object], elapsed_sec: float) -> Optional[str]:
@@ -203,8 +203,8 @@ def _self_check() -> None:
     disabled[1] = State("Joint_l1", 2, enabled=False, status_bits=0)
     assert any("未使能" in item for item in drive_enable_faults(disabled, True))
     assert enable_wait_line(disabled, 0.2) == ""
-    assert enable_wait_line(disabled, 4.1) == ""
-    assert enable_wait_line(disabled, 5.0).startswith("! 接通中，还差 1 轴")
+    assert enable_wait_line(disabled, 7.1) == ""
+    assert enable_wait_line(disabled, 8.0).startswith("! 接通中，还差 1 轴")
     assert enable_wait_line(healthy, 0.0) is None
     moving = healthy[:]
     moving[1] = State("Joint_l1", 2, enabled=True, moving=True, status_bits=0x200)
@@ -305,7 +305,7 @@ def main() -> int:
             self.get_logger().info("✓ 硬件检查通过：15 轴反馈有效，无报警、跟随误差或急停")
             require_enabled = bool(self.get_parameter("drives_enabled").value)
             if require_enabled:
-                self.get_logger().info("● 进总线后先等 5 秒再接通")
+                self.get_logger().info("● 进总线后先等 8 秒再接通")
                 wait_started = time.monotonic()
                 last_line = None
                 next_repeat = 0.0

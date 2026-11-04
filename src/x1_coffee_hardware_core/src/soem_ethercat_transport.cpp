@@ -1068,7 +1068,7 @@ Result SoemEthercatTransport::activate()
   }
   debugf("activate reached OP");
   if (dynamic_cast<SoemLink *>(link_.get()) != nullptr) {
-    servo_ready_delay_ms_ = 5000;
+    servo_ready_delay_ms_ = 8000;
     servo_wait_begin_ = std::chrono::steady_clock::now();
     servo_wait_logged_sec_ = -1;
     servo_wait_done_logged_ = false;
