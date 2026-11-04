@@ -23,13 +23,10 @@ if [[ ! -t 0 || ! -t 1 ]]; then
   exit 1
 fi
 
-echo "网口 ${IFNAME}：上电并保持当前位置。"
-echo "按 eRob 手册，进总线后先等 5 秒再接通。这 5 秒里看到未使能是正常的，请不要退出。"
-echo "之后若仍停在准备接通，会关电压、间隔 300 ms 再试，直到 60 秒检查结束。"
-echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}，上位机用同一域打开 RViz。"
-echo "请等待“15 轴已使能并保持，未下发运动”后再在上位机启动 MoveIt。"
-echo "等待期间“尚未使能 N 轴”是进度信息；不要仅等待几秒就退出，默认检查超时为 60 秒。"
-echo "下面会要求输入你的登录密码。输入时屏幕不显示字符，输完按回车。"
+echo "网口 ${IFNAME}：上电并保持当前位置，不回零。ROS_DOMAIN_ID=${ROS_DOMAIN_ID}。"
+echo "进总线后先等 5 秒，终端按秒倒数。这 5 秒不要退出。"
+echo "看到「15 轴已使能并保持，未下发运动」后，再在上位机启动。"
+echo "下面输入登录密码。输入时不显示，输完按回车。"
 # 清掉几分钟内的 sudo 记录，否则不会再问密码。
 sudo -k
 exec sudo -E env -u SHELLOPTS bash --noprofile --norc -c "

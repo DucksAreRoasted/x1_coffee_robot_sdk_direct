@@ -133,6 +133,8 @@ private:
   // eRob 手册 5.1.1：上电到伺服准备好需要 5 秒。实机链路才等待，单测为 0。
   int servo_ready_delay_ms_{0};
   std::chrono::steady_clock::time_point servo_wait_begin_{};
+  int servo_wait_logged_sec_{-1};
+  bool servo_wait_done_logged_{false};
   mutable std::mutex sample_mu_;
 };
 

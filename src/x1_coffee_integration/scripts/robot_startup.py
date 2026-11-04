@@ -91,6 +91,28 @@ def cia402_state_name(status_bits: int) -> str:
     }.get(int(status_bits) & 0x006F, "未知")
 
 
+# 与传输层的 5 秒准备时间一致。这段时间里不把未使能当成故障来刷屏。
+SERVO_READY_SEC = 5.0
+
+
+def enable_wait_line(states: Sequence[object], elapsed_sec: float) -> Optional[str]:
+    """全部接通返回 None。准备期内返回空串，倒计时由传输层打印。之后返回短名单。"""
+    pending = []
+    by_name = {state.joint_name: state for state in states}
+    for name in JOINTS:
+        state = by_name.get(name)
+        if state is None or not state.enabled:
+            if state is None:
+                pending.append(name)
+            else:
+                pending.append(f"{name} {cia402_state_name(int(state.status_bits))}")
+    if not pending:
+        return None
+    if elapsed_sec < SERVO_READY_SEC:
+        return ""
+    return "接通中，还差 " + str(len(pending)) + " 轴: " + "、".join(pending)
+
+
 def drive_enable_faults(states: Sequence[object], require_enabled: bool) -> List[str]:
     if not require_enabled:
         return []
@@ -180,6 +202,10 @@ def _self_check() -> None:
     disabled = healthy[:]
     disabled[1] = State("Joint_l1", 2, enabled=False, status_bits=0)
     assert any("未使能" in item for item in drive_enable_faults(disabled, True))
+    assert enable_wait_line(disabled, 0.2) == ""
+    assert enable_wait_line(disabled, 4.1) == ""
+    assert enable_wait_line(disabled, 5.0).startswith("接通中，还差 1 轴")
+    assert enable_wait_line(healthy, 0.0) is None
     moving = healthy[:]
     moving[1] = State("Joint_l1", 2, enabled=True, moving=True, status_bits=0x200)
     assert any("仍在运动" in item for item in drive_enable_faults(moving, True))
@@ -279,17 +305,22 @@ def main() -> int:
             self.get_logger().info("硬件检查通过：15 轴反馈有效，无报警、跟随误差或急停输入")
             require_enabled = bool(self.get_parameter("drives_enabled").value)
             if require_enabled:
-                self.get_logger().info("等待 15 轴状态字进入使能，未使能的轴会每 2 秒列出来")
-                next_report = 0.0
+                self.get_logger().info("进总线后先等 5 秒再接通。倒计时结束前不会把未使能列成故障")
+                wait_started = time.monotonic()
+                last_line = None
+                next_repeat = 0.0
                 def drives_ready() -> bool:
-                    nonlocal next_report
-                    faults = drive_enable_faults(self.motor_states, True)
+                    nonlocal last_line, next_repeat
+                    if not drive_enable_faults(self.motor_states, True):
+                        return True
                     now = time.monotonic()
-                    if faults and now >= next_report:
-                        self.get_logger().info(
-                            "尚未使能 " + str(len(faults)) + " 轴: " + "；".join(faults))
-                        next_report = now + 2.0
-                    return not faults
+                    elapsed = now - wait_started
+                    line = enable_wait_line(self.motor_states, elapsed)
+                    if line and (line != last_line or now >= next_repeat):
+                        self.get_logger().info(line)
+                        last_line = line
+                        next_repeat = now + 2.0
+                    return False
                 if not self.wait_until(timeout, drives_ready):
                     for fault in drive_enable_faults(self.motor_states, True):
                         self.get_logger().error(fault)

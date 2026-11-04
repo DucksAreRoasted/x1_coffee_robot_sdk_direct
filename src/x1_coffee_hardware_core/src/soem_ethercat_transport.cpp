@@ -330,6 +330,7 @@ public:
     debugf("before ecx_config_map_group");
     ecx_config_map_group(&context_, iomap_, 0);
     active_link_ = nullptr;
+    std::fprintf(stderr, "15 轴过程数据已映射\n");
     debugf("before ecx_configdc");
     ecx_configdc(&context_);
     for (int slave = 1; slave <= count; ++slave) {
@@ -567,11 +568,13 @@ private:
     // 仅给原有 SDO 写入补日志，不新增总线访问，不改变写入顺序或返回处理。
     const int rc = ecx_SDOwrite(
       context, slave, index, subindex, FALSE, size, value, EC_TIMEOUTRXM);
-    std::uint32_t raw = 0;
-    std::memcpy(&raw, value, std::min(sizeof(raw), static_cast<std::size_t>(size)));
-    std::fprintf(
-      stderr, "[x1-enable-config] slave=%u index=0x%04x sub=%u size=%d value=0x%08x rc=%d\n",
-      slave, index, subindex, size, raw, rc);
+    if (rc <= 0) {
+      std::uint32_t raw = 0;
+      std::memcpy(&raw, value, std::min(sizeof(raw), static_cast<std::size_t>(size)));
+      std::fprintf(
+        stderr, "PDO 写入失败 slave=%u index=0x%04x sub=%u value=0x%08x rc=%d\n",
+        slave, index, subindex, raw, rc);
+    }
     return rc;
   }
 
@@ -593,13 +596,19 @@ private:
     int display_size = static_cast<int>(sizeof(display));
     int rc = ecx_SDOwrite(
       context, slave, 0x6060, 0x00, FALSE, sizeof(mode), &mode, EC_TIMEOUTRXM);
-    std::fprintf(stderr, "slave=%u sdo 0x6060=0x0A rc=%d\n", slave, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u sdo 0x6060=0x0A rc=%d\n", slave, rc);
+    }
     rc = ecx_SDOread(
       context, slave, 0x6061, 0x00, FALSE, &display_size, &display, EC_TIMEOUTRXM);
-    std::fprintf(stderr, "slave=%u sdo 0x6061=0x%02x rc=%d\n", slave, display, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u sdo 0x6061=0x%02x rc=%d\n", slave, display, rc);
+    }
     rc = ecx_SDOwrite(
       context, slave, 0x6071, 0x00, FALSE, sizeof(torque), &torque, EC_TIMEOUTRXM);
-    std::fprintf(stderr, "slave=%u sdo 0x6071=0 rc=%d\n", slave, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u sdo 0x6071=0 rc=%d\n", slave, rc);
+    }
 
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
     value32 = kZeroErrRxControlWord;
@@ -621,7 +630,9 @@ private:
     writePdoEntry(context, slave, 0x1A00, 4, sizeof(value32), &value32);
     value8 = 4;
     rc = writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
-    std::fprintf(stderr, "slave=%u pdo map rc=%d\n", slave, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u pdo map rc=%d\n", slave, rc);
+    }
     return 1;
   }
 
@@ -634,21 +645,29 @@ private:
     int actual_size = static_cast<int>(sizeof(actual));
     int rc = ecx_SDOread(
       context, slave, 0x6064, 0x00, FALSE, &actual_size, &actual, EC_TIMEOUTRXM);
-    std::fprintf(stderr, "slave=%u sdo 0x6064=%d rc=%d\n", slave, actual, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u sdo 0x6064=%d rc=%d\n", slave, actual, rc);
+    }
     if (rc > 0) {
       rc = ecx_SDOwrite(
         context, slave, 0x607A, 0x00, FALSE, sizeof(actual), &actual, EC_TIMEOUTRXM);
-      std::fprintf(stderr, "slave=%u sdo 0x607A=%d rc=%d\n", slave, actual, rc);
+      if (rc <= 0) {
+        std::fprintf(stderr, "slave=%u sdo 0x607A=%d rc=%d\n", slave, actual, rc);
+      }
     }
     std::uint8_t mode = kZeroErrCyclicPositionMode;
     rc = ecx_SDOwrite(
       context, slave, 0x6060, 0x00, FALSE, sizeof(mode), &mode, EC_TIMEOUTRXM);
-    std::fprintf(stderr, "slave=%u sdo 0x6060=0x08 rc=%d\n", slave, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u sdo 0x6060=0x08 rc=%d\n", slave, rc);
+    }
     std::uint8_t display = 0;
     int display_size = static_cast<int>(sizeof(display));
     rc = ecx_SDOread(
       context, slave, 0x6061, 0x00, FALSE, &display_size, &display, EC_TIMEOUTRXM);
-    std::fprintf(stderr, "slave=%u sdo 0x6061=0x%02x rc=%d\n", slave, display, rc);
+    if (rc <= 0 || display != mode) {
+      std::fprintf(stderr, "slave=%u sdo 0x6061=0x%02x rc=%d\n", slave, display, rc);
+    }
 
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
     value32 = kZeroErrRxTargetPosition;
@@ -670,7 +689,9 @@ private:
     writePdoEntry(context, slave, 0x1A00, 3, sizeof(value32), &value32);
     value8 = 3;
     rc = writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
-    std::fprintf(stderr, "slave=%u pdo map rc=%d\n", slave, rc);
+    if (rc <= 0) {
+      std::fprintf(stderr, "slave=%u pdo map rc=%d\n", slave, rc);
+    }
     return 1;
   }
 
@@ -729,7 +750,7 @@ private:
       }
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, false, wkc, send_rc);
-      if (cycle == 0 || (cycle % 400) == 0) {
+      if (cycle == 0 || (cycle % 2000) == 0) {
         debugf(
           "bringup cycle=%d wkc=%d ready=%d bus=0x%04x stopped=%d",
           cycle, wkc, ready, context_.slavelist[0].state, stopped() ? 1 : 0);
@@ -799,7 +820,7 @@ private:
         }
         item.valid = wkc > 0;
       }
-      if (steady_cycle == 0 || (steady_cycle % 2000) == 0) {
+      if (steady_cycle == 0 || (steady_cycle % 20000) == 0) {
         debugf(
           "steady cycle=%d wkc=%d slave1 status=0x%04x pos=%d dc_phase_us=%lld "
           "overruns=%ld max_late_us=%lld",
@@ -1037,7 +1058,8 @@ Result SoemEthercatTransport::activate()
   if (dynamic_cast<SoemLink *>(link_.get()) != nullptr) {
     servo_ready_delay_ms_ = 5000;
     servo_wait_begin_ = std::chrono::steady_clock::now();
-    debugf("eRob manual 5.1.1: wait %d ms before switch on", servo_ready_delay_ms_);
+    servo_wait_logged_sec_ = -1;
+    servo_wait_done_logged_ = false;
   }
   active_ = true;
   closed_ = false;
@@ -1334,6 +1356,24 @@ void SoemEthercatTransport::onCycle(
   std::lock_guard<std::mutex> lock(sample_mu_);
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
   samplePath();
+  bool servo_waiting = false;
+  if (servo_ready_delay_ms_ > 0) {
+    const int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - servo_wait_begin_).count());
+    if (elapsed_ms < servo_ready_delay_ms_) {
+      servo_waiting = true;
+      const int remain_sec = (servo_ready_delay_ms_ - elapsed_ms + 999) / 1000;
+      if (remain_sec != servo_wait_logged_sec_) {
+        servo_wait_logged_sec_ = remain_sec;
+        std::fprintf(stderr, "伺服准备中，还剩 %d 秒，暂不接通\n", remain_sec);
+        std::fflush(stderr);
+      }
+    } else if (!servo_wait_done_logged_) {
+      servo_wait_done_logged_ = true;
+      std::fprintf(stderr, "伺服已准备好，开始接通\n");
+      std::fflush(stderr);
+    }
+  }
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     const SlaveFeedback & item = feedback[index];
     const bool operation_enabled = item.valid && (item.status_word & 0x006F) == 0x0027;
@@ -1360,10 +1400,7 @@ void SoemEthercatTransport::onCycle(
       continue;
     }
     // 手册 5.1.1：上电后伺服还没准备好时不写接通，只保持关机字。
-    if (!torque_axis_[index] && servo_ready_delay_ms_ > 0 &&
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - servo_wait_begin_).count() < servo_ready_delay_ms_)
-    {
+    if (!torque_axis_[index] && servo_waiting) {
       out.control_word = 0x0006;
       continue;
     }
@@ -1378,7 +1415,7 @@ void SoemEthercatTransport::onCycle(
       if (switch_on_disabled || enable_backoff_cycles_[index] >= kEnableDisableCycles) {
         enable_phase_[index] = 2;
         enable_backoff_cycles_[index] = 0;
-        debugf("enable retry gap slave %zu", index + 1);
+        std::fprintf(stderr, "轴 %zu 已关电压，等待 300 ms 后再接通\n", index + 1);
       }
       continue;
     }
@@ -1389,7 +1426,8 @@ void SoemEthercatTransport::onCycle(
         enable_phase_[index] = 0;
         enable_backoff_cycles_[index] = 0;
         enable_ready_cycles_[index] = 0;
-        debugf("enable retry resume slave %zu attempt %d", index + 1, enable_retries_[index]);
+        std::fprintf(
+          stderr, "轴 %zu 第 %d 次重新接通\n", index + 1, enable_retries_[index]);
       }
       continue;
     }
@@ -1401,8 +1439,8 @@ void SoemEthercatTransport::onCycle(
         enable_ready_cycles_[index] = 0;
         ++enable_retries_[index];
         out.control_word = 0x0000;
-        debugf(
-          "enable retry slave %zu attempt %d status=0x%04x",
+        std::fprintf(
+          stderr, "轴 %zu 停在准备接通，第 %d 次重试，status=0x%04x\n",
           index + 1, enable_retries_[index], item.status_word);
         continue;
       }
