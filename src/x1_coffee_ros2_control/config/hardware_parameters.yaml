@@ -1,6 +1,7 @@
 x1_coffee_hardware:
   ros__parameters:
-    transport: gtn_ethercat
+    transport: ethercat
+    ethercat_ifname: eno1
     hardware_profile: coffee_15_no_slide
     axis_count: 15
     # These values are an adapter contract, not a software-mode fallback.

@@ -8,6 +8,7 @@
   <xacro:arg name="motion_enabled" default="false"/>
   <xacro:arg name="drives_enabled" default="false"/>
   <xacro:arg name="hardware_profile" default="coffee_15_no_slide"/>
+  <xacro:arg name="ethercat_ifname" default="eno1"/>
   <xacro:arg name="use_fake_hardware" default="false"/>
   <xacro:arg name="fake_sensor_commands" default="false"/>
   <!-- Reuses the established coffee geometry and selects real/fake ros2_control explicitly. -->
@@ -22,6 +23,7 @@
     ecat_config_path="$(arg ecat_config_path)"
     motion_enabled="$(arg motion_enabled)"
     drives_enabled="$(arg drives_enabled)"
+    ethercat_ifname="$(arg ethercat_ifname)"
     hardware_profile="$(arg hardware_profile)"
     initial_positions_file="$(arg initial_positions_file)"
     zero_offsets_file="$(arg zero_offsets_file)"/>

@@ -55,6 +55,7 @@ private:
   bool parseLimits();
   bool createTransport();
   bool startMotionService();
+  void scheduleMotionService();
   void allowMotionFromMeasurement(
     const std::shared_ptr<std_srvs::srv::Trigger::Response> response);
   void logTransportError(const char * operation, const x1_coffee_hardware_core::Result & result);
@@ -70,6 +71,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pvt_result_pub_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr motion_executor_;
   std::thread motion_spin_thread_;
+  std::thread motion_service_thread_;
 
   std::unique_ptr<x1_coffee_hardware_core::GtnTransport> transport_;
   std::unique_ptr<x1_coffee_hardware_core::CommandGuard> guard_;

@@ -121,6 +121,7 @@ class StartupRegression(unittest.TestCase):
         node.get_parameter = lambda key: types.SimpleNamespace(value={
             "check_timeout_sec": 1.0, "drives_enabled": True,
             "motion_enabled": True, "use_fake_hardware": False,
+            "arm_for_moveit": False,
         }[key])
         node.get_logger = lambda: types.SimpleNamespace(info=lambda *args: None, error=lambda *args: None)
         node.wait_until = lambda timeout, ready: ready()
@@ -141,6 +142,7 @@ class StartupRegression(unittest.TestCase):
         node.get_logger = lambda: types.SimpleNamespace(info=lambda *args: None, error=lambda *args: None)
         node.wait_until = lambda timeout, ready: ready()
         node._return_to_mechanical_zero = lambda: events.append("zero") or True
+        node._return_to_urdf_zero = lambda: events.append("urdf") or True
         node.controllers_active = lambda: events.append("controllers") or controllers
         node._start_motion = lambda: events.append("arm") or armed
         return function(node), events
@@ -148,7 +150,7 @@ class StartupRegression(unittest.TestCase):
     def test_real_moveit_ready_without_initial_pose(self):
         result, events = self.run_without_initial_pose()
         self.assertEqual(result, 0)
-        self.assertEqual(events, ["zero", "controllers", "arm"])
+        self.assertEqual(events, ["urdf", "controllers", "arm"])
 
     def test_readonly_and_fake_do_not_arm_real_hardware(self):
         for kwargs in ({"motion": False}, {"fake": True}, {"requested": False}):
@@ -159,10 +161,10 @@ class StartupRegression(unittest.TestCase):
     def test_controller_or_arming_failure_aborts(self):
         result, events = self.run_without_initial_pose(controllers=False)
         self.assertEqual(result, 1)
-        self.assertEqual(events, ["zero", "controllers"])
+        self.assertEqual(events, ["urdf", "controllers"])
         result, events = self.run_without_initial_pose(armed=False)
         self.assertEqual(result, 1)
-        self.assertEqual(events, ["zero", "controllers", "arm"])
+        self.assertEqual(events, ["urdf", "controllers", "arm"])
 
     def test_controller_targets_align_before_arming(self):
         function, scope = METHODS["_start_motion"]

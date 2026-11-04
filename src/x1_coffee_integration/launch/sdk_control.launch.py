@@ -1,5 +1,3 @@
-import os
-
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
@@ -44,6 +42,7 @@ def _launch_setup(context):
     drives_enabled = LaunchConfiguration("drives_enabled")
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     fake_sensor_commands = LaunchConfiguration("fake_sensor_commands")
+    ethercat_ifname = LaunchConfiguration("ethercat_ifname").perform(context)
 
     description_file = PathJoinSubstitution(
         [FindPackageShare("x1_coffee_integration"), "urdf", "HRB3Q-LC.sdk.urdf.xacro"]
@@ -60,6 +59,7 @@ def _launch_setup(context):
             " ecat_config_path:=", ecat_config_path,
             " initial_positions_file:=", initial_positions_file,
             " zero_offsets_file:=", zero_offsets_file,
+            " ethercat_ifname:=", ethercat_ifname,
             " motion_enabled:=", motion_enabled,
             " drives_enabled:=", drives_enabled,
             " use_fake_hardware:=", use_fake_hardware,
@@ -77,17 +77,13 @@ def _launch_setup(context):
     active_controllers = moveit_controllers if control_mode_value == "moveit" else openarm_controllers
     inactive_controllers = openarm_controllers if control_mode_value == "moveit" else moveit_controllers
 
-    gtn_dir = os.path.dirname(os.path.realpath(gtn_library_path))
-    library_path = gtn_dir + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")
-
     return [
         Node(
             package="robot_state_publisher", executable="robot_state_publisher",
             output="screen", parameters=[robot_description]),
         Node(
             package="controller_manager", executable="ros2_control_node",
-            output="screen", parameters=[robot_description, controller_file],
-            additional_env={"LD_LIBRARY_PATH": library_path}),
+            output="screen", parameters=[robot_description, controller_file]),
         Node(
             package="x1_coffee_integration", executable="spawn_controllers.py",
             name="spawn_controllers", output="screen",
@@ -138,10 +134,13 @@ def generate_launch_description():
             description="默认只读；仅在实机只读验收和单轴点动确认后设为 true"),
         DeclareLaunchArgument(
             "drives_enabled", default_value="false",
-            description="上电使能：GTN_AxisOn 15 轴后保持，不发轨迹"),
+            description="上电使能：进入 OP 后按当前位置保持，不发新目标"),
         DeclareLaunchArgument(
             "use_fake_hardware", default_value="false",
             description="显式使用 mock_components/GenericSystem；不会自动回退"),
         DeclareLaunchArgument("fake_sensor_commands", default_value="false"),
+        DeclareLaunchArgument(
+            "ethercat_ifname", default_value="eno1",
+            description="本机 EtherCAT 网口名"),
         OpaqueFunction(function=_launch_setup),
     ])

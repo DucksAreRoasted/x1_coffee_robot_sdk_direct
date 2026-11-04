@@ -12,6 +12,7 @@ keeps PVT jogging available. Launching MoveIt is a separate step.
 import math
 import os
 import sys
+import time
 from typing import Dict, List, Mapping, Optional, Sequence
 
 import yaml
@@ -77,6 +78,19 @@ def hardware_faults(states: Sequence[object]) -> List[str]:
     return faults
 
 
+def cia402_state_name(status_bits: int) -> str:
+    return {
+        0x0000: "未就绪",
+        0x0040: "接通禁止",
+        0x0021: "准备接通",
+        0x0023: "已接通",
+        0x0027: "已使能",
+        0x0007: "快速停机",
+        0x0008: "故障",
+        0x000F: "故障反应",
+    }.get(int(status_bits) & 0x006F, "未知")
+
+
 def drive_enable_faults(states: Sequence[object], require_enabled: bool) -> List[str]:
     if not require_enabled:
         return []
@@ -87,7 +101,10 @@ def drive_enable_faults(states: Sequence[object], require_enabled: bool) -> List
         if state is None:
             continue
         if not state.enabled:
-            faults.append(f"{name} 未使能，status=0x{int(state.status_bits):x}")
+            status_bits = int(state.status_bits)
+            faults.append(
+                f"{name} 轴{int(state.hardware_axis)} 未使能，"
+                f"status=0x{status_bits:x}（{cia402_state_name(status_bits)}）")
         if state.moving:
             faults.append(f"{name} 上电后仍在运动")
     return faults
@@ -260,12 +277,23 @@ def main() -> int:
                     self.get_logger().error(fault)
                 return 1
             self.get_logger().info("硬件检查通过：15 轴反馈有效，无报警、跟随误差或急停输入")
-            enable_faults = drive_enable_faults(
-                self.motor_states, bool(self.get_parameter("drives_enabled").value))
-            if enable_faults:
-                for fault in enable_faults:
-                    self.get_logger().error(fault)
-                return 1
+            require_enabled = bool(self.get_parameter("drives_enabled").value)
+            if require_enabled:
+                self.get_logger().info("等待 15 轴状态字进入使能，未使能的轴会每 2 秒列出来")
+                next_report = 0.0
+                def drives_ready() -> bool:
+                    nonlocal next_report
+                    faults = drive_enable_faults(self.motor_states, True)
+                    now = time.monotonic()
+                    if faults and now >= next_report:
+                        self.get_logger().info(
+                            "尚未使能 " + str(len(faults)) + " 轴: " + "；".join(faults))
+                        next_report = now + 2.0
+                    return not faults
+                if not self.wait_until(timeout, drives_ready):
+                    for fault in drive_enable_faults(self.motor_states, True):
+                        self.get_logger().error(fault)
+                    return 1
             if bool(self.get_parameter("drives_enabled").value) and not (
                 bool(self.get_parameter("motion_enabled").value)
                 and not bool(self.get_parameter("use_fake_hardware").value)
@@ -274,7 +302,11 @@ def main() -> int:
             use_fake_hardware = bool(self.get_parameter("use_fake_hardware").value)
             motion_enabled = bool(self.get_parameter("motion_enabled").value)
             if motion_enabled and not use_fake_hardware:
-                if not self._return_to_mechanical_zero():
+                # MoveIt 先对齐 URDF 零位（关节角全 0）。其它实机启动仍回机械零位。
+                if bool(self.get_parameter("arm_for_moveit").value):
+                    if not self._return_to_urdf_zero():
+                        return 1
+                elif not self._return_to_mechanical_zero():
                     return 1
             move_to_initial = bool(self.get_parameter("move_to_initial").value)
             if not move_to_initial:
@@ -287,9 +319,9 @@ def main() -> int:
                         return 1
                     if not self._start_motion():
                         return 1
-                    self.get_logger().info("回零及运动准备完成，RViz 可规划执行；未发送初始姿态轨迹")
+                    self.get_logger().info("已对齐 URDF 零位，运动已允许。可以打开 RViz 规划执行")
                 else:
-                    self.get_logger().info("控制节点保持运行，保留 PVT 平移；动态 PT 未武装")
+                    self.get_logger().info("控制节点保持运行。未允许运动，MoveIt 轨迹不会写到驱动器")
                 return 0
             controllers_ready = self.wait_until(timeout, self.controllers_active)
             if not controllers_ready:
@@ -353,23 +385,36 @@ def main() -> int:
             self.get_logger().info("轨迹控制器已激活，已允许运动")
             return True
 
-        def _return_to_mechanical_zero(self) -> bool:
-            """Move to the factory-pulse pose with one PVT segment. Do not arm cyclic PT."""
+        def _return_to_urdf_zero(self) -> bool:
+            """15 个关节角回到 0。这是 RViz 里的 URDF 零位，不是出厂机械零位。"""
+            return self._return_to_mechanical_zero(
+                "startup_pose_file", "startup_pose", "URDF 零位")
+
+        def _return_to_mechanical_zero(
+            self,
+            positions_parameter: str = "initial_positions_file",
+            document_key: str = "initial_positions",
+            label: str = "机械零位",
+        ) -> bool:
+            """Move to one recorded pose with a single PVT segment."""
             import time
             from std_msgs.msg import Float64MultiArray, String
 
-            pose_file = str(self.get_parameter("initial_positions_file").value)
+            pose_file = str(self.get_parameter(positions_parameter).value)
             try:
-                target = load_named_positions(pose_file, "initial_positions")
+                target = load_named_positions(pose_file, document_key)
             except (OSError, ValueError, yaml.YAMLError) as error:
                 self.get_logger().error(str(error))
                 return False
             farthest = max(abs(self.joint_states.get(name, 0.0) - target[name]) for name in JOINTS)
             if farthest < 0.01:
-                self.get_logger().info("已在机械零位。末端计算从这组 URDF 关节角开始")
+                if label == "机械零位":
+                    self.get_logger().info("已在机械零位。末端计算从这组 URDF 关节角开始")
+                else:
+                    self.get_logger().info(f"已在{label}")
                 return True
             if farthest > 2.0:
-                self.get_logger().error(f"离机械零位 {farthest:.3f} rad，超过 2 rad，未自动返回")
+                self.get_logger().error(f"离{label} {farthest:.3f} rad，超过 2 rad，未自动返回")
                 return False
             duration = max(0.8, farthest / 0.4)
             self.pvt_result = None
@@ -383,7 +428,7 @@ def main() -> int:
             while time.monotonic() < deadline and publisher.get_subscription_count() == 0:
                 rclpy.spin_once(self, timeout_sec=0.1)
             if publisher.get_subscription_count() == 0:
-                self.get_logger().error("没有 /x1/pvt_move，不能回机械零位")
+                self.get_logger().error(f"没有 /x1/pvt_move，不能回{label}")
                 return False
             message = Float64MultiArray()
             message.data = [1.0, duration, 1.0, *[target[name] for name in JOINTS]]
@@ -405,10 +450,10 @@ def main() -> int:
                 if len(parts) > 1 and parts[1] == "ok":
                     break
                 detail = parts[2] if len(parts) > 2 else self.pvt_result
-                self.get_logger().error(f"回机械零位被拒绝: {detail}")
+                self.get_logger().error(f"回{label}被拒绝: {detail}")
                 return False
             else:
-                self.get_logger().error("回机械零位没有收到 PVT 结果")
+                self.get_logger().error(f"回{label}没有收到 PVT 结果")
                 return False
             # PVT ok only acknowledges acceptance. Require feedback after the
             # segment duration, then check actual joints before reporting arrival.
@@ -422,11 +467,16 @@ def main() -> int:
                     abs(self.joint_states.get(name, math.inf) - target[name]) <= tolerance
                     for name in JOINTS),
             ):
-                self.get_logger().error("回机械零位未到位，停止启动流程")
+                self.get_logger().error(f"回{label}未到位，停止启动流程")
                 return False
-            self.get_logger().info(
-                f"已回到机械零位，最大行程 {farthest:.3f} rad，约 {duration:.1f} s。"
-                "URDF 使用这组关节角，末端计算从这里开始")
+            if label == "机械零位":
+                self.get_logger().info(
+                    f"已回到机械零位，最大行程 {farthest:.3f} rad，约 {duration:.1f} s。"
+                    "URDF 使用这组关节角，末端计算从这里开始")
+            else:
+                self.get_logger().info(
+                    f"已回到{label}，最大行程 {farthest:.3f} rad，约 {duration:.1f} s。"
+                    "15 个关节角为 0")
             return True
 
         def _command_pose(self, target: Mapping[str, float], duration: float) -> bool:

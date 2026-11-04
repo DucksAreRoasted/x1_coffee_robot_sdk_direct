@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <utility>
@@ -15,7 +16,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "x1_coffee_hardware_core/coffee_axis_model.hpp"
 #include "x1_coffee_hardware_core/pending_gtn_transport.hpp"
-#include "x1_coffee_hardware_core/production_gtn_transport.hpp"
+#include "x1_coffee_hardware_core/soem_ethercat_transport.hpp"
 
 namespace x1_coffee_ros2_control
 {
@@ -23,6 +24,12 @@ namespace
 {
 using hardware_interface::CallbackReturn;
 constexpr auto kPosition = hardware_interface::HW_IF_POSITION;
+
+void debugf(const char * text)
+{
+  std::fprintf(stderr, "[x1-debug] %s\n", text);
+  std::fflush(stderr);
+}
 constexpr auto kVelocity = hardware_interface::HW_IF_VELOCITY;
 constexpr std::array<const char *, 14> kDiagnosticInterfaces = {
   "encoder_pulse_raw", "status_bits", "current_permille", "torque_permille",
@@ -83,7 +90,9 @@ bool parseBool(const std::string & text, bool * value)
 
 CallbackReturn X1CoffeeSystemHardware::on_init(const hardware_interface::HardwareInfo & info)
 {
+  debugf("on_init enter");
   if (SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
+    debugf("on_init base failed");
     return CallbackReturn::ERROR;
   }
 
@@ -138,18 +147,21 @@ CallbackReturn X1CoffeeSystemHardware::on_init(const hardware_interface::Hardwar
   if (!parseRuntimeParameters()) {
     return CallbackReturn::ERROR;
   }
+  debugf("on_init before createTransport");
   guard_ = std::make_unique<x1_coffee_hardware_core::CommandGuard>(limits_);
   if (!createTransport()) {
+    debugf("on_init createTransport failed");
     return CallbackReturn::ERROR;
   }
-  if (!startMotionService()) {
-    return CallbackReturn::ERROR;
-  }
+  debugf("on_init done");
   return CallbackReturn::SUCCESS;
 }
 
 X1CoffeeSystemHardware::~X1CoffeeSystemHardware()
 {
+  if (motion_service_thread_.joinable()) {
+    motion_service_thread_.join();
+  }
   if (motion_executor_) {
     motion_executor_->cancel();
   }
@@ -158,10 +170,30 @@ X1CoffeeSystemHardware::~X1CoffeeSystemHardware()
   }
 }
 
+void X1CoffeeSystemHardware::scheduleMotionService()
+{
+  if (motion_service_thread_.joinable() || motion_node_) {
+    return;
+  }
+  // controller_manager 的构造函数还没返回。这时再创建节点，FastDDS 会在
+  // 未完成的 participant 上加锁并段错误。等构造结束再提供 /x1/start_motion。
+  motion_service_thread_ = std::thread([this]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (!rclcpp::ok()) {
+      debugf("startMotionService skipped, rclcpp stopped");
+      return;
+    }
+    if (!startMotionService()) {
+      debugf("startMotionService failed");
+    }
+  });
+}
+
 bool X1CoffeeSystemHardware::startMotionService()
 {
   // Humble 的 SystemInterface 没有节点。服务必须留在本进程里，开机程序才能在
-  // 轨迹控制器 active 之后调用 startMotion，同时不让别的进程 dlopen 固高库。
+  // 轨迹控制器 active 之后调用 startMotion。
+  debugf("startMotionService before Node");
   if (!rclcpp::ok()) {
     RCLCPP_ERROR(
       rclcpp::get_logger("X1CoffeeSystemHardware"),
@@ -170,6 +202,7 @@ bool X1CoffeeSystemHardware::startMotionService()
   }
   motion_node_ = std::make_shared<rclcpp::Node>(
     "x1_coffee_system_hardware", rclcpp::NodeOptions().use_global_arguments(false));
+  debugf("startMotionService node created");
   start_motion_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/start_motion",
     [this](
@@ -199,7 +232,7 @@ bool X1CoffeeSystemHardware::startMotionService()
       }
       const auto result = transport_->requestZeroTorque();
       response->success = static_cast<bool>(result);
-      response->message = result ? std::string("已进入零力矩，抱闸松开") : result.detail;
+      response->message = result.detail.empty() ? std::string("零力矩请求已处理") : result.detail;
     });
   brake_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/brake_hold",
@@ -214,7 +247,7 @@ bool X1CoffeeSystemHardware::startMotionService()
       }
       const auto result = transport_->requestEngageBrakes();
       response->success = static_cast<bool>(result);
-      response->message = result ? std::string("已关断，抱闸锁住") : result.detail;
+      response->message = result.detail.empty() ? std::string("已请求关断") : result.detail;
     });
   pvt_result_pub_ = motion_node_->create_publisher<std_msgs::msg::String>("/x1/pvt_result", 10);
   pvt_move_sub_ = motion_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
@@ -265,6 +298,7 @@ bool X1CoffeeSystemHardware::startMotionService()
   RCLCPP_INFO(
     rclcpp::get_logger("X1CoffeeSystemHardware"),
     "运动启动服务已就绪: /x1/start_motion /x1/arm_tracked_motion /x1/zero_torque /x1/brake_hold /x1/pvt_move");
+  debugf("startMotionService ready");
   return true;
 }
 
@@ -323,10 +357,12 @@ bool X1CoffeeSystemHardware::parseRuntimeParameters()
 bool X1CoffeeSystemHardware::createTransport()
 {
   const auto iterator = info_.hardware_parameters.find("transport");
+  debugf("createTransport");
   const std::string backend = iterator == info_.hardware_parameters.end() ?
-    "gtn_ethercat" : iterator->second;
-  if (backend == "gtn_ethercat") {
-    transport_ = std::make_unique<x1_coffee_hardware_core::ProductionGtnTransport>();
+    "ethercat" : iterator->second;
+  // 旧参数名仍指这条网口主站，避免启动时再去打开固高库。
+  if (backend == "ethercat" || backend == "gtn_ethercat") {
+    transport_ = std::make_unique<x1_coffee_hardware_core::SoemEthercatTransport>();
     return true;
   }
   if (backend == "pending") {
@@ -335,7 +371,7 @@ bool X1CoffeeSystemHardware::createTransport()
   }
   RCLCPP_ERROR(
     rclcpp::get_logger("X1CoffeeSystemHardware"),
-    "Unsupported transport backend '%s'; expected gtn_ethercat or pending", backend.c_str());
+    "Unsupported transport backend '%s'; expected ethercat or pending", backend.c_str());
   return false;
 }
 
@@ -374,6 +410,7 @@ bool X1CoffeeSystemHardware::parseLimits()
 
 CallbackReturn X1CoffeeSystemHardware::on_configure(const rclcpp_lifecycle::State &)
 {
+  debugf("on_configure enter");
   const auto result = transport_->configure(info_.hardware_parameters);
   if (!result) {
     logTransportError("configure", result);
@@ -384,6 +421,7 @@ CallbackReturn X1CoffeeSystemHardware::on_configure(const rclcpp_lifecycle::Stat
 
 CallbackReturn X1CoffeeSystemHardware::on_activate(const rclcpp_lifecycle::State &)
 {
+  debugf("on_activate enter");
   auto result = transport_->activate();
   if (!result) {
     logTransportError("activate", result);
@@ -425,11 +463,14 @@ CallbackReturn X1CoffeeSystemHardware::on_activate(const rclcpp_lifecycle::State
   active_ = true;
   motion_started_ = false;
   activation_completed_at_ = std::chrono::steady_clock::now();
+  scheduleMotionService();
+  debugf("on_activate done");
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn X1CoffeeSystemHardware::on_deactivate(const rclcpp_lifecycle::State &)
 {
+  debugf("on_deactivate enter");
   active_ = false;
   motion_started_ = false;
   has_read_sample_ = false;
@@ -472,7 +513,7 @@ CallbackReturn X1CoffeeSystemHardware::on_error(const rclcpp_lifecycle::State &)
   last_write_warning_at_ = std::chrono::steady_clock::time_point{};
   activation_completed_at_ = std::chrono::steady_clock::time_point{};
   if (transport_) {
-    // deactivate 或激活失败回滚已经 Close 时，再 GTN_Stop 会返回 -8。
+    // 总线已经关掉时不再补一次停止。
     if (!transport_->controllerClosed()) {
       const auto stop = transport_->stop(true);
       if (!stop) {
@@ -611,7 +652,7 @@ hardware_interface::return_type X1CoffeeSystemHardware::write(
   if (!active_) {
     return hardware_interface::return_type::ERROR;
   }
-  // 只上电时控制器仍会周期 write。这里直接返回，避免轨迹检查去调用 GTN_Stop。
+  // 只上电时控制器仍会周期 write。这里直接返回，不把保持当成轨迹。
   if (!motion_enabled_) {
     return hardware_interface::return_type::OK;
   }

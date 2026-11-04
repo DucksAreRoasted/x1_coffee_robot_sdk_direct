@@ -133,7 +133,7 @@ def main() -> int:
     )
     gtn_transport = (
         ROOT / "src" / "x1_coffee_hardware_core" / "src" /
-        "production_gtn_transport.cpp"
+        "soem_ethercat_transport.cpp"
     )
     require_tokens(
         profile_model,
@@ -151,9 +151,9 @@ def main() -> int:
     )
     require_tokens(
         gtn_transport,
-        ["verifyConfiguredAxisBus", "layout_->physical_axis_count", "all_axes_mask_"],
+        ["layout_->physical_axis_count", "ethercat_ifname"],
         failures,
-        "GTN profile 传输 ",
+        "EtherCAT 传输 ",
     )
 
     # The existing multi-turn implementation is an explicit user requirement.
@@ -162,7 +162,7 @@ def main() -> int:
         gtn_transport,
         ["normalizePulseDelta", "nearestEquivalentPulse"],
         failures,
-        "GTN 多圈实现 ",
+        "EtherCAT 多圈实现 ",
     )
     if control_xacro.is_file():
         text = control_xacro.read_text(encoding="utf-8")

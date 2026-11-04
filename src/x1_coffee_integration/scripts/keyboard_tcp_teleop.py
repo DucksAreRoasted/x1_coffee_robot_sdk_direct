@@ -2,8 +2,9 @@
 """Keyboard jogging of the left or right gripper TCP.
 
 Each key adds 5 mm or 0.03 rad in the fixed root frame, starting from the
-current measured gripper pose, then sends one Googol PVT segment. The script
-never enables drives, never releases brakes, and never commands zero torque.
+current measured gripper pose, then sends one profile-position target on
+/x1/pvt_move. The direct EtherCAT master writes 0x607A. This script does not
+enable drives and does not release brakes.
 """
 
 import math
@@ -734,15 +735,15 @@ HELP = """
   q/e     全局 Z 正 / 负
   i/k j/l u/o   绕全局 X / Y / Z
   [ / ]   腰关节小步转动
-  点动    一次下发固高 PVT（PrfPvt / PvtTable / PvtStart），不走周期位置流
+  点动    一次把 15 轴目标写成轮廓位置。驱动器用已配置的轮廓速度走向新的 0x607A
   h h     连按两次：回到机械零位（出厂脉冲对应的 URDF 角度，不是全零）
   0 0     连按两次：回到 URDF 零位（15 个关节角全部为 0）
-  z z     连按两次：请求零力矩。当前驱动器过程数据不支持，只会提示，不会松抱闸
+  z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
   b       关断并重新抱闸
   空格    停在当前目标，不再追加
   Esc     退出
-当前这次如果是用默认参数启动的，手臂不会动。需要先停掉控制栈，再执行：
-  ros2 launch x1_coffee_integration robot_startup.launch.py motion_enabled:=true
+手臂要先上电。控制栈这样启动后，再开这个程序：
+  ros2 launch x1_coffee_integration robot_startup.launch.py motion_enabled:=false drives_enabled:=true ethercat_ifname:=eno1
 """
 
 
@@ -774,13 +775,41 @@ def run_teleop() -> int:
             self.last_segment_sec = SEGMENT_SEC
             self.pvt_seq = 0
             self.pvt_result = None
-            self.create_subscription(JointState, "/joint_states", self._on_joints, 10)
+            self.joint_sub = None
+            self.joint_qos_logged = False
             self.create_subscription(String, "/x1/pvt_result", self._on_pvt_result, 10)
             self.pvt_pub = self.create_publisher(Float64MultiArray, "/x1/pvt_move", 10)
             self.start_motion = self.create_client(Trigger, "/x1/start_motion")
             self.zero_torque_client = self.create_client(Trigger, "/x1/zero_torque")
             self.brake_client = self.create_client(Trigger, "/x1/brake_hold")
             self.trajectory_clients = {}
+
+        def attach_joint_states(self) -> None:
+            if self.joint_sub is not None:
+                return
+            infos = self.get_publishers_info_by_topic("/joint_states")
+            if not infos:
+                return
+            qos = infos[0].qos_profile
+            if not self.joint_qos_logged:
+                names = ",".join(item.node_name for item in infos)
+                print(
+                    f"[x1-debug] /joint_states publisher={names} "
+                    f"reliability={qos.reliability} durability={qos.durability} depth={qos.depth}",
+                    flush=True,
+                )
+                self.joint_qos_logged = True
+            from rclpy.qos import HistoryPolicy, QoSProfile
+            # 发现到的发布者 QoS 里 history 是 UNKNOWN、depth 为 0，原样拷贝会创建订阅失败。
+            # 只沿用可靠性与持久性，历史策略固定 KEEP_LAST。
+            profile = QoSProfile(
+                reliability=qos.reliability,
+                durability=qos.durability,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            )
+            self.joint_sub = self.create_subscription(
+                JointState, "/joint_states", self._on_joints, profile)
 
         def _on_joints(self, message: JointState) -> None:
             for name, position in zip(message.name, message.position):
@@ -827,7 +856,7 @@ def run_teleop() -> int:
                 rclpy.spin_once(self, timeout_sec=0.1)
                 if self.pvt_pub.get_subscription_count() > 0:
                     return True
-            self.get_logger().error("没有 /x1/pvt_move。请停掉控制栈，编译后再启动。")
+            self.get_logger().error("没有 /x1/pvt_move。请先启动 robot_startup.launch.py。")
             return False
 
         def send(
@@ -857,6 +886,11 @@ def run_teleop() -> int:
             message = Float64MultiArray()
             # 当前控制进程只收一段：序号、秒、15 个关节。路点用来确认轨迹仍在同一条轴上。
             message.data = [sequence, duration, 1.0, *rows[-1]]
+            print(
+                f"[x1-debug] key-send seq={sequence:.0f} sec={duration:.2f} "
+                f"joints={list(zip(COFFEE_JOINTS, rows[-1]))}",
+                flush=True,
+            )
             self.pvt_pub.publish(message)
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
@@ -875,9 +909,9 @@ def run_teleop() -> int:
                     self._watch = (names, before, {name: final_goal[name] for name in names})
                     return True
                 detail = parts[2] if len(parts) > 2 else self.pvt_result
-                print(f"\nPVT 失败: {detail}")
+                print(f"\n位置目标失败: {detail}")
                 return False
-            print("\nPVT 没有回应。控制进程还是旧库时不会执行这段运动。")
+            print("\n位置目标没有回应。控制栈可能还没起来。")
             return False
 
         def note_if_ignored(self) -> None:
@@ -888,18 +922,39 @@ def run_teleop() -> int:
             asked = max(abs(target[name] - before[name]) for name in names)
             if asked > 0.01 and moved < asked * 0.25:
                 self.warned = True
-                print("\n关节几乎没动。请停掉当前控制栈后用 motion_enabled:=true 重新启动。")
+                print("\n关节几乎没动。请确认启动时 drives_enabled:=true，并且网口主站已经进 OP。")
 
     rclpy.init()
     node = Teleop()
     status = 0
     terminal = termios.tcgetattr(sys.stdin)
     try:
+        needed = LEFT_JOINTS + RIGHT_JOINTS + ["Joint_Body"]
+        print(
+            f"[x1-debug] keyboard ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '')} "
+            f"ROS_LOCALHOST_ONLY={os.environ.get('ROS_LOCALHOST_ONLY', '')}",
+            flush=True,
+        )
         deadline = node.get_clock().now() + rclpy.duration.Duration(seconds=10.0)
+        next_report = time.monotonic()
         while rclpy.ok() and node.get_clock().now() < deadline and not node.ready():
+            node.attach_joint_states()
             rclpy.spin_once(node, timeout_sec=0.1)
+            if time.monotonic() >= next_report:
+                missing = [name for name in needed if name not in node.measured]
+                print(
+                    f"[x1-debug] /joint_states publishers={node.count_publishers('/joint_states')} "
+                    f"received={len(node.measured)} missing={missing} "
+                    f"/x1/pvt_move subscribers={node.pvt_pub.get_subscription_count()}",
+                    flush=True,
+                )
+                next_report = time.monotonic() + 1.0
         if not node.ready():
-            node.get_logger().error("没有收齐 /joint_states")
+            missing = [name for name in needed if name not in node.measured]
+            node.get_logger().error(
+                "没有收齐 /joint_states"
+                f" publishers={node.count_publishers('/joint_states')} missing={missing}"
+            )
             return 1
         if not node.wait_controllers():
             return 1
@@ -942,6 +997,7 @@ def run_teleop() -> int:
             if not select.select([sys.stdin], [], [], 0.0)[0]:
                 continue
             key = sys.stdin.read(1)
+            print(f"[x1-debug] key={key!r}", flush=True)
             if key != "h":
                 node.home_confirm_until = 0.0
             if key != "0":
@@ -985,7 +1041,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.zero_confirm_until:
                     node.zero_confirm_until = now + 3.0
-                    print("\n再按一次 z：请求零力矩。当前过程数据不支持，不会松开抱闸。")
+                    print("\n再按一次 z：请求零力矩。当前若已是轮廓位置，这一步不会改成 0 力矩。")
                     continue
                 node.zero_confirm_until = 0.0
                 if node.call_trigger(node.zero_torque_client, "/x1/zero_torque"):

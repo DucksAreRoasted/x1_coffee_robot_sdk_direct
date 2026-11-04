@@ -11,6 +11,7 @@
             gtn_library_path:=/opt/x1/gtn/lib/libgxn_x64.so
             gtn_config_path:=/etc/x1/gtn/gtn_core1.cfg
             ecat_config_path:=/etc/x1/gtn/Gecat.eni
+            ethercat_ifname:=eno1
             motion_enabled:=false
             drives_enabled:=false
             hardware_profile:=coffee_15_no_slide
@@ -32,10 +33,12 @@
         </xacro:if>
         <xacro:unless value="${use_fake_hardware}">
           <plugin>x1_coffee_ros2_control/X1CoffeeSystemHardware</plugin>
-          <param name="transport">gtn_ethercat</param>
+          <param name="transport">ethercat</param>
+          <param name="ethercat_ifname">${ethercat_ifname}</param>
           <param name="hardware_profile">${hardware_profile}</param>
           <param name="axis_count">${physical_axis_count}</param>
           <param name="core">1</param>
+          <!-- 保留旧启动参数，传输层不再打开这些文件。 -->
           <param name="gtn_library_path">${gtn_library_path}</param>
           <param name="gtn_config_path">${gtn_config_path}</param>
           <param name="ecat_config_path">${ecat_config_path}</param>
@@ -49,7 +52,7 @@
           <param name="ecat_op_wait_ms">10000</param>
           <!-- false 为真实总线只读；台架验收动态 PT FIFO 后才允许改为 true。 -->
           <param name="motion_enabled">${motion_enabled}</param>
-          <!-- 只做 GTN_AxisOn。motion_enabled 仍是运动开关，默认两者都关闭。 -->
+          <!-- 上电使能只锁存当前位置。motion_enabled 仍是运动开关，默认两者都关闭。 -->
           <param name="drives_enabled">${drives_enabled}</param>
           <param name="pt_cycle_ms">10</param>
           <!--
@@ -64,7 +67,7 @@
           <!-- Keep non-safety-critical current/torque reads at about 5 Hz;
                status and encoder reads remain on every control cycle. -->
           <param name="diagnostic_poll_div">20</param>
-          <!-- OP 后反复调用 GTN_GetEcatAxisACT 会让 libgxn 段错误，实机先关闭电流/力矩读取。 -->
+          <!-- 轮廓位置过程数据里没有电流对象，默认不读电流。 -->
           <param name="read_current_torque">false</param>
           <!-- Disabled in the real-time path; enable temporarily for profiling. -->
           <param name="timing_log_div">0</param>

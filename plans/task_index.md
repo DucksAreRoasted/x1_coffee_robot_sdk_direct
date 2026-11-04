@@ -30,7 +30,7 @@
 | 编号 | 名称 | 依赖 | 优先级 | 状态 | 验收条件 |
 |---|---|---|---|---|---|
 | T019 | CoE 与状态字纯函数 | 无 | P0 | DONE | gtest 覆盖手册命令字、DINT 和 bit5/bit6。无 I/O。提交 `afc0f56` |
-| T020 | 内存版 EtherCAT 传输 | 无 | P0 | READY | gtest 回放 15 台 PREOP 身份，写操作失败，不打开网口 |
+| T020 | 内存版 EtherCAT 传输 | 无 | P0 | IN_PROGRESS | gtest 回放 15 台 PREOP 身份，写操作失败，不打开网口 |
 | T021 | 网口 PREOP 复查 | T020 | P1 | BLOCKED | 书面授权且固高卡不是主站。日志只有 PREOP 与收回 INIT |
 | T022 | 只读从站表 | T020 | P2 | TODO | fake 下显示内存快照，没有操作按钮 |
 | T023 | OP 与 DC 周期调查 | 无 | P1 | BLOCKED | 新页或授权抓包给出 AL Control。现有手册不够 |

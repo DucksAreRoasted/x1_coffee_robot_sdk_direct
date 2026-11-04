@@ -46,12 +46,15 @@ def generate_launch_description():
             description="启动时上电使能并保持，不发轨迹"),
         DeclareLaunchArgument("move_to_initial", default_value="false"),
         DeclareLaunchArgument("arm_for_moveit", default_value="false",
-            description="显式武装 RViz/MoveIt 的动态 PT；开启后不能同时使用 PVT 平移"),
+            description="允许 MoveIt 轨迹写入周期同步位置；开启后不要再发键盘点动"),
         DeclareLaunchArgument("allow_large_motion", default_value="false"),
         DeclareLaunchArgument("pose_duration_sec", default_value="10.0"),
         DeclareLaunchArgument("pose_tolerance_rad", default_value="0.02"),
         DeclareLaunchArgument("max_joint_delta_rad", default_value="0.5"),
         DeclareLaunchArgument("check_timeout_sec", default_value="60.0"),
+        DeclareLaunchArgument(
+            "ethercat_ifname", default_value="eno1",
+            description="本机 EtherCAT 网口名"),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(sdk_control),
             launch_arguments={
@@ -59,6 +62,7 @@ def generate_launch_description():
                 "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
                 "motion_enabled": LaunchConfiguration("motion_enabled"),
                 "drives_enabled": LaunchConfiguration("drives_enabled"),
+                "ethercat_ifname": LaunchConfiguration("ethercat_ifname"),
                 "fake_sensor_commands": "false",
             }.items(),
         ),

@@ -43,7 +43,7 @@ public:
     return requestMovePvt(
       std::vector<std::array<double, kCoffeeAxisCount>>{positions}, duration_sec);
   }
-  // Close 完成后为 true。on_error 用它跳过已经关掉的总线上的 GTN_Stop。
+  // Close 完成后为 true。出错路径用它跳过已经关掉的总线。
   virtual bool controllerClosed() const {return false;}
   // read 里刚做过会堵住控制周期的卡请求。硬件层用来刷新写看门狗，调用后清掉。
   virtual bool consumeBlockingCardWork() {return false;}

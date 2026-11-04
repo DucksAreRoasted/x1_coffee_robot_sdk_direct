@@ -10,3 +10,23 @@ environment/**/log.before-*/
 
 __pycache__/
 *.pyc
+
+# 实机运行日志与已解压的重复手册归档，不作为源码提交。
+/Gecat.log
+/CommandErrorInfo.log
+/manual.zip
+/manual/eRob最新手册/
+/manual/固高最新手册/
+*.log
+
+# 周报、幻灯片和生成图只留在本机，不进源码存档。
+/reports/
+
+# 指向本机 ROS 库的兼容符号链接，不能随仓库复制。
+/environment/moveit_compat/
+
+# 编辑器和系统杂项。
+*~
+.DS_Store
+.idea/
+.vscode/
