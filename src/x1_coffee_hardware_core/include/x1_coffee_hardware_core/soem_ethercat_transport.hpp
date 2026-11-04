@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "x1_coffee_hardware_core/gtn_transport.hpp"
 
@@ -66,6 +67,10 @@ public:
   Result requestMovePvt(
     const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
     double duration_sec) override;
+  // 每个路点带自己的段时间。15 轴用同一时刻插补，中间点不停。
+  Result requestMovePvtSegments(
+    const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
+    const std::vector<double> & segment_sec);
   bool controllerClosed() const override;
 
 private:
@@ -105,6 +110,19 @@ private:
   std::array<double, kCoffeeAxisCount> max_velocity_rad_s_{};
   std::array<int, kCoffeeAxisCount> velocity_step_{};
   std::array<int, kCoffeeAxisCount> active_step_{};
+  // 协同插补表。time_sec 从当前锁存位置起算，15 轴共用。
+  struct CoordinatedKnot
+  {
+    double time_sec{0.0};
+    std::array<double, kCoffeeAxisCount> pulse{};
+  };
+  std::vector<CoordinatedKnot> path_{};
+  int path_cycle_{0};
+  bool path_active_{false};
+  Result installPath(
+    const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
+    const std::vector<double> & segment_sec);
+  void samplePath();
   // 每台按自己的状态字走接通。停在「准备接通」超过 1 秒就退回关电压，满 300 ms 再试。
   std::array<int, kCoffeeAxisCount> enable_ready_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_backoff_cycles_{};

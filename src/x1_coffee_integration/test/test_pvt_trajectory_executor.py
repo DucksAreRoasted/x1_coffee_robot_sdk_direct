@@ -39,6 +39,14 @@ class PvtTrajectoryPacking(unittest.TestCase):
 
         self.assertAlmostEqual(executor.stamp_seconds(Stamp()), 1.5)
 
+    def test_path_message_carries_each_segment_time(self):
+        rows = [[float(index) for index in range(15)], [float(index + 1) for index in range(15)]]
+        message = executor.pvt_path_message(4, [0.4, 0.6], rows)
+        self.assertEqual(list(message.data[:3]), [4.0, 1.0, 2.0])
+        self.assertEqual(message.data[3], 0.4)
+        self.assertEqual(list(message.data[4:19]), rows[0])
+        self.assertEqual(message.data[19], 0.6)
+
     def test_unknown_joint_is_rejected(self):
         measured = {name: 0.0 for name in executor.COFFEE_JOINTS}
         with self.assertRaises(ValueError):

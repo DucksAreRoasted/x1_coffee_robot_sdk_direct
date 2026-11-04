@@ -1015,6 +1015,9 @@ Result SoemEthercatTransport::activate()
   debugf("activate begin");
   shutdown_outputs_ = false;
   motion_armed_ = false;
+  path_active_ = false;
+  path_.clear();
+  path_cycle_ = 0;
   enable_ready_cycles_.fill(0);
   enable_backoff_cycles_.fill(0);
   enable_retries_.fill(0);
@@ -1134,6 +1137,8 @@ Result SoemEthercatTransport::stop(bool)
 {
   std::lock_guard<std::mutex> lock(sample_mu_);
   motion_armed_ = false;
+  path_active_ = false;
+  path_.clear();
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     goal_pulse_[index] = held_pulse_[index];
   }
@@ -1202,55 +1207,111 @@ Result SoemEthercatTransport::requestMovePvt(
   const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
   double duration_sec)
 {
-  if (!active_) {
-    return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
-  }
-  if (!drives_enabled_) {
-    return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能下发位置目标");
-  }
   if (waypoints.empty()) {
     return Result::fail(CoreError::kInvalidConfiguration, "没有位置目标");
   }
   if (!(duration_sec > 0.0) || !std::isfinite(duration_sec)) {
     return Result::fail(CoreError::kInvalidConfiguration, "位置段时间必须为正数");
   }
-  const auto & target = waypoints.back();
-  std::array<std::int32_t, kCoffeeAxisCount> next{};
-  {
-    std::lock_guard<std::mutex> lock(sample_mu_);
-    next = held_pulse_;
+  const double slice = duration_sec / static_cast<double>(waypoints.size());
+  return requestMovePvtSegments(
+    waypoints, std::vector<double>(waypoints.size(), slice));
+}
+
+Result SoemEthercatTransport::requestMovePvtSegments(
+  const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
+  const std::vector<double> & segment_sec)
+{
+  return installPath(waypoints, segment_sec);
+}
+
+Result SoemEthercatTransport::installPath(
+  const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
+  const std::vector<double> & segment_sec)
+{
+  if (!active_) {
+    return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
+  }
+  if (!drives_enabled_) {
+    return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能下发位置目标");
+  }
+  if (waypoints.empty() || waypoints.size() != segment_sec.size()) {
+    return Result::fail(CoreError::kInvalidConfiguration, "路点和段时间数量不一致");
+  }
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    if (torque_axis_[index]) {
+      return Result::fail(CoreError::kWriteFailed, "零力矩轴不能接收位置目标");
+    }
+    if (!held_[index]) {
+      return Result::fail(CoreError::kReadFailed, "位置尚未锁存");
+    }
+  }
+  std::vector<CoordinatedKnot> path;
+  path.reserve(waypoints.size() + 1);
+  CoordinatedKnot start;
+  start.time_sec = 0.0;
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    start.pulse[index] = static_cast<double>(held_pulse_[index]);
+  }
+  path.push_back(start);
+  double time_sec = 0.0;
+  for (std::size_t point = 0; point < waypoints.size(); ++point) {
+    if (!(segment_sec[point] > 0.0) || !std::isfinite(segment_sec[point])) {
+      return Result::fail(CoreError::kInvalidConfiguration, "每一段时间必须为正数");
+    }
+    time_sec += segment_sec[point];
+    CoordinatedKnot knot;
+    knot.time_sec = time_sec;
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-      if (torque_axis_[index]) {
-        return Result::fail(CoreError::kWriteFailed, "零力矩轴不能接收位置目标");
-      }
-      if (!held_[index]) {
-        return Result::fail(CoreError::kReadFailed, "位置尚未锁存");
-      }
       double pulse = 0.0;
-      const Result converted = positionToPulse(index, target[index], held_pulse_[index], &pulse);
+      const Result converted = positionToPulse(
+        index, waypoints[point][index], held_pulse_[index], &pulse);
       if (!converted) {
         return converted;
       }
-      next[index] = static_cast<std::int32_t>(std::llround(pulse));
+      knot.pulse[index] = pulse;
     }
-    const double cycles = duration_sec / kEthercatCycleSec;
-    for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-      const std::int64_t delta = static_cast<std::int64_t>(next[index]) -
-        static_cast<std::int64_t>(held_pulse_[index]);
-      const double magnitude = static_cast<double>(delta > 0 ? delta : -delta);
-      int step = cycles > 0.0 ? static_cast<int>(std::ceil(magnitude / cycles)) : 1;
-      if (step < 1) {
-        step = 1;
-      }
-      const int cap = velocity_step_[index] > 0 ? velocity_step_[index] : 1;
-      if (step > cap) {
-        step = cap;
-      }
-      goal_pulse_[index] = next[index];
-      active_step_[index] = step;
-    }
+    path.push_back(knot);
   }
-  return Result{CoreError::kOk, "已写入周期同步位置目标"};
+  path_ = std::move(path);
+  path_cycle_ = 0;
+  path_active_ = true;
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    active_step_[index] = velocity_step_[index] > 0 ? velocity_step_[index] : 1;
+    goal_pulse_[index] = held_pulse_[index];
+  }
+  return Result{CoreError::kOk, "已装入多轴协同插补"};
+}
+
+void SoemEthercatTransport::samplePath()
+{
+  if (!path_active_ || path_.size() < 2) {
+    return;
+  }
+  ++path_cycle_;
+  const double time_sec = static_cast<double>(path_cycle_) * kEthercatCycleSec;
+  const CoordinatedKnot & last = path_.back();
+  if (time_sec >= last.time_sec) {
+    for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+      goal_pulse_[index] = static_cast<std::int32_t>(std::llround(last.pulse[index]));
+    }
+    path_active_ = false;
+    return;
+  }
+  std::size_t upper = 1;
+  while (upper + 1 < path_.size() && path_[upper].time_sec < time_sec) {
+    ++upper;
+  }
+  const CoordinatedKnot & begin = path_[upper - 1];
+  const CoordinatedKnot & end = path_[upper];
+  const double span = end.time_sec - begin.time_sec;
+  const double ratio = span > 0.0 ? (time_sec - begin.time_sec) / span : 1.0;
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    const double pulse = begin.pulse[index] +
+      (end.pulse[index] - begin.pulse[index]) * ratio;
+    goal_pulse_[index] = static_cast<std::int32_t>(std::llround(pulse));
+  }
 }
 
 bool SoemEthercatTransport::controllerClosed() const
@@ -1266,6 +1327,8 @@ void SoemEthercatTransport::onCycle(
     return;
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
+  // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
+  samplePath();
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     const SlaveFeedback & item = feedback[index];
     const bool operation_enabled = item.valid && (item.status_word & 0x006F) == 0x0027;

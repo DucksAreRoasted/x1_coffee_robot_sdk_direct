@@ -67,5 +67,12 @@ def generate_launch_description():
             }.items(),
         ),
         startup,
+        # MoveIt 在上位机。执行动作留在下位机，上位机通过同一个 ROS 域把轨迹发过来。
+        Node(
+            package="x1_coffee_integration",
+            executable="pvt_trajectory_executor.py",
+            name="pvt_trajectory_executor",
+            output="screen",
+        ),
         RegisterEventHandler(OnProcessExit(target_action=startup, on_exit=_shutdown_on_failure)),
     ])

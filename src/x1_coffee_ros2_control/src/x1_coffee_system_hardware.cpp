@@ -262,6 +262,7 @@ bool X1CoffeeSystemHardware::startMotionService()
           }
         };
       constexpr std::size_t kAxisCount = x1_coffee_hardware_core::kCoffeeAxisCount;
+      constexpr std::size_t kMaxWaypoints = 500;
       if (!message || message->data.size() < 3 + kAxisCount) {
         fail("0 fail PVT 数据至少要有序号、秒、路点数和 15 个关节位置");
         return;
@@ -271,25 +272,47 @@ bool X1CoffeeSystemHardware::startMotionService()
       const double count_value = message->data[2];
       const auto waypoint_count = static_cast<std::size_t>(std::llround(count_value));
       const std::string prefix = std::to_string(sequence) + " ";
-      if (waypoint_count < 1 || waypoint_count > 8 ||
+      const bool timed = message->data.size() == 3 + waypoint_count * (1 + kAxisCount);
+      const bool plain = message->data.size() == 3 + waypoint_count * kAxisCount;
+      if (waypoint_count < 1 || waypoint_count > kMaxWaypoints ||
         std::abs(count_value - static_cast<double>(waypoint_count)) > 1.0e-6 ||
-        message->data.size() != 3 + waypoint_count * kAxisCount)
+        (!timed && !plain))
       {
-        fail(prefix + "fail PVT 路点数量必须在 1 到 8，且每个路点 15 个关节");
+        fail(prefix + "fail PVT 路点数量必须在 1 到 500，且带上每段时间或共用总时间");
         return;
       }
       std::vector<std::array<double, kAxisCount>> waypoints(waypoint_count);
-      for (std::size_t waypoint_index = 0; waypoint_index < waypoint_count; ++waypoint_index) {
-        for (std::size_t joint_index = 0; joint_index < kAxisCount; ++joint_index) {
-          waypoints[waypoint_index][joint_index] =
-            message->data[3 + waypoint_index * kAxisCount + joint_index];
+      std::vector<double> segment_sec(waypoint_count, 0.0);
+      if (timed) {
+        for (std::size_t waypoint_index = 0; waypoint_index < waypoint_count; ++waypoint_index) {
+          const std::size_t base = 3 + waypoint_index * (1 + kAxisCount);
+          segment_sec[waypoint_index] = message->data[base];
+          for (std::size_t joint_index = 0; joint_index < kAxisCount; ++joint_index) {
+            waypoints[waypoint_index][joint_index] = message->data[base + 1 + joint_index];
+          }
+        }
+      } else if (!(duration_sec > 0.0)) {
+        fail(prefix + "fail 位置段时间必须为正数");
+        return;
+      } else {
+        const double slice = duration_sec / static_cast<double>(waypoint_count);
+        for (std::size_t waypoint_index = 0; waypoint_index < waypoint_count; ++waypoint_index) {
+          segment_sec[waypoint_index] = slice;
+          for (std::size_t joint_index = 0; joint_index < kAxisCount; ++joint_index) {
+            waypoints[waypoint_index][joint_index] =
+              message->data[3 + waypoint_index * kAxisCount + joint_index];
+          }
         }
       }
       if (!transport_) {
         fail(prefix + "fail 传输层尚未创建");
         return;
       }
-      const auto result = transport_->requestMovePvt(waypoints, duration_sec);
+      auto * coordinated = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      const auto result = coordinated != nullptr ?
+        coordinated->requestMovePvtSegments(waypoints, segment_sec) :
+        transport_->requestMovePvt(waypoints, duration_sec);
       fail(prefix + (result ? "ok" : "fail " + result.detail));
     });
   motion_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();

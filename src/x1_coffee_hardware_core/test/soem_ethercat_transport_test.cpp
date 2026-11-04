@@ -220,6 +220,34 @@ TEST(SoemEthercatTransport, csp_target_slews_without_a_single_cycle_jump)
   EXPECT_EQ(raw->last[0].control_word, 0x000F);
 }
 
+TEST(SoemEthercatTransport, coordinated_path_passes_the_middle_knot_before_the_end)
+{
+  auto link = std::make_unique<FakeLink>();
+  link->status = 0x1237;
+  FakeLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  std::vector<std::array<double, kCoffeeAxisCount>> waypoints(2);
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    const double held = static_cast<double>(index + 1);
+    waypoints[0][index] = held;
+    waypoints[1][index] = held;
+  }
+  waypoints[0][0] = 1.5;
+  waypoints[1][0] = 2.0;
+  ASSERT_TRUE(transport.requestMovePvtSegments(waypoints, {0.5, 0.5}));
+  for (int cycle = 0; cycle < 1000; ++cycle) {
+    raw->replay();
+  }
+  EXPECT_NEAR(raw->last[0].target_position, 1500, 5);
+  EXPECT_NEAR(raw->last[1].target_position, 2000, 1);
+  for (int cycle = 0; cycle < 1000; ++cycle) {
+    raw->replay();
+  }
+  EXPECT_NEAR(raw->last[0].target_position, 2000, 5);
+}
+
 TEST(SoemEthercatTransport, move_is_rejected_until_drives_are_enabled)
 {
   SoemEthercatTransport transport(std::make_unique<FakeLink>());

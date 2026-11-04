@@ -71,6 +71,23 @@ def pvt_message(sequence: float, duration: float, positions: Sequence[float]) ->
     return message
 
 
+def pvt_path_message(
+    sequence: float,
+    segment_sec: Sequence[float],
+    rows: Sequence[Sequence[float]],
+) -> Float64MultiArray:
+    """整段轨迹一次下发。每个路点前面是这一段的秒数，15 轴按同一时刻插补。"""
+    if len(segment_sec) != len(rows):
+        raise ValueError("段时间和路点数量不一致")
+    data = [float(sequence), float(sum(segment_sec)), float(len(rows))]
+    for duration, row in zip(segment_sec, rows):
+        data.append(float(duration))
+        data.extend(float(item) for item in row)
+    message = Float64MultiArray()
+    message.data = data
+    return message
+
+
 class PvtTrajectoryExecutor(Node):
     def __init__(self) -> None:
         super().__init__("pvt_trajectory_executor")
@@ -123,12 +140,7 @@ class PvtTrajectoryExecutor(Node):
     def _cancel(self, _goal_handle) -> CancelResponse:
         return CancelResponse.ACCEPT
 
-    def _publish_and_wait(self, positions: Sequence[float], duration: float) -> Tuple[bool, str]:
-        with self._lock:
-            self._sequence += 1
-            sequence = float(self._sequence)
-            self._pvt_result = None
-        self._pvt_pub.publish(pvt_message(sequence, duration, positions))
+    def _wait_result(self, sequence: float) -> Tuple[bool, str]:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             with self._lock:
@@ -146,6 +158,14 @@ class PvtTrajectoryExecutor(Node):
                     return False, detail
             time.sleep(0.02)
         return False, "没有收到 PVT 结果"
+
+    def _publish_and_wait(self, positions: Sequence[float], duration: float) -> Tuple[bool, str]:
+        with self._lock:
+            self._sequence += 1
+            sequence = float(self._sequence)
+            self._pvt_result = None
+        self._pvt_pub.publish(pvt_message(sequence, duration, positions))
+        return self._wait_result(sequence)
 
     def _wait_arrival(
         self,
@@ -190,35 +210,45 @@ class PvtTrajectoryExecutor(Node):
                 measured.get(name, trajectory.points[0].positions[index])
                 for index, name in enumerate(names)
             ], measured)
+            rows = []
+            durations = []
             last_time = 0.0
             for point in trajectory.points:
-                if goal_handle.is_cancel_requested:
-                    self._hold_here()
-                    goal_handle.canceled()
-                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                    result.error_string = "已取消，并按当前实测角停下"
-                    return result
-                goal = full_positions(names, point.positions, self._snapshot())
+                # 没出现在这条轨迹里的轴锁在起点，避免中途用新的实测角把它们带跑。
+                goal = full_positions(names, point.positions, measured)
                 planned_dt = max(0.0, stamp_seconds(point.time_from_start) - last_time)
                 last_time = stamp_seconds(point.time_from_start)
-                duration = segment_duration(previous, goal, planned_dt)
-                accepted, detail = self._publish_and_wait(goal, duration)
-                if not accepted:
-                    goal_handle.abort()
-                    result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
-                    result.error_string = detail
-                    return result
-                arrived, detail = self._wait_arrival(names, point.positions, duration, goal_handle)
-                if not arrived:
-                    self._hold_here()
-                    if goal_handle.is_cancel_requested:
-                        goal_handle.canceled()
-                    else:
-                        goal_handle.abort()
-                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                    result.error_string = detail
-                    return result
+                durations.append(segment_duration(previous, goal, planned_dt))
+                rows.append(goal)
                 previous = goal
+            with self._lock:
+                self._sequence += 1
+                sequence = float(self._sequence)
+                self._pvt_result = None
+            self._pvt_pub.publish(pvt_path_message(sequence, durations, rows))
+            accepted, detail = self._wait_result(sequence)
+            if not accepted:
+                goal_handle.abort()
+                result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
+                result.error_string = detail
+                return result
+            if goal_handle.is_cancel_requested:
+                self._hold_here()
+                goal_handle.canceled()
+                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                result.error_string = "已取消，并按当前实测角停下"
+                return result
+            arrived, detail = self._wait_arrival(
+                names, trajectory.points[-1].positions, sum(durations), goal_handle)
+            if not arrived:
+                self._hold_here()
+                if goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                else:
+                    goal_handle.abort()
+                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                result.error_string = detail
+                return result
             goal_handle.succeed()
             result.error_code = FollowJointTrajectory.Result.SUCCESSFUL
             return result
