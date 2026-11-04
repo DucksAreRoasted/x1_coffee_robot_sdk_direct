@@ -152,6 +152,9 @@ private:
   std::uint16_t mit_mask_{0x7F00};
   double mit_kp_{480.0};
   double mit_kd_{24.0};
+  // 重力模型和额定力矩对不齐时，比例项留一个固定偏差。积分慢慢补上，并限制幅度。
+  double mit_ki_{200.0};
+  double mit_i_limit_{400.0};
   double mit_limit_{1000.0};
   // URDF 静重力，单位 N·m。换成 0x6071 千分比时除以额定力矩。额定力矩尚未从关节读出，先用 50 N·m。
   UrdfGravity gravity_;
@@ -162,6 +165,7 @@ private:
   std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
   std::array<double, kCoffeeAxisCount> mit_prev_rad_{};
   std::array<double, kCoffeeAxisCount> mit_velocity_{};
+  std::array<double, kCoffeeAxisCount> mit_integral_{};
   std::array<bool, kCoffeeAxisCount> mit_have_sample_{};
   mutable std::mutex sample_mu_;
 };

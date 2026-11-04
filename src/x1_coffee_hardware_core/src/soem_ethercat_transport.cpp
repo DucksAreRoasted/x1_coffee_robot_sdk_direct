@@ -1590,8 +1590,22 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   mit_prev_rad_[index] = measured;
   mit_have_sample_[index] = true;
   mit_velocity_[index] += 0.05 * (velocity - mit_velocity_[index]);
-  double command = mit_kp_ * (desired - measured) - mit_kd_ * mit_velocity_[index];
-  command += mit_gravity_permille_[index];
+  const double error = desired - measured;
+  const double spring =
+    mit_kp_ * error - mit_kd_ * mit_velocity_[index] + mit_gravity_permille_[index];
+  const double proposed = spring + mit_integral_[index];
+  const bool winding_up =
+    (proposed >= mit_limit_ && error > 0.0) || (proposed <= -mit_limit_ && error < 0.0);
+  if (!winding_up) {
+    mit_integral_[index] += mit_ki_ * error * kEthercatCycleSec;
+  }
+  if (mit_integral_[index] > mit_i_limit_) {
+    mit_integral_[index] = mit_i_limit_;
+  }
+  if (mit_integral_[index] < -mit_i_limit_) {
+    mit_integral_[index] = -mit_i_limit_;
+  }
+  double command = spring + mit_integral_[index];
   if (command > mit_limit_) {
     command = mit_limit_;
   }
@@ -1629,6 +1643,7 @@ Result SoemEthercatTransport::enterMitHold()
   motion_armed_ = false;
   mit_have_sample_.fill(false);
   mit_velocity_.fill(0.0);
+  mit_integral_.fill(0.0);
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     mit_hold_pulse_[index] = latest_[index].actual_position;
     held_pulse_[index] = latest_[index].actual_position;
