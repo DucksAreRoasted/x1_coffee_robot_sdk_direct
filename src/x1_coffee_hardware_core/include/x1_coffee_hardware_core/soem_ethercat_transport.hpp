@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -129,6 +130,9 @@ private:
   std::array<int, kCoffeeAxisCount> enable_retries_{};
   // 0 按状态字走，1 关电压，2 关机并空出 300 ms。已使能的轴保持 0。
   std::array<int, kCoffeeAxisCount> enable_phase_{};
+  // eRob 手册 5.1.1：上电到伺服准备好需要 5 秒。实机链路才等待，单测为 0。
+  int servo_ready_delay_ms_{0};
+  std::chrono::steady_clock::time_point servo_wait_begin_{};
   mutable std::mutex sample_mu_;
 };
 

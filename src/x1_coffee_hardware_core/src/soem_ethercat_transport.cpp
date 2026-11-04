@@ -1034,6 +1034,11 @@ Result SoemEthercatTransport::activate()
     return opened;
   }
   debugf("activate reached OP");
+  if (dynamic_cast<SoemLink *>(link_.get()) != nullptr) {
+    servo_ready_delay_ms_ = 5000;
+    servo_wait_begin_ = std::chrono::steady_clock::now();
+    debugf("eRob manual 5.1.1: wait %d ms before switch on", servo_ready_delay_ms_);
+  }
   active_ = true;
   closed_ = false;
   return Result::ok();
@@ -1352,6 +1357,14 @@ void SoemEthercatTransport::onCycle(
     }
     if (!drives_enabled_) {
       out.control_word = 0x0000;
+      continue;
+    }
+    // 手册 5.1.1：上电后伺服还没准备好时不写接通，只保持关机字。
+    if (!torque_axis_[index] && servo_ready_delay_ms_ > 0 &&
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - servo_wait_begin_).count() < servo_ready_delay_ms_)
+    {
+      out.control_word = 0x0006;
       continue;
     }
     // 准备接通不前进时，先关电压回到禁止接通，再关机满 300 ms，然后重新接通。
