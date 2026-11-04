@@ -17,6 +17,13 @@ class PvtTrajectoryPacking(unittest.TestCase):
         self.assertEqual(positions[0], measured["Joint_Body"])
         self.assertEqual(positions[8], measured["Joint_r1"])
 
+    def test_duration_keeps_moveit_time_when_it_is_slow_enough(self):
+        previous = [0.0] * 15
+        goal = [0.0] * 15
+        goal[1] = 0.05
+        duration = executor.segment_duration(previous, goal, 1.0)
+        self.assertAlmostEqual(duration, 1.0)
+
     def test_duration_respects_the_joint_speed_cap(self):
         previous = [0.0] * 15
         goal = [0.0] * 15

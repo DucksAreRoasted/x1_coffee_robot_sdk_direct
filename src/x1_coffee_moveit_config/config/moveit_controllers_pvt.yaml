@@ -1,4 +1,9 @@
 # MoveIt 执行走 /x1/pvt_move。动态 PT 在实机上没有走通，这条配置不交给轨迹控制器的周期流。
+trajectory_execution:
+  allowed_execution_duration_scaling: 4.0
+  allowed_goal_duration_margin: 2.0
+  allowed_start_tolerance: 0.05
+
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
 moveit_simple_controller_manager:

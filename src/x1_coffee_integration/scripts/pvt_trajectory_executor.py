@@ -30,14 +30,18 @@ ARRIVAL_TOLERANCE = 0.05
 
 
 def segment_duration(previous: Sequence[float], goal: Sequence[float], planned_dt: float) -> float:
-    """按关节最大位移拉长这一段，避免超过点动用的平均速度。"""
+    """沿用 MoveIt 给出的时间。只有这一段比速度上限更快时才拉长。
+
+    每个路点都再加一截最短时间的话，实际运动会比 MoveIt 预计的久。
+    MoveIt 到点就取消动作，手臂就会停在半路，得点多次执行才到。
+    """
     delta = 0.0
     for start, target in zip(previous, goal):
         delta = max(delta, abs(target - start))
-    needed = MIN_SEGMENT_SEC if delta <= 1.0e-9 else max(MIN_SEGMENT_SEC, delta / MAX_JOINT_SPEED)
+    needed = 0.0 if delta <= 1.0e-9 else delta / MAX_JOINT_SPEED
     if planned_dt > 0.0:
         return max(planned_dt, needed)
-    return needed
+    return max(needed, 0.05)
 
 
 def full_positions(
