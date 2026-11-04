@@ -3,7 +3,11 @@ project(x1_coffee_integration)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY config launch urdf vendor DESTINATION share/${PROJECT_NAME})
+# 不安装 Python 缓存。root 跑过的 pyc 会让 symlink install 报 Permission denied。
+install(DIRECTORY config launch urdf vendor
+  DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE)
 install(PROGRAMS
   scripts/switch_control_mode.sh
   scripts/robot_startup.py

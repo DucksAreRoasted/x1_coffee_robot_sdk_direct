@@ -20,6 +20,21 @@ from controller_manager import (
 )
 
 MANAGER = "/controller_manager"
+LABELS = {
+    "joint_state_broadcaster": "关节状态",
+    "openarm_compat_joint_state_broadcaster": "兼容关节状态",
+    "motor_state_broadcaster": "电机状态",
+    "left_group_controller": "左臂轨迹",
+    "right_group_controller": "右臂轨迹",
+    "waist_group_controller": "腰轨迹",
+    "left_forward_position_controller": "左臂转发",
+    "right_forward_position_controller": "右臂转发",
+    "waist_forward_position_controller": "腰转发",
+}
+
+
+def label(name):
+    return LABELS.get(name, name)
 
 
 def controller_states(node):
@@ -33,12 +48,12 @@ def ensure_configured(node, name):
         if state is None:
             result = load_controller(node, MANAGER, name, call_timeout=15.0)
             if not result.ok:
-                node.get_logger().warn(f"{name} 加载返回失败，重新查询状态")
+                node.get_logger().warn(f"! {label(name)} 加载返回失败，重新查询状态")
             continue
         if state == "unconfigured":
             result = configure_controller(node, MANAGER, name, call_timeout=15.0)
             if not result.ok:
-                node.get_logger().warn(f"{name} 配置返回失败，重新查询状态")
+                node.get_logger().warn(f"! {label(name)} 配置返回失败，重新查询状态")
             continue
         return state
     raise RuntimeError(f"{name} 未能加载并配置")
@@ -46,16 +61,16 @@ def ensure_configured(node, name):
 
 def ensure_active(node, name):
     if ensure_configured(node, name) == "active":
-        node.get_logger().info(f"{name} 已激活")
+        node.get_logger().info(f"✓ {label(name)} 已激活")
         return
     for _ in range(4):
         result = switch_controllers(
             node, MANAGER, [], [name], True, True, 5.0, 15.0)
         state = controller_states(node).get(name)
         if state == "active":
-            node.get_logger().info(f"{name} 已激活")
+            node.get_logger().info(f"✓ {label(name)} 已激活")
             return
-        node.get_logger().warn(f"{name} 激活返回 {result.ok}，当前状态 {state}")
+        node.get_logger().warn(f"! {label(name)} 激活返回 {result.ok}，当前状态 {state}")
     raise RuntimeError(f"{name} 未能激活")
 
 
@@ -63,7 +78,7 @@ def ensure_inactive(node, name):
     state = ensure_configured(node, name)
     if state == "active":
         raise RuntimeError(f"{name} 应当保持未激活，但当前已激活")
-    node.get_logger().info(f"{name} 已加载，未激活")
+    node.get_logger().info(f"● {label(name)} 已加载，未激活")
 
 
 def main():
@@ -83,7 +98,7 @@ def main():
         node.destroy_node()
         rclpy.shutdown()
         return 1
-    node.get_logger().info("控制器已按顺序就绪")
+    node.get_logger().info("✓ 控制器已按顺序就绪")
     node.destroy_node()
     rclpy.shutdown()
     return 0

@@ -23,10 +23,10 @@ if [[ ! -t 0 || ! -t 1 ]]; then
   exit 1
 fi
 
-echo "网口 ${IFNAME}：上电并保持当前位置，不回零。ROS_DOMAIN_ID=${ROS_DOMAIN_ID}。"
-echo "进总线后先等 5 秒，终端按秒倒数。这 5 秒不要退出。"
-echo "看到「15 轴已使能并保持，未下发运动」后，再在上位机启动。"
-echo "下面输入登录密码。输入时不显示，输完按回车。"
+echo "● 网口 ${IFNAME}：上电并保持当前位置，不回零。"
+echo "● ROS 域 ${ROS_DOMAIN_ID}。进总线后先等 5 秒，终端会倒数，不要退出。"
+echo "✓ 看到「15 轴已使能并保持」后，再在上位机启动。"
+echo "● 下面输入登录密码。输入时不显示，输完按回车。"
 # 清掉几分钟内的 sudo 记录，否则不会再问密码。
 sudo -k
 exec sudo -E env -u SHELLOPTS bash --noprofile --norc -c "

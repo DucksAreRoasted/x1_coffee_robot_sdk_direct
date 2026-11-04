@@ -103,13 +103,19 @@ private:
   std::int64_t max_late_ns_{0};
 };
 
+void say(const char * fmt, ...);
+
 // 周期线程提成 SCHED_FIFO。非 root 时失败只打印，不影响原有行为。
 void raiseCycleThreadPriority()
 {
   sched_param param{};
   param.sched_priority = 80;
   const int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
-  std::fprintf(stderr, "cycle thread SCHED_FIFO prio=80 rc=%d\n", rc);
+  if (rc == 0) {
+    say("✓ 周期线程已设为实时优先级");
+  } else {
+    say("! 周期线程没能设为实时优先级，返回 %d", rc);
+  }
 }
 
 struct TorqueOutput
@@ -129,12 +135,27 @@ struct TorqueInput
 
 void debugf(const char * fmt, ...)
 {
+  // 英文调试默认不进终端。需要时再设 X1_ECAT_DEBUG=1。
+  if (std::getenv("X1_ECAT_DEBUG") == nullptr) {
+    return;
+  }
   char buffer[512];
   va_list args;
   va_start(args, fmt);
   std::vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
-  std::fprintf(stderr, "[x1-debug] %s\n", buffer);
+  std::fprintf(stderr, "[调试] %s\n", buffer);
+  std::fflush(stderr);
+}
+
+void say(const char * fmt, ...)
+{
+  char buffer[512];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  std::fprintf(stderr, "%s\n", buffer);
   std::fflush(stderr);
 }
 
@@ -300,7 +321,7 @@ public:
       library.dli_fname != nullptr ? library.dli_fname : "unknown", __DATE__, __TIME__,
       std::getenv("RMW_IMPLEMENTATION") != nullptr ? std::getenv("RMW_IMPLEMENTATION") : "unset",
       std::getenv("ROS_DOMAIN_ID") != nullptr ? std::getenv("ROS_DOMAIN_ID") : "unset");
-    std::fprintf(stderr, "soem-master ifname=%s\n", ifname.c_str());
+    say("● 打开网口 %s", ifname.c_str());
     g_force_stop.store(false);
     shutdown_started_.store(false);
     debugf("before ecx_init");
@@ -315,7 +336,8 @@ public:
     debugf("before ecx_config_init");
     const int count = ecx_config_init(&context_);
     debugf("ecx_config_init count=%d", count);
-    std::fprintf(stderr, "slavecount=%d\n", count);
+    say(count == static_cast<int>(kCoffeeAxisCount) ?
+      "✓ 找到 %d 台从站" : "✗ 从站数不是 15，读到 %d", count);
     if (count != static_cast<int>(kCoffeeAxisCount)) {
       const Result failed = Result::fail(
         CoreError::kEthercatNotReady,
@@ -330,7 +352,7 @@ public:
     debugf("before ecx_config_map_group");
     ecx_config_map_group(&context_, iomap_, 0);
     active_link_ = nullptr;
-    std::fprintf(stderr, "15 轴过程数据已映射\n");
+    say("✓ 15 轴过程数据已映射");
     debugf("before ecx_configdc");
     ecx_configdc(&context_);
     for (int slave = 1; slave <= count; ++slave) {
@@ -340,10 +362,6 @@ public:
         static_cast<int>(sizeof(ZeroErrOutput));
       const int expect_in = torque ? static_cast<int>(sizeof(TorqueInput)) :
         static_cast<int>(sizeof(ZeroErrInput));
-      std::fprintf(
-        stderr, "map slave=%d obytes=%d ibytes=%d torque=%d\n",
-        slave, context_.slavelist[slave].Obytes, context_.slavelist[slave].Ibytes,
-        torque ? 1 : 0);
       if (static_cast<int>(context_.slavelist[slave].Obytes) != expect_out ||
         static_cast<int>(context_.slavelist[slave].Ibytes) != expect_in ||
         context_.slavelist[slave].outputs == nullptr ||
@@ -426,7 +444,7 @@ public:
         thread_.join();
       } else {
         debugf("cycle thread still running after 1s, detach");
-        std::fprintf(stderr, "总线线程没有在 1 秒内退出，不再等待\n");
+        say("! 总线线程没有在 1 秒内退出，不再等待");
         thread_.detach();
         opened_ = false;
         g_wake_socket.store(-1);
@@ -458,7 +476,7 @@ public:
     ecx_statecheck(&context_, 0, EC_STATE_INIT, 200000);
     g_wake_socket.store(-1);
     ecx_readstate(&context_);
-    std::fprintf(stderr, "after-init slave0=0x%04x\n", context_.slavelist[0].state);
+    say("● 总线已关闭，状态 0x%04x", context_.slavelist[0].state);
     ecx_close(&context_);
     opened_ = false;
     std::memset(position_out_, 0, sizeof(position_out_));
@@ -490,7 +508,7 @@ private:
     trace_thread_ = std::thread([this]() {
         sched_param priority{};
         const int rc = pthread_setschedparam(pthread_self(), SCHED_OTHER, &priority);
-        std::fprintf(stderr, "[x1-enable] logger SCHED_OTHER rc=%d\n", rc);
+        debugf("enable logger SCHED_OTHER rc=%d", rc);
         detail::EnableTraceFrame frame;
         for (;;) {
           const bool stopping = trace_stop_.load(std::memory_order_acquire);
@@ -502,7 +520,7 @@ private:
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
-        std::fprintf(stderr, "[x1-enable] trace stopped dropped=%u\n", enable_trace_->dropped());
+        debugf("enable trace stopped dropped=%u", enable_trace_->dropped());
       });
   }
 
@@ -516,6 +534,9 @@ private:
 
   static void printEnableTrace(const detail::EnableTraceFrame & frame)
   {
+    if (std::getenv("X1_ECAT_DEBUG") == nullptr) {
+      return;
+    }
     std::fprintf(
       stderr,
       "[x1-enable] phase=%s tick=%llu elapsed_us=%llu summary=%d changed=0x%04x "
@@ -569,11 +590,7 @@ private:
     const int rc = ecx_SDOwrite(
       context, slave, index, subindex, FALSE, size, value, EC_TIMEOUTRXM);
     if (rc <= 0) {
-      std::uint32_t raw = 0;
-      std::memcpy(&raw, value, std::min(sizeof(raw), static_cast<std::size_t>(size)));
-      std::fprintf(
-        stderr, "PDO 写入失败 slave=%u index=0x%04x sub=%u value=0x%08x rc=%d\n",
-        slave, index, subindex, raw, rc);
+      say("✗ 轴 %u 过程数据写入失败，索引 0x%04x，返回 %d", slave, index, rc);
     }
     return rc;
   }
@@ -751,9 +768,7 @@ private:
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, false, wkc, send_rc);
       if (cycle == 0 || (cycle % 2000) == 0) {
-        debugf(
-          "bringup cycle=%d wkc=%d ready=%d bus=0x%04x stopped=%d",
-          cycle, wkc, ready, context_.slavelist[0].state, stopped() ? 1 : 0);
+        say("● 等待从站进入运行，已有反馈 %d/15", ready);
       }
       if ((cycle % 20) == 0) {
         const std::uint16_t want = op_requested ? EC_STATE_OPERATIONAL : EC_STATE_SAFE_OP;
@@ -761,18 +776,16 @@ private:
       }
       if (!safeop_seen && (context_.slavelist[0].state & 0x0f) >= EC_STATE_SAFE_OP) {
         safeop_seen = true;
-        std::fprintf(
-          stderr, "safeop cycle=%d bus=0x%04x ready=%d/%d\n",
-          cycle, context_.slavelist[0].state, ready, static_cast<int>(kCoffeeAxisCount));
+        say("● 从站进入安全运行，%d/15 台有反馈", ready);
       }
       if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
         context_.slavelist[0].state = EC_STATE_OPERATIONAL;
         ecx_writestate(&context_, 0);
         op_requested = true;
-        std::fprintf(stderr, "request op cycle=%d\n", cycle);
+        say("● 请求 15 台从站进入运行");
       }
       if (op_requested && context_.slavelist[0].state == EC_STATE_OPERATIONAL) {
-        std::fprintf(stderr, "op cycle=%d bus=0x%04x\n", cycle, context_.slavelist[0].state);
+        say("✓ 15 台从站已进入运行");
         saw_op = true;
         {
           std::lock_guard<std::mutex> lock(wait_mu_);
@@ -801,8 +814,9 @@ private:
       return;
     }
     // OP 之后继续按同一节拍收发，直到关闭。
-    debugf("enter steady process-data loop");
+    say("● 周期通信已保持");
     int steady_cycle = 0;
+    long told_overruns = 0;
     timer.resetStats();
     while (!stopped()) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
@@ -820,13 +834,11 @@ private:
         }
         item.valid = wkc > 0;
       }
-      if (steady_cycle == 0 || (steady_cycle % 20000) == 0) {
-        debugf(
-          "steady cycle=%d wkc=%d slave1 status=0x%04x pos=%d dc_phase_us=%lld "
-          "overruns=%ld max_late_us=%lld",
-          steady_cycle, wkc, feedback[0].status_word, feedback[0].actual_position,
-          static_cast<long long>((context_.DCtime % DcCycleTimer::kCycleNs) / 1000),
-          timer.overruns(), static_cast<long long>(timer.maxLateNs() / 1000));
+      if (timer.overruns() != told_overruns) {
+        told_overruns = timer.overruns();
+        say(
+          "! 周期迟到 %ld 次，最晚 %lld 微秒",
+          told_overruns, static_cast<long long>(timer.maxLateNs() / 1000));
       }
       ++steady_cycle;
       std::array<SlaveCommand, kCoffeeAxisCount> command{};
@@ -1365,12 +1377,12 @@ void SoemEthercatTransport::onCycle(
       const int remain_sec = (servo_ready_delay_ms_ - elapsed_ms + 999) / 1000;
       if (remain_sec != servo_wait_logged_sec_) {
         servo_wait_logged_sec_ = remain_sec;
-        std::fprintf(stderr, "伺服准备中，还剩 %d 秒，暂不接通\n", remain_sec);
+        say("● 伺服准备中，还剩 %d 秒，暂不接通", remain_sec);
         std::fflush(stderr);
       }
     } else if (!servo_wait_done_logged_) {
       servo_wait_done_logged_ = true;
-      std::fprintf(stderr, "伺服已准备好，开始接通\n");
+      say("● 伺服已准备好，开始接通");
       std::fflush(stderr);
     }
   }
@@ -1415,7 +1427,7 @@ void SoemEthercatTransport::onCycle(
       if (switch_on_disabled || enable_backoff_cycles_[index] >= kEnableDisableCycles) {
         enable_phase_[index] = 2;
         enable_backoff_cycles_[index] = 0;
-        std::fprintf(stderr, "轴 %zu 已关电压，等待 300 ms 后再接通\n", index + 1);
+        say("! 轴 %zu 已关电压，等待 300 ms 后再接通", index + 1);
       }
       continue;
     }
@@ -1426,8 +1438,7 @@ void SoemEthercatTransport::onCycle(
         enable_phase_[index] = 0;
         enable_backoff_cycles_[index] = 0;
         enable_ready_cycles_[index] = 0;
-        std::fprintf(
-          stderr, "轴 %zu 第 %d 次重新接通\n", index + 1, enable_retries_[index]);
+        say("● 轴 %zu 第 %d 次重新接通", index + 1, enable_retries_[index]);
       }
       continue;
     }
@@ -1439,8 +1450,8 @@ void SoemEthercatTransport::onCycle(
         enable_ready_cycles_[index] = 0;
         ++enable_retries_[index];
         out.control_word = 0x0000;
-        std::fprintf(
-          stderr, "轴 %zu 停在准备接通，第 %d 次重试，status=0x%04x\n",
+        say(
+          "! 轴 %zu 停在准备接通，第 %d 次重试，状态 0x%04x",
           index + 1, enable_retries_[index], item.status_word);
         continue;
       }

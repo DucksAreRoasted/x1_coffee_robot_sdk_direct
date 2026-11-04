@@ -80,10 +80,15 @@ def _launch_setup(context):
     return [
         Node(
             package="robot_state_publisher", executable="robot_state_publisher",
-            output="screen", parameters=[robot_description]),
+            output="screen", parameters=[robot_description],
+            arguments=["--ros-args", "--log-level", "warn"]),
         Node(
             package="controller_manager", executable="ros2_control_node",
-            output="screen", parameters=[robot_description, controller_file]),
+            output="screen", parameters=[robot_description, controller_file],
+            arguments=[
+                "--ros-args", "--log-level", "warn",
+                "--log-level", "X1CoffeeSystemHardware:=info",
+            ]),
         Node(
             package="x1_coffee_integration", executable="spawn_controllers.py",
             name="spawn_controllers", output="screen",
@@ -98,11 +103,13 @@ def _launch_setup(context):
         Node(
             package="x1_coffee_device_sdk", executable="gripper_action_server",
             name="gripper_action_server", output="screen",
-            parameters=[{"simulate": ParameterValue(use_fake_hardware, value_type=bool)}]),
+            parameters=[{"simulate": ParameterValue(use_fake_hardware, value_type=bool)}],
+            arguments=["--ros-args", "--log-level", "warn"]),
         Node(
             package="x1_coffee_device_sdk", executable="safety_service_server",
             name="safety_service_server", output="screen",
-            parameters=[{"simulate": ParameterValue(use_fake_hardware, value_type=bool)}]),
+            parameters=[{"simulate": ParameterValue(use_fake_hardware, value_type=bool)}],
+            arguments=["--ros-args", "--log-level", "warn"]),
     ]
 
 

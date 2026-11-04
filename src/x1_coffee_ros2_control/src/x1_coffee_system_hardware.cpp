@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <utility>
@@ -27,7 +28,10 @@ constexpr auto kPosition = hardware_interface::HW_IF_POSITION;
 
 void debugf(const char * text)
 {
-  std::fprintf(stderr, "[x1-debug] %s\n", text);
+  if (std::getenv("X1_ECAT_DEBUG") == nullptr) {
+    return;
+  }
+  std::fprintf(stderr, "[调试] %s\n", text);
   std::fflush(stderr);
 }
 constexpr auto kVelocity = hardware_interface::HW_IF_VELOCITY;
@@ -320,7 +324,7 @@ bool X1CoffeeSystemHardware::startMotionService()
   motion_spin_thread_ = std::thread([this]() {motion_executor_->spin();});
   RCLCPP_INFO(
     rclcpp::get_logger("X1CoffeeSystemHardware"),
-    "运动启动服务已就绪: /x1/start_motion /x1/arm_tracked_motion /x1/zero_torque /x1/brake_hold /x1/pvt_move");
+    "✓ 运动服务已就绪。保持期间不下发位置");
   debugf("startMotionService ready");
   return true;
 }
@@ -462,7 +466,7 @@ CallbackReturn X1CoffeeSystemHardware::on_activate(const rclcpp_lifecycle::State
     if (!snapshot.axes[i].position_valid || !snapshot.axes[i].velocity_valid ||
       !std::isfinite(snapshot.axes[i].position) || !std::isfinite(snapshot.axes[i].velocity))
     {
-      RCLCPP_ERROR(rclcpp::get_logger("X1CoffeeSystemHardware"), "Invalid initial state on hardware axis %zu", i + 1);
+      RCLCPP_ERROR(rclcpp::get_logger("X1CoffeeSystemHardware"), "✗ 轴 %zu 的初始状态无效", i + 1);
       transport_->stop(false);
       transport_->deactivate();
       return CallbackReturn::ERROR;
@@ -631,7 +635,7 @@ hardware_interface::return_type X1CoffeeSystemHardware::read(
     if (!snapshot.axes[i].position_valid || !snapshot.axes[i].velocity_valid ||
       !std::isfinite(snapshot.axes[i].position) || !std::isfinite(snapshot.axes[i].velocity))
     {
-      RCLCPP_ERROR(rclcpp::get_logger("X1CoffeeSystemHardware"), "State validity lost on hardware axis %zu", i + 1);
+      RCLCPP_ERROR(rclcpp::get_logger("X1CoffeeSystemHardware"), "✗ 轴 %zu 的反馈失效", i + 1);
       transport_->stop(stop_on_axis_alarm_ || stop_on_emergency_input_);
       return hardware_interface::return_type::ERROR;
     }
@@ -652,15 +656,19 @@ hardware_interface::return_type X1CoffeeSystemHardware::read(
   ++read_call_count_;
   const auto report_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
     now - cycle_report_started_at_).count();
-  if (report_elapsed >= 2000) {
+  if (report_elapsed >= 10000) {
     const double seconds = static_cast<double>(report_elapsed) / 1000.0;
-    RCLCPP_INFO(
-      rclcpp::get_logger("X1CoffeeSystemHardware"),
-      "Hardware cycle rate: read_hz=%.2f write_hz=%.2f read_calls=%llu write_calls=%llu",
-      static_cast<double>(read_call_count_ - cycle_report_read_start_) / seconds,
-      static_cast<double>(write_call_count_ - cycle_report_write_start_) / seconds,
-      static_cast<unsigned long long>(read_call_count_),
-      static_cast<unsigned long long>(write_call_count_));
+    const double read_hz = static_cast<double>(read_call_count_ - cycle_report_read_start_) / seconds;
+    const double write_hz = static_cast<double>(write_call_count_ - cycle_report_write_start_) / seconds;
+    if (motion_enabled_) {
+      RCLCPP_INFO(
+        rclcpp::get_logger("X1CoffeeSystemHardware"),
+        "● 控制周期：读 %.0f Hz，写 %.0f Hz", read_hz, write_hz);
+    } else {
+      RCLCPP_INFO(
+        rclcpp::get_logger("X1CoffeeSystemHardware"),
+        "● 控制周期：读 %.0f Hz，写 %.0f Hz（保持当前位置）", read_hz, write_hz);
+    }
     cycle_report_started_at_ = now;
     cycle_report_read_start_ = read_call_count_;
     cycle_report_write_start_ = write_call_count_;
@@ -771,9 +779,9 @@ hardware_interface::return_type X1CoffeeSystemHardware::write(
 void X1CoffeeSystemHardware::logTransportError(
   const char * operation, const x1_coffee_hardware_core::Result & result)
 {
+  (void)operation;
   RCLCPP_ERROR(
-    rclcpp::get_logger("X1CoffeeSystemHardware"), "%s failed (%u): %s", operation,
-    static_cast<unsigned>(result.error), result.detail.c_str());
+    rclcpp::get_logger("X1CoffeeSystemHardware"), "✗ 传输失败：%s", result.detail.c_str());
 }
 
 }  // namespace x1_coffee_ros2_control
