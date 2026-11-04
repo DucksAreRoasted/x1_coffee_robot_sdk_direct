@@ -862,9 +862,9 @@ SoemLink * SoemLink::active_link_ = nullptr;
 constexpr double kEthercatCycleSec = 5.0e-4;
 // 手册：同一台关节下使能到再使能的间隔应大于 300 ms。500 μs 一个周期。
 constexpr int kEnableGapCycles = 600;
-// 「准备接通」连续停留 1 秒仍不前进，就退回关电压再走一遍。最多 5 次。
-constexpr int kEnableStuckCycles = 2000;
-constexpr int kEnableRetryLimit = 5;
+// 停在准备接通 0.5 秒就重新走状态机。关电压最多 0.5 秒，直到变成禁止接通。
+constexpr int kEnableStuckCycles = 1000;
+constexpr int kEnableDisableCycles = 1000;
 
 static int velocityStep(double pulses_per_unit, double velocity_rad_s)
 {
@@ -1021,7 +1021,7 @@ Result SoemEthercatTransport::activate()
   enable_ready_cycles_.fill(0);
   enable_backoff_cycles_.fill(0);
   enable_retries_.fill(0);
-  enable_backoff_.fill(false);
+  enable_phase_.fill(0);
   held_.fill(false);
   const Result opened = link_->openAndReachOp(
     ifname_, torque_axis_,
@@ -1354,27 +1354,37 @@ void SoemEthercatTransport::onCycle(
       out.control_word = 0x0000;
       continue;
     }
-    // 停在准备接通时，关电压并空出手册要求的 300 ms，再重新走接通。已使能的轴不退。
-    const bool ready_to_switch_on =
-      item.valid && (item.status_word & 0x006F) == 0x0021;
-    if (!torque_axis_[index] && enable_backoff_[index]) {
-      ++enable_backoff_cycles_[index];
+    // 准备接通不前进时，先关电压回到禁止接通，再关机满 300 ms，然后重新接通。
+    // 不设次数上限，上电检查的 60 秒内会一直重试。已经使能的轴不参与。
+    const std::uint16_t masked_state = item.status_word & 0x006F;
+    const bool ready_to_switch_on = item.valid && masked_state == 0x0021;
+    if (!torque_axis_[index] && enable_phase_[index] == 1) {
       out.control_word = 0x0000;
+      ++enable_backoff_cycles_[index];
+      const bool switch_on_disabled = item.valid && masked_state == 0x0040;
+      if (switch_on_disabled || enable_backoff_cycles_[index] >= kEnableDisableCycles) {
+        enable_phase_[index] = 2;
+        enable_backoff_cycles_[index] = 0;
+        debugf("enable retry gap slave %zu", index + 1);
+      }
+      continue;
+    }
+    if (!torque_axis_[index] && enable_phase_[index] == 2) {
+      out.control_word = 0x0006;
+      ++enable_backoff_cycles_[index];
       if (enable_backoff_cycles_[index] >= kEnableGapCycles) {
-        enable_backoff_[index] = false;
+        enable_phase_[index] = 0;
         enable_backoff_cycles_[index] = 0;
         enable_ready_cycles_[index] = 0;
-        debugf("enable retry resume slave %zu", index + 1);
+        debugf("enable retry resume slave %zu attempt %d", index + 1, enable_retries_[index]);
       }
       continue;
     }
     if (!torque_axis_[index] && ready_to_switch_on) {
       ++enable_ready_cycles_[index];
-      if (enable_ready_cycles_[index] >= kEnableStuckCycles &&
-        enable_retries_[index] < kEnableRetryLimit)
-      {
-        enable_backoff_[index] = true;
-        enable_backoff_cycles_[index] = 1;
+      if (enable_ready_cycles_[index] >= kEnableStuckCycles) {
+        enable_phase_[index] = 1;
+        enable_backoff_cycles_[index] = 0;
         enable_ready_cycles_[index] = 0;
         ++enable_retries_[index];
         out.control_word = 0x0000;
@@ -1383,14 +1393,7 @@ void SoemEthercatTransport::onCycle(
           index + 1, enable_retries_[index], item.status_word);
         continue;
       }
-      if (enable_ready_cycles_[index] == kEnableStuckCycles &&
-        enable_retries_[index] >= kEnableRetryLimit)
-      {
-        debugf(
-          "enable retry slave %zu exhausted status=0x%04x",
-          index + 1, item.status_word);
-      }
-    } else {
+    } else if (!torque_axis_[index]) {
       enable_ready_cycles_[index] = 0;
     }
     if (!torque_axis_[index] && operation_enabled) {

@@ -127,7 +127,8 @@ private:
   std::array<int, kCoffeeAxisCount> enable_ready_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_backoff_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_retries_{};
-  std::array<bool, kCoffeeAxisCount> enable_backoff_{};
+  // 0 按状态字走，1 关电压，2 关机并空出 300 ms。已使能的轴保持 0。
+  std::array<int, kCoffeeAxisCount> enable_phase_{};
   mutable std::mutex sample_mu_;
 };
 

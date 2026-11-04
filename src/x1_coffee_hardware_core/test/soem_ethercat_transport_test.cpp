@@ -173,29 +173,32 @@ TEST(SoemEthercatTransport, each_axis_enables_on_its_own_and_a_stuck_axis_retrie
     item.actual_position = 1000;
   }
   feedback[2].status_word = 0x12b1;
-  int retry_runs = 0;
-  int disabled_cycles = 0;
-  bool in_disable = false;
-  for (int cycle = 0; cycle < 20000; ++cycle) {
+  std::vector<std::uint16_t> words;
+  for (int cycle = 0; cycle < 8000; ++cycle) {
     feedback[2].actual_position = 1000 + cycle % 3;
     raw->cycle(feedback, &raw->last);
     EXPECT_EQ(raw->last[0].control_word, 0x000F);
     EXPECT_EQ(raw->last[2].target_position, feedback[2].actual_position);
-    if (raw->last[2].control_word == 0x0000) {
-      if (!in_disable) {
-        ++retry_runs;
+    words.push_back(raw->last[2].control_word);
+  }
+  // 停住时：接通、关电压、关机间隔，然后再次接通。不因次数上限停掉。
+  int gaps = 0;
+  int gap_cycles = 0;
+  bool in_gap = false;
+  for (const std::uint16_t word : words) {
+    EXPECT_TRUE(word == 0x0007 || word == 0x0000 || word == 0x0006);
+    if (word == 0x0006) {
+      if (!in_gap) {
+        ++gaps;
       }
-      in_disable = true;
-      ++disabled_cycles;
+      in_gap = true;
+      ++gap_cycles;
     } else {
-      in_disable = false;
-      EXPECT_EQ(raw->last[2].control_word, 0x0007);
+      in_gap = false;
     }
   }
-  // 连续准备接通 1 秒后关电压 300 ms，最多 5 次。之后继续写接通，不再关电压。
-  EXPECT_EQ(retry_runs, 5);
-  EXPECT_EQ(disabled_cycles, 5 * 600);
-  EXPECT_EQ(raw->last[2].control_word, 0x0007);
+  EXPECT_GE(gaps, 2);
+  EXPECT_EQ(gap_cycles, gaps * 600);
 }
 
 TEST(SoemEthercatTransport, csp_target_slews_without_a_single_cycle_jump)
