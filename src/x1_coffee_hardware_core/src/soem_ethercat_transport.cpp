@@ -1110,8 +1110,12 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
           }
         }
         if (gravity_.setRightArmCorrection(mass_scale, com_delta)) {
+          rememberRightArmCorrection(mass_scale, com_delta);
           say("✓ 已读右臂质量倍率和质心偏移");
         }
+      }
+      if (!right_correction_known_) {
+        rememberRightArmCorrection(mass_scale, com_delta);
       }
     }
   }
@@ -1530,8 +1534,8 @@ void SoemEthercatTransport::onCycle(
     std::array<double, kCoffeeAxisCount> tau{};
     if (gravity_.torques(q, &tau)) {
       for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-        mit_gravity_permille_[index] =
-          gravity_scale_ * tau[index] / rated_torque_nm_ * 1000.0;
+        const double rated = rated_axis_nm_[index] > 0.0 ? rated_axis_nm_[index] : rated_torque_nm_;
+        mit_gravity_permille_[index] = gravity_scale_ * tau[index] / rated * 1000.0;
       }
     }
   }
@@ -1667,8 +1671,9 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   mit_have_sample_[index] = true;
   mit_velocity_[index] += 0.05 * (velocity - mit_velocity_[index]);
   const double error = desired - measured;
-  double command =
-    mit_kp_ * error - mit_kd_ * mit_velocity_[index] + mit_gravity_permille_[index];
+  const double kp = mit_zero_g_ ? 0.0 : mit_kp_;
+  const double kd = mit_zero_g_ ? 0.0 : mit_kd_;
+  double command = kp * error - kd * mit_velocity_[index] + mit_gravity_permille_[index];
   if (command > mit_limit_) {
     command = mit_limit_;
   }
@@ -1679,6 +1684,19 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
 }
 
 Result SoemEthercatTransport::enterMitHold()
+{
+  return beginRightArmTorque(false);
+}
+
+Result SoemEthercatTransport::enterZeroGravity()
+{
+  if (!gravity_ready_) {
+    return Result::fail(CoreError::kInvalidConfiguration, "没有 URDF 重力模型，不能做零重力");
+  }
+  return beginRightArmTorque(true);
+}
+
+Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
 {
   if (!active_ || link_ == nullptr) {
     return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
@@ -1711,8 +1729,14 @@ Result SoemEthercatTransport::enterMitHold()
     held_pulse_[index] = latest_[index].actual_position;
     goal_pulse_[index] = latest_[index].actual_position;
   }
+  mit_zero_g_ = zero_gravity;
   mit_active_ = true;
   link_->requestDriveMode(kZeroErrCyclicTorqueMode, mit_mask_);
+  if (zero_gravity) {
+    return Result{
+      CoreError::kOk,
+      "右臂零重力：只有重力前馈，没有位置弹簧。请扶着右臂；松手后自己下沉或上抬，说明补偿不对"};
+  }
   return Result{
     CoreError::kOk,
     gravity_ready_ ?
@@ -1727,6 +1751,7 @@ Result SoemEthercatTransport::exitMitHold()
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
   mit_active_ = false;
+  mit_zero_g_ = false;
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     if (!latest_[index].valid) {
       continue;
@@ -1803,9 +1828,30 @@ Result SoemEthercatTransport::resetRightArmGravityToUrdf()
   if (!gravity_.setRightArmCorrection(scale, delta)) {
     return Result::fail(CoreError::kInvalidConfiguration, "右臂连杆没有对上 URDF");
   }
-  writeRightArmGravityFile(scale, delta);
-  say("✓ 右臂重力已恢复 URDF 初值");
-  return Result{CoreError::kOk, "右臂质量倍率和质心偏移已恢复为 URDF 初值"};
+  rememberRightArmCorrection(scale, delta);
+  say("✓ 右臂重力已在内存恢复为 URDF 初值，尚未写入文件");
+  return Result{CoreError::kOk, "右臂已恢复 URDF 初值。按 p p 才会写入文件"};
+}
+
+void SoemEthercatTransport::rememberRightArmCorrection(
+  const std::array<double, 7> & mass_scale,
+  const std::array<std::array<double, 3>, 7> & com_delta)
+{
+  right_mass_scale_ = mass_scale;
+  right_com_delta_ = com_delta;
+  right_correction_known_ = true;
+}
+
+Result SoemEthercatTransport::saveRightArmGravity()
+{
+  if (!right_correction_known_) {
+    return Result::fail(CoreError::kInvalidConfiguration, "还没有可保存的右臂重力修正");
+  }
+  if (!writeRightArmGravityFile(right_mass_scale_, right_com_delta_)) {
+    return Result::fail(CoreError::kWriteFailed, "右臂重力文件没有写成");
+  }
+  say("✓ 右臂重力已写入 %s", right_arm_gravity_yaml_.c_str());
+  return Result{CoreError::kOk, "已写入 " + right_arm_gravity_yaml_};
 }
 
 Result SoemEthercatTransport::startRightArmGravityCalibration()
@@ -2003,10 +2049,8 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     say("✗ 拟合结果没有写进模型");
     return;
   }
-  if (!writeRightArmGravityFile(scale, delta)) {
-    say("! 拟合已生效，但没有写成文件");
-  }
-  say("✓ 右臂重力拟合完成，质量倍率 %.2f %.2f %.2f %.2f %.2f %.2f %.2f",
+  rememberRightArmCorrection(scale, delta);
+  say("✓ 右臂重力拟合完成，质量倍率 %.2f %.2f %.2f %.2f %.2f %.2f %.2f。按 v v 检验，按 p p 写入文件",
     scale[0], scale[1], scale[2], scale[3], scale[4], scale[5], scale[6]);
 }
 

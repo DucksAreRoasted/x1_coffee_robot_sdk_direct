@@ -742,7 +742,9 @@ HELP = """
   m m     连按两次：只对右臂做 MIT。左臂和腰保持位置，请扶右臂
   n       退出 MIT，回到位置保持
   g g     连按两次：右臂自己走到两侧停稳点，记录力矩并拟合。请先按 n，并让开右臂
-  r r     连按两次：右臂重力恢复 URDF 初值
+  v v     连按两次：右臂零重力，只有重力前馈。请扶着右臂，按 n 退出
+  p p     连按两次：把当前右臂重力修正写入文件
+  r r     连按两次：右臂重力在内存恢复 URDF 初值，不写文件
   b       关断并重新抱闸
   空格    停在当前目标，不再追加
   Esc     退出
@@ -778,6 +780,9 @@ def run_teleop() -> int:
             self.mit_confirm_until = 0.0
             self.gravity_confirm_until = 0.0
             self.gravity_reset_until = 0.0
+            self.gravity_save_until = 0.0
+            self.zero_g_confirm_until = 0.0
+            self.zero_g = False
             self.home_confirm_until = 0.0
             self.urdf_confirm_until = 0.0
             self.last_segment_sec = SEGMENT_SEC
@@ -794,6 +799,8 @@ def run_teleop() -> int:
             self.mit_exit_client = self.create_client(Trigger, "/x1/mit_exit")
             self.gravity_calib_client = self.create_client(Trigger, "/x1/right_arm_gravity_calib")
             self.gravity_reset_client = self.create_client(Trigger, "/x1/right_arm_gravity_reset")
+            self.gravity_save_client = self.create_client(Trigger, "/x1/right_arm_gravity_save")
+            self.zero_gravity_client = self.create_client(Trigger, "/x1/zero_gravity")
             self.trajectory_clients = {}
 
         def attach_joint_states(self) -> None:
@@ -1069,12 +1076,26 @@ def run_teleop() -> int:
                 node.mit_confirm_until = 0.0
                 if node.call_trigger(node.mit_hold_client, "/x1/mit_hold"):
                     node.mit_hold = True
+                    node.zero_g = False
                     node.motion_requested = False
                 continue
             if key == "n":
                 node.mit_confirm_until = 0.0
                 if node.call_trigger(node.mit_exit_client, "/x1/mit_exit"):
                     node.mit_hold = False
+                    node.zero_g = False
+                continue
+            if key == "v":
+                now = time.monotonic()
+                if now > node.zero_g_confirm_until:
+                    node.zero_g_confirm_until = now + 3.0
+                    print("\n再按一次 v：右臂进入零重力。没有位置弹簧，请扶着右臂。")
+                    continue
+                node.zero_g_confirm_until = 0.0
+                if node.call_trigger(node.zero_gravity_client, "/x1/zero_gravity"):
+                    node.mit_hold = True
+                    node.zero_g = True
+                    node.motion_requested = False
                 continue
             if key == "g":
                 now = time.monotonic()
@@ -1094,17 +1115,30 @@ def run_teleop() -> int:
                 node.gravity_reset_until = 0.0
                 node.call_trigger(node.gravity_reset_client, "/x1/right_arm_gravity_reset")
                 continue
+            if key == "p":
+                now = time.monotonic()
+                if now > node.gravity_save_until:
+                    node.gravity_save_until = now + 3.0
+                    print("\n再按一次 p：把当前右臂重力修正写入文件。")
+                    continue
+                node.gravity_save_until = 0.0
+                node.call_trigger(node.gravity_save_client, "/x1/right_arm_gravity_save")
+                continue
             if key == "b":
                 node.zero_confirm_until = 0.0
                 node.mit_confirm_until = 0.0
                 if node.mit_hold:
                     node.call_trigger(node.mit_exit_client, "/x1/mit_exit")
                     node.mit_hold = False
+                    node.zero_g = False
                 if node.call_trigger(node.brake_client, "/x1/brake_hold"):
                     node.zero_torque = False
                 continue
             if node.zero_torque:
                 print("\n当前是零力矩。先按 b 抱闸，才能位置控制。")
+                continue
+            if node.zero_g:
+                print("\n当前右臂是零重力。按 n 回到位置保持，才能点动。")
                 continue
             if node.mit_hold:
                 print("\n当前右臂是 MIT。按 n 回到位置保持，才能点动。")

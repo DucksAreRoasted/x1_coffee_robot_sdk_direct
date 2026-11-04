@@ -321,6 +321,40 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });
+  gravity_save_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/right_arm_gravity_save",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      auto * transport = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      if (transport == nullptr) {
+        response->success = false;
+        response->message = "当前传输层不能保存右臂重力";
+        return;
+      }
+      const auto result = transport->saveRightArmGravity();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
+  zero_gravity_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/zero_gravity",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      auto * transport = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      if (transport == nullptr) {
+        response->success = false;
+        response->message = "当前传输层不能做零重力";
+        return;
+      }
+      const auto result = transport->enterZeroGravity();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
   pvt_result_pub_ = motion_node_->create_publisher<std_msgs::msg::String>("/x1/pvt_result", 10);
   pvt_move_sub_ = motion_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
     "/x1/pvt_move", 10,

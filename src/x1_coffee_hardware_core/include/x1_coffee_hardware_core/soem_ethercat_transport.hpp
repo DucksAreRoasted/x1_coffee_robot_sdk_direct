@@ -83,9 +83,12 @@ public:
   // 停在当前角度，主站按位置误差写 0x6071。退出后回到周期同步位置。
   Result enterMitHold();
   Result exitMitHold();
-  // 右臂自己走到两侧停稳点，记录力矩并拟合。左臂和腰不动。
+  // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。
+  Result enterZeroGravity();
+  // 右臂自己走到两侧停稳点，记录力矩并拟合。左臂和腰不动。结果先留在内存。
   Result startRightArmGravityCalibration();
   Result resetRightArmGravityToUrdf();
+  Result saveRightArmGravity();
   Result requestMovePvt(
     const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
     double duration_sec) override;
@@ -159,6 +162,7 @@ private:
   bool servo_wait_done_logged_{false};
   // 主站 MIT。扭矩单位是额定电流的千分比，1000 即额定的 100%。
   bool mit_active_{false};
+  bool mit_zero_g_{false};
   // 单人调试只松开右臂 r1–r7，bit 8..14。左臂和腰保持周期同步位置。
   std::uint16_t mit_mask_{0x7F00};
   double mit_kp_{480.0};
@@ -171,6 +175,13 @@ private:
   double gravity_scale_{1.0};
   std::array<double, kCoffeeAxisCount> rated_axis_nm_{};
   std::string right_arm_gravity_yaml_;
+  std::array<double, 7> right_mass_scale_{};
+  std::array<std::array<double, 3>, 7> right_com_delta_{};
+  bool right_correction_known_{false};
+  void rememberRightArmCorrection(
+    const std::array<double, 7> & mass_scale,
+    const std::array<std::array<double, 3>, 7> & com_delta);
+  Result beginRightArmTorque(bool zero_gravity);
   std::atomic<bool> gravity_calib_stop_{false};
   std::atomic<bool> gravity_calib_running_{false};
   std::thread gravity_calib_thread_;
