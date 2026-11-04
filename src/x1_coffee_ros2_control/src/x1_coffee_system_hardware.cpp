@@ -253,6 +253,40 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = static_cast<bool>(result);
       response->message = result.detail.empty() ? std::string("已请求关断") : result.detail;
     });
+  mit_hold_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/mit_hold",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      auto * transport = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      if (transport == nullptr) {
+        response->success = false;
+        response->message = "当前传输层没有 MIT";
+        return;
+      }
+      const auto result = transport->enterMitHold();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
+  mit_exit_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/mit_exit",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      auto * transport = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      if (transport == nullptr) {
+        response->success = false;
+        response->message = "当前传输层没有 MIT";
+        return;
+      }
+      const auto result = transport->exitMitHold();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
   pvt_result_pub_ = motion_node_->create_publisher<std_msgs::msg::String>("/x1/pvt_result", 10);
   pvt_move_sub_ = motion_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
     "/x1/pvt_move", 10,

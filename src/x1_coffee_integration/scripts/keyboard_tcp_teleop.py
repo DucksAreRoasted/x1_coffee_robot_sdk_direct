@@ -739,6 +739,8 @@ HELP = """
   h h     连按两次：回到机械零位（出厂脉冲对应的 URDF 角度，不是全零）
   0 0     连按两次：回到 URDF 零位（15 个关节角全部为 0）
   z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
+  m m     连按两次：MIT 保持当前位置。关节变软，请扶着
+  n       退出 MIT，回到位置保持
   b       关断并重新抱闸
   空格    停在当前目标，不再追加
   Esc     退出
@@ -769,7 +771,9 @@ def run_teleop() -> int:
             self.warned = False
             self.motion_requested = False
             self.zero_torque = False
+            self.mit_hold = False
             self.zero_confirm_until = 0.0
+            self.mit_confirm_until = 0.0
             self.home_confirm_until = 0.0
             self.urdf_confirm_until = 0.0
             self.last_segment_sec = SEGMENT_SEC
@@ -782,6 +786,8 @@ def run_teleop() -> int:
             self.start_motion = self.create_client(Trigger, "/x1/start_motion")
             self.zero_torque_client = self.create_client(Trigger, "/x1/zero_torque")
             self.brake_client = self.create_client(Trigger, "/x1/brake_hold")
+            self.mit_hold_client = self.create_client(Trigger, "/x1/mit_hold")
+            self.mit_exit_client = self.create_client(Trigger, "/x1/mit_exit")
             self.trajectory_clients = {}
 
         def attach_joint_states(self) -> None:
@@ -1048,13 +1054,36 @@ def run_teleop() -> int:
                     node.zero_torque = True
                     node.motion_requested = False
                 continue
+            if key == "m":
+                now = time.monotonic()
+                if now > node.mit_confirm_until:
+                    node.mit_confirm_until = now + 3.0
+                    print("\n再按一次 m：MIT 保持当前位置。关节会变软，请扶着手臂。")
+                    continue
+                node.mit_confirm_until = 0.0
+                if node.call_trigger(node.mit_hold_client, "/x1/mit_hold"):
+                    node.mit_hold = True
+                    node.motion_requested = False
+                continue
+            if key == "n":
+                node.mit_confirm_until = 0.0
+                if node.call_trigger(node.mit_exit_client, "/x1/mit_exit"):
+                    node.mit_hold = False
+                continue
             if key == "b":
                 node.zero_confirm_until = 0.0
+                node.mit_confirm_until = 0.0
+                if node.mit_hold:
+                    node.call_trigger(node.mit_exit_client, "/x1/mit_exit")
+                    node.mit_hold = False
                 if node.call_trigger(node.brake_client, "/x1/brake_hold"):
                     node.zero_torque = False
                 continue
             if node.zero_torque:
                 print("\n当前是零力矩。先按 b 抱闸，才能位置控制。")
+                continue
+            if node.mit_hold:
+                print("\n当前是 MIT。按 n 回到位置保持，才能点动。")
                 continue
             linear = {
                 "w": (STEP_METERS, 0.0, 0.0),

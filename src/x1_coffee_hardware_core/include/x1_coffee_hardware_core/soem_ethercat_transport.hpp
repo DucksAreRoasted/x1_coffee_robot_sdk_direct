@@ -44,6 +44,11 @@ public:
     const std::array<bool, kCoffeeAxisCount> & torque_axis,
     const Cycle & on_cycle) = 0;
   virtual Result shutdownToInit() = 0;
+  // 运行中改 0x6060。0x08 位置，0x0A 扭矩。替身什么也不做。
+  virtual void requestDriveMode(std::uint8_t mode)
+  {
+    (void)mode;
+  }
 };
 
 // 笔记本网口上的 SOEM 主站。不加载固高库。
@@ -65,6 +70,9 @@ public:
   Result requestZeroTorque() override;
   Result engageBrakes() override;
   Result requestEngageBrakes() override;
+  // 停在当前角度，主站按位置误差写 0x6071。退出后回到周期同步位置。
+  Result enterMitHold();
+  Result exitMitHold();
   Result requestMovePvt(
     const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
     double duration_sec) override;
@@ -89,6 +97,7 @@ private:
   double pulseToPosition(std::size_t index, std::int32_t pulse) const;
   Result positionToPulse(
     std::size_t index, double position, std::int32_t current_pulse, double * pulse) const;
+  std::int16_t mitTorque(std::size_t index, std::int32_t actual_pulse);
 
   std::unique_ptr<EthercatLink> link_;
   const HardwareLayout * layout_{nullptr};
@@ -135,6 +144,15 @@ private:
   std::chrono::steady_clock::time_point servo_wait_begin_{};
   int servo_wait_logged_sec_{-1};
   bool servo_wait_done_logged_{false};
+  // 主站 MIT。扭矩单位是额定电流的千分比。默认限在 80，避免刚度过大。
+  bool mit_active_{false};
+  double mit_kp_{60.0};
+  double mit_kd_{3.0};
+  double mit_limit_{80.0};
+  std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
+  std::array<double, kCoffeeAxisCount> mit_prev_rad_{};
+  std::array<double, kCoffeeAxisCount> mit_velocity_{};
+  std::array<bool, kCoffeeAxisCount> mit_have_sample_{};
   mutable std::mutex sample_mu_;
 };
 

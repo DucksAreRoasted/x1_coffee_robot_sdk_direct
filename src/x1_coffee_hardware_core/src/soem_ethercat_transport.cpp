@@ -383,6 +383,7 @@ public:
         position_out_[slave]->control_word = 0;
         position_out_[slave]->digital_output = 0;
         position_out_[slave]->target_position = 0;
+        position_out_[slave]->target_torque = 0;
       }
     }
 
@@ -419,6 +420,11 @@ public:
       return Result::fail(CoreError::kEthercatNotReady, detail);
     }
     return Result::ok();
+  }
+
+  void requestDriveMode(std::uint8_t mode) override
+  {
+    pending_drive_mode_.store(static_cast<int>(mode));
   }
 
   Result shutdownToInit() override
@@ -693,7 +699,9 @@ private:
     writePdoEntry(context, slave, 0x1600, 2, sizeof(value32), &value32);
     value32 = kZeroErrRxControlWord;
     writePdoEntry(context, slave, 0x1600, 3, sizeof(value32), &value32);
-    value8 = 3;
+    value32 = kZeroErrRxTargetTorque;
+    writePdoEntry(context, slave, 0x1600, 4, sizeof(value32), &value32);
+    value8 = 4;
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
 
     value8 = 0;
@@ -763,6 +771,7 @@ private:
           position_out_[slave]->control_word = item.control_word;
           position_out_[slave]->digital_output = 0;
           position_out_[slave]->target_position = item.target_position;
+          position_out_[slave]->target_torque = item.target_torque;
         }
       }
       const int send_rc = ecx_send_processdata(&context_);
@@ -854,15 +863,42 @@ private:
           position_out_[slave]->control_word = item.control_word;
           position_out_[slave]->digital_output = 0;
           position_out_[slave]->target_position = item.target_position;
+          position_out_[slave]->target_torque = item.target_torque;
         }
       }
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, true, wkc, send_rc);
+      applyPendingDriveMode();
       timer.wait(context_.DCtime);
     }
   }
 
+  void applyPendingDriveMode()
+  {
+    const int mode = pending_drive_mode_.exchange(-1);
+    if (mode < 0) {
+      return;
+    }
+    std::uint8_t value = static_cast<std::uint8_t>(mode);
+    int failed = 0;
+    for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
+      const int rc = ecx_SDOwrite(
+        &context_, static_cast<std::uint16_t>(slave), 0x6060, 0x00, FALSE,
+        sizeof(value), &value, EC_TIMEOUTRXM);
+      if (rc <= 0) {
+        ++failed;
+      }
+    }
+    if (failed == 0) {
+      say(mode == static_cast<int>(kZeroErrCyclicTorqueMode) ?
+        "✓ 15 轴已切到周期同步扭矩" : "✓ 15 轴已切回周期同步位置");
+    } else {
+      say("✗ %d 台运行模式写入失败，目标 0x%02x", failed, mode);
+    }
+  }
+
   ecx_contextt context_{};
+  std::atomic<int> pending_drive_mode_{-1};
   std::uint8_t iomap_[8192]{};
   bool opened_{false};
   std::array<bool, kCoffeeAxisCount> torque_axis_{};
@@ -895,7 +931,9 @@ SoemLink * SoemLink::active_link_ = nullptr;
 constexpr double kEthercatCycleSec = 5.0e-4;
 // 手册：同一台关节下使能到再使能的间隔应大于 300 ms。500 μs 一个周期。
 constexpr int kEnableGapCycles = 600;
-// 停在准备接通 0.5 秒就重新走状态机。关电压最多 0.5 秒，直到变成禁止接通。
+// 准备接通先保持关机后的接通字 100 ms。仍不前进就按手册第 3 步发 0x000F。
+constexpr int kSwitchOnHoldCycles = 200;
+// 使能字也停 0.5 秒才关电压重走。关电压最多 0.5 秒，直到变成禁止接通。
 constexpr int kEnableStuckCycles = 1000;
 constexpr int kEnableDisableCycles = 1000;
 
@@ -1153,6 +1191,9 @@ Result SoemEthercatTransport::write(const PositionCommandFrame & command)
     return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能下发位置目标");
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
+  if (mit_active_) {
+    return Result::ok();
+  }
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     if (torque_axis_[index]) {
       return Result::fail(CoreError::kWriteFailed, "零力矩轴不能接收位置目标");
@@ -1197,6 +1238,9 @@ Result SoemEthercatTransport::startMotion()
     if (torque) {
       return Result::fail(CoreError::kWriteFailed, "零力矩轴不能进入周期同步位置");
     }
+  }
+  if (mit_active_) {
+    return Result::fail(CoreError::kWriteFailed, "MIT 占用中，先退出再允许位置运动");
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
   // 只打开跟随。目标仍是锁存位置，下一次 write 才把 MoveIt 的位置写进 0x607A。
@@ -1278,6 +1322,9 @@ Result SoemEthercatTransport::installPath(
     return Result::fail(CoreError::kInvalidConfiguration, "路点和段时间数量不一致");
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
+  if (mit_active_) {
+    return Result::fail(CoreError::kWriteFailed, "MIT 占用中，先按 n 回到位置模式");
+  }
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     if (torque_axis_[index]) {
       return Result::fail(CoreError::kWriteFailed, "零力矩轴不能接收位置目标");
@@ -1444,14 +1491,24 @@ void SoemEthercatTransport::onCycle(
     }
     if (!torque_axis_[index] && ready_to_switch_on) {
       ++enable_ready_cycles_[index];
-      if (enable_ready_cycles_[index] >= kEnableStuckCycles) {
+      // 手册 5.5：0x0007 之后应发 0x000F。有的关节不把状态改成「已接通」，只认使能字。
+      if (enable_ready_cycles_[index] > kSwitchOnHoldCycles &&
+        enable_ready_cycles_[index] <= kSwitchOnHoldCycles + kEnableStuckCycles)
+      {
+        if (enable_ready_cycles_[index] == kSwitchOnHoldCycles + 1) {
+          say("● 轴 %zu 仍是准备接通，按手册改发使能字", index + 1);
+        }
+        out.control_word = 0x000F;
+        continue;
+      }
+      if (enable_ready_cycles_[index] > kSwitchOnHoldCycles + kEnableStuckCycles) {
         enable_phase_[index] = 1;
         enable_backoff_cycles_[index] = 0;
         enable_ready_cycles_[index] = 0;
         ++enable_retries_[index];
         out.control_word = 0x0000;
         say(
-          "! 轴 %zu 停在准备接通，第 %d 次重试，状态 0x%04x",
+          "! 轴 %zu 使能字也停在准备接通，第 %d 次重试，状态 0x%04x",
           index + 1, enable_retries_[index], item.status_word);
         continue;
       }
@@ -1466,7 +1523,94 @@ void SoemEthercatTransport::onCycle(
     out.control_word = torque_axis_[index] ?
       zeroErrTorqueControlWord(item.status_word) :
       zeroErrCspControlWord(item.status_word);
+    out.target_torque = 0;
+    // MIT 时位置目标始终贴着编码器，切回 CSP 才不会猛拉。扭矩由主站刚度律给出。
+    if (mit_active_ && !torque_axis_[index] && item.valid && operation_enabled) {
+      held_pulse_[index] = item.actual_position;
+      goal_pulse_[index] = item.actual_position;
+      out.target_position = item.actual_position;
+      out.target_torque = mitTorque(index, item.actual_position);
+    }
   }
+}
+
+std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t actual_pulse)
+{
+  const double measured = pulseToPosition(index, actual_pulse);
+  const double desired = pulseToPosition(index, mit_hold_pulse_[index]);
+  double velocity = 0.0;
+  if (mit_have_sample_[index]) {
+    velocity = (measured - mit_prev_rad_[index]) / kEthercatCycleSec;
+  }
+  mit_prev_rad_[index] = measured;
+  mit_have_sample_[index] = true;
+  mit_velocity_[index] += 0.05 * (velocity - mit_velocity_[index]);
+  double command = mit_kp_ * (desired - measured) - mit_kd_ * mit_velocity_[index];
+  if (command > mit_limit_) {
+    command = mit_limit_;
+  }
+  if (command < -mit_limit_) {
+    command = -mit_limit_;
+  }
+  return static_cast<std::int16_t>(std::lround(command));
+}
+
+Result SoemEthercatTransport::enterMitHold()
+{
+  if (!active_ || link_ == nullptr) {
+    return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
+  }
+  for (bool torque : torque_axis_) {
+    if (torque) {
+      return Result::fail(CoreError::kInvalidConfiguration, "已有轴用纯扭矩映射启动，不能再切 MIT");
+    }
+  }
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!drives_enabled_) {
+    return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能进入 MIT");
+  }
+  const auto & descriptors = coffeeAxisDescriptors();
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    const SlaveFeedback & item = latest_[index];
+    if (!item.valid || (item.status_word & 0x006F) != 0x0027) {
+      return Result::fail(
+        CoreError::kWriteFailed,
+        std::string(descriptors[index].joint_name) + " 还没使能，不能进入 MIT");
+    }
+  }
+  path_active_ = false;
+  path_.clear();
+  motion_armed_ = false;
+  mit_have_sample_.fill(false);
+  mit_velocity_.fill(0.0);
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    mit_hold_pulse_[index] = latest_[index].actual_position;
+    held_pulse_[index] = latest_[index].actual_position;
+    goal_pulse_[index] = latest_[index].actual_position;
+  }
+  mit_active_ = true;
+  link_->requestDriveMode(kZeroErrCyclicTorqueMode);
+  return Result{
+    CoreError::kOk,
+    "MIT 已保持当前位置。刚度很小，请扶着手臂。按 n 回到位置模式"};
+}
+
+Result SoemEthercatTransport::exitMitHold()
+{
+  if (!active_ || link_ == nullptr) {
+    return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
+  }
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  mit_active_ = false;
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    if (!latest_[index].valid) {
+      continue;
+    }
+    held_pulse_[index] = latest_[index].actual_position;
+    goal_pulse_[index] = latest_[index].actual_position;
+  }
+  link_->requestDriveMode(kZeroErrCyclicPositionMode);
+  return Result{CoreError::kOk, "已回到位置保持，目标对齐当前编码器"};
 }
 
 double SoemEthercatTransport::pulseToPosition(std::size_t index, std::int32_t pulse) const

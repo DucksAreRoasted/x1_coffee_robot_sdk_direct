@@ -11,6 +11,8 @@ struct ZeroErrOutput
   std::int32_t target_position;
   std::uint32_t digital_output;
   std::uint16_t control_word;
+  // 周期同步扭矩目标。位置模式下驱动器忽略它，MIT 时才使用。
+  std::int16_t target_torque;
 } __attribute__((packed));
 
 struct ZeroErrInput

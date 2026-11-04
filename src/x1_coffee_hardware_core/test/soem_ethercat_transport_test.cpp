@@ -181,24 +181,29 @@ TEST(SoemEthercatTransport, each_axis_enables_on_its_own_and_a_stuck_axis_retrie
     EXPECT_EQ(raw->last[2].target_position, feedback[2].actual_position);
     words.push_back(raw->last[2].control_word);
   }
-  // 停住时：接通、关电压、关机间隔，然后再次接通。不因次数上限停掉。
-  int gaps = 0;
+  // 停住时：接通字、使能字、关电压、关机满 300 ms，然后再次接通。
+  std::vector<int> gap_lengths;
   int gap_cycles = 0;
-  bool in_gap = false;
+  int enable_words = 0;
   for (const std::uint16_t word : words) {
-    EXPECT_TRUE(word == 0x0007 || word == 0x0000 || word == 0x0006);
+    EXPECT_TRUE(word == 0x0007 || word == 0x000F || word == 0x0000 || word == 0x0006);
+    if (word == 0x000F) {
+      ++enable_words;
+    }
     if (word == 0x0006) {
-      if (!in_gap) {
-        ++gaps;
-      }
-      in_gap = true;
       ++gap_cycles;
-    } else {
-      in_gap = false;
+    } else if (gap_cycles > 0) {
+      gap_lengths.push_back(gap_cycles);
+      gap_cycles = 0;
     }
   }
-  EXPECT_GE(gaps, 2);
-  EXPECT_EQ(gap_cycles, gaps * 600);
+  if (gap_cycles > 0) {
+    gap_lengths.push_back(gap_cycles);
+  }
+  EXPECT_GT(enable_words, 0);
+  ASSERT_GE(gap_lengths.size(), 2u);
+  EXPECT_EQ(gap_lengths[0], 600);
+  EXPECT_EQ(gap_lengths[1], 600);
 }
 
 TEST(SoemEthercatTransport, csp_target_slews_without_a_single_cycle_jump)
@@ -339,6 +344,38 @@ TEST(SoemEthercatTransport, a_stalled_axis_does_not_block_axes_that_are_already_
       EXPECT_EQ(raw->last[i].control_word, 0x000F);
     }
   }
+}
+
+TEST(SoemEthercatTransport, mit_hold_pulls_back_toward_the_latched_pose)
+{
+  auto link = std::make_unique<FakeLink>();
+  link->status = 0x1237;
+  FakeLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  const auto entered = transport.enterMitHold();
+  ASSERT_TRUE(entered) << entered.detail;
+  raw->replay();
+  EXPECT_EQ(raw->last[0].target_torque, 0);
+  EXPECT_EQ(raw->last[0].target_position, 1000);
+
+  std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    feedback[index].valid = true;
+    feedback[index].status_word = 0x1237;
+    feedback[index].actual_position = 1000 * static_cast<std::int32_t>(index + 1);
+  }
+  feedback[0].actual_position = 1100;
+  raw->cycle(feedback, &raw->last);
+  EXPECT_LT(raw->last[0].target_torque, 0);
+  EXPECT_GE(raw->last[0].target_torque, -80);
+  EXPECT_EQ(raw->last[0].target_position, 1100);
+
+  const auto left = transport.exitMitHold();
+  ASSERT_TRUE(left) << left.detail;
+  raw->cycle(feedback, &raw->last);
+  EXPECT_EQ(raw->last[0].target_torque, 0);
 }
 
 TEST(EnableTrace, preserves_previous_submitted_target_and_counts_transient_bus_errors)
