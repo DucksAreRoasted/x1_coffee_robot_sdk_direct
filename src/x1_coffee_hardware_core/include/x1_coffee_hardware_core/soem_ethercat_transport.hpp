@@ -5,8 +5,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "x1_coffee_hardware_core/gtn_transport.hpp"
@@ -51,6 +53,12 @@ public:
     (void)mode;
     (void)axis_mask;
   }
+  virtual void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const
+  {
+    if (out != nullptr) {
+      out->fill(0.0);
+    }
+  }
 };
 
 // 笔记本网口上的 SOEM 主站。不加载固高库。
@@ -75,6 +83,9 @@ public:
   // 停在当前角度，主站按位置误差写 0x6071。退出后回到周期同步位置。
   Result enterMitHold();
   Result exitMitHold();
+  // 右臂自己走到两侧停稳点，记录力矩并拟合。左臂和腰不动。
+  Result startRightArmGravityCalibration();
+  Result resetRightArmGravityToUrdf();
   Result requestMovePvt(
     const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
     double duration_sec) override;
@@ -158,6 +169,15 @@ private:
   bool gravity_ready_{false};
   double rated_torque_nm_{50.0};
   double gravity_scale_{1.0};
+  std::array<double, kCoffeeAxisCount> rated_axis_nm_{};
+  std::string right_arm_gravity_yaml_;
+  std::atomic<bool> gravity_calib_stop_{false};
+  std::atomic<bool> gravity_calib_running_{false};
+  std::thread gravity_calib_thread_;
+  void runRightArmGravityCalibration();
+  bool writeRightArmGravityFile(
+    const std::array<double, 7> & mass_scale,
+    const std::array<std::array<double, 3>, 7> & com_delta) const;
   std::array<double, kCoffeeAxisCount> mit_gravity_permille_{};
   std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
   std::array<double, kCoffeeAxisCount> mit_prev_rad_{};

@@ -69,6 +69,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr brake_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr mit_hold_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr mit_exit_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_calib_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_reset_service_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr pvt_move_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pvt_result_pub_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr motion_executor_;

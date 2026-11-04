@@ -741,6 +741,8 @@ HELP = """
   z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
   m m     连按两次：只对右臂做 MIT。左臂和腰保持位置，请扶右臂
   n       退出 MIT，回到位置保持
+  g g     连按两次：右臂自己走到两侧停稳点，记录力矩并拟合。请先按 n，并让开右臂
+  r r     连按两次：右臂重力恢复 URDF 初值
   b       关断并重新抱闸
   空格    停在当前目标，不再追加
   Esc     退出
@@ -774,6 +776,8 @@ def run_teleop() -> int:
             self.mit_hold = False
             self.zero_confirm_until = 0.0
             self.mit_confirm_until = 0.0
+            self.gravity_confirm_until = 0.0
+            self.gravity_reset_until = 0.0
             self.home_confirm_until = 0.0
             self.urdf_confirm_until = 0.0
             self.last_segment_sec = SEGMENT_SEC
@@ -788,6 +792,8 @@ def run_teleop() -> int:
             self.brake_client = self.create_client(Trigger, "/x1/brake_hold")
             self.mit_hold_client = self.create_client(Trigger, "/x1/mit_hold")
             self.mit_exit_client = self.create_client(Trigger, "/x1/mit_exit")
+            self.gravity_calib_client = self.create_client(Trigger, "/x1/right_arm_gravity_calib")
+            self.gravity_reset_client = self.create_client(Trigger, "/x1/right_arm_gravity_reset")
             self.trajectory_clients = {}
 
         def attach_joint_states(self) -> None:
@@ -1069,6 +1075,24 @@ def run_teleop() -> int:
                 node.mit_confirm_until = 0.0
                 if node.call_trigger(node.mit_exit_client, "/x1/mit_exit"):
                     node.mit_hold = False
+                continue
+            if key == "g":
+                now = time.monotonic()
+                if now > node.gravity_confirm_until:
+                    node.gravity_confirm_until = now + 3.0
+                    print("\n再按一次 g：右臂自己走到标定姿态并记录两侧力矩。请先按 n，并让开右臂。")
+                    continue
+                node.gravity_confirm_until = 0.0
+                node.call_trigger(node.gravity_calib_client, "/x1/right_arm_gravity_calib")
+                continue
+            if key == "r":
+                now = time.monotonic()
+                if now > node.gravity_reset_until:
+                    node.gravity_reset_until = now + 3.0
+                    print("\n再按一次 r：右臂重力恢复 URDF 初值。")
+                    continue
+                node.gravity_reset_until = 0.0
+                node.call_trigger(node.gravity_reset_client, "/x1/right_arm_gravity_reset")
                 continue
             if key == "b":
                 node.zero_confirm_until = 0.0

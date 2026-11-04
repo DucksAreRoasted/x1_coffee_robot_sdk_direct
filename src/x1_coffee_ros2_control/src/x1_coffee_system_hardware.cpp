@@ -287,6 +287,40 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });
+  gravity_calib_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/right_arm_gravity_calib",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      auto * transport = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      if (transport == nullptr) {
+        response->success = false;
+        response->message = "当前传输层不能做右臂重力标定";
+        return;
+      }
+      const auto result = transport->startRightArmGravityCalibration();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
+  gravity_reset_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/right_arm_gravity_reset",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      auto * transport = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(
+        transport_.get());
+      if (transport == nullptr) {
+        response->success = false;
+        response->message = "当前传输层不能恢复右臂重力初值";
+        return;
+      }
+      const auto result = transport->resetRightArmGravityToUrdf();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
   pvt_result_pub_ = motion_node_->create_publisher<std_msgs::msg::String>("/x1/pvt_result", 10);
   pvt_move_sub_ = motion_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
     "/x1/pvt_move", 10,

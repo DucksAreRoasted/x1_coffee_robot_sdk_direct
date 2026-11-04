@@ -430,6 +430,13 @@ public:
     pending_drive_mode_.store(packed);
   }
 
+  void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const override
+  {
+    if (out != nullptr) {
+      *out = rated_nm_;
+    }
+  }
+
   Result shutdownToInit() override
   {
     if (shutdown_started_.exchange(true)) {
@@ -702,7 +709,11 @@ private:
       rated_mnm &= 0xFFFF;
     }
     if (rc > 0) {
-      say("● 轴 %u 额定力矩 %.2f N·m", slave, static_cast<double>(rated_mnm) / 1000.0);
+      const double rated_nm = static_cast<double>(rated_mnm) / 1000.0;
+      if (active_link_ != nullptr) {
+        active_link_->rated_nm_[static_cast<std::size_t>(slave - 1)] = rated_nm;
+      }
+      say("● 轴 %u 额定力矩 %.2f N·m", slave, rated_nm);
     } else {
       say("! 轴 %u 读不到额定力矩 0x6076", slave);
     }
@@ -927,6 +938,7 @@ private:
 
   ecx_contextt context_{};
   std::atomic<std::uint32_t> pending_drive_mode_{0};
+  std::array<double, kCoffeeAxisCount> rated_nm_{};
   std::uint8_t iomap_[8192]{};
   bool opened_{false};
   std::array<bool, kCoffeeAxisCount> torque_axis_{};
@@ -1003,6 +1015,10 @@ SoemEthercatTransport::SoemEthercatTransport(std::unique_ptr<EthercatLink> link)
 
 SoemEthercatTransport::~SoemEthercatTransport()
 {
+  gravity_calib_stop_.store(true);
+  if (gravity_calib_thread_.joinable()) {
+    gravity_calib_thread_.join();
+  }
   if (active_ && link_) {
     link_->shutdownToInit();
   }
@@ -1059,6 +1075,7 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
   }
   if (gravity_ready_) {
     if (const std::string * yaml = findParameter(parameters, "right_arm_gravity_yaml")) {
+      right_arm_gravity_yaml_ = *yaml;
       std::array<double, 7> mass_scale{};
       mass_scale.fill(1.0);
       std::array<std::array<double, 3>, 7> com_delta{};
@@ -1198,6 +1215,7 @@ Result SoemEthercatTransport::activate()
     servo_wait_logged_sec_ = -1;
     servo_wait_done_logged_ = false;
   }
+  link_->copyRatedTorqueNm(&rated_axis_nm_);
   active_ = true;
   closed_ = false;
   return Result::ok();
@@ -1744,6 +1762,252 @@ Result SoemEthercatTransport::positionToPulse(
   }
   *pulse = converted;
   return Result::ok();
+}
+
+bool SoemEthercatTransport::writeRightArmGravityFile(
+  const std::array<double, 7> & mass_scale,
+  const std::array<std::array<double, 3>, 7> & com_delta) const
+{
+  if (right_arm_gravity_yaml_.empty()) {
+    return false;
+  }
+  std::ofstream output(right_arm_gravity_yaml_);
+  if (!output) {
+    return false;
+  }
+  output << "# 右臂 r1 到 r7。质量倍率相对 URDF，质心偏移单位米。\n";
+  output << "mass_scale:";
+  for (double value : mass_scale) {
+    output << " " << value;
+  }
+  output << "\n";
+  const char * keys[3] = {"com_dx:", "com_dy:", "com_dz:"};
+  for (int axis = 0; axis < 3; ++axis) {
+    output << keys[axis];
+    for (const auto & delta : com_delta) {
+      output << " " << delta[axis];
+    }
+    output << "\n";
+  }
+  return true;
+}
+
+Result SoemEthercatTransport::resetRightArmGravityToUrdf()
+{
+  if (!gravity_ready_) {
+    return Result::fail(CoreError::kInvalidConfiguration, "没有 URDF 重力模型");
+  }
+  std::array<double, 7> scale{};
+  scale.fill(1.0);
+  std::array<std::array<double, 3>, 7> delta{};
+  if (!gravity_.setRightArmCorrection(scale, delta)) {
+    return Result::fail(CoreError::kInvalidConfiguration, "右臂连杆没有对上 URDF");
+  }
+  writeRightArmGravityFile(scale, delta);
+  say("✓ 右臂重力已恢复 URDF 初值");
+  return Result{CoreError::kOk, "右臂质量倍率和质心偏移已恢复为 URDF 初值"};
+}
+
+Result SoemEthercatTransport::startRightArmGravityCalibration()
+{
+  if (!active_ || !gravity_ready_) {
+    return Result::fail(CoreError::kTransportUnavailable, "重力模型还没准备好");
+  }
+  if (mit_active_) {
+    return Result::fail(CoreError::kWriteFailed, "请先按 n 退出 MIT，右臂才能自己走到标定姿态");
+  }
+  if (gravity_calib_running_.exchange(true)) {
+    return Result::fail(CoreError::kWriteFailed, "右臂标定已经在进行");
+  }
+  if (gravity_calib_thread_.joinable()) {
+    gravity_calib_thread_.join();
+  }
+  gravity_calib_stop_.store(false);
+  gravity_calib_thread_ = std::thread([this]() {runRightArmGravityCalibration();});
+  return Result{CoreError::kOk, "右臂开始自动标定：自己走到两侧停稳点并记录力矩。请让开右臂"};
+}
+
+void SoemEthercatTransport::runRightArmGravityCalibration()
+{
+  struct ClearRunning
+  {
+    std::atomic<bool> * flag;
+    ~ClearRunning() {flag->store(false);}
+  } clear{&gravity_calib_running_};
+  struct Pose { double q[7]; };
+  const Pose goals[] = {
+    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.2, 0.0}},
+    {{0.6, -0.9, 0.4, 1.0, 0.8, 0.2, 0.0}},
+    {{0.6, -0.9, 0.4, 1.0, -0.8, 0.2, 0.0}},
+    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.7, 0.0}},
+    {{0.6, -0.9, 0.4, 1.0, 0.0, -0.5, 0.0}},
+    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.2, 0.8}},
+    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.2, -0.8}},
+    {{0.6, -0.9, 0.8, 1.3, 0.0, 0.2, 0.0}},
+    {{0.6, -0.9, -0.4, 0.6, 0.0, 0.2, 0.0}},
+    {{0.2, -0.5, 0.2, 0.8, 0.0, 0.1, 0.0}},
+    {{1.0, -1.3, 0.2, 1.1, 0.0, 0.2, 0.0}},
+    {{0.6, -1.5, 0.0, 0.9, 0.3, 0.0, 0.3}},
+  };
+  const double lower[7] = {-3.05, -3.05, -3.05, -2.00, -3.05, -1.65, -6.1};
+  const double upper[7] = {3.05, 0.08, 3.05, 1.48, 3.05, 1.65, 6.1};
+  const double approach[7] = {0.12, 0.10, 0.12, 0.12, 0.12, 0.10, 0.12};
+
+  auto clamp_pose = [&](Pose pose) {
+      for (int joint = 0; joint < 7; ++joint) {
+        pose.q[joint] = std::min(upper[joint], std::max(lower[joint], pose.q[joint]));
+      }
+      return pose;
+    };
+  auto read_state = [&](std::array<double, kCoffeeAxisCount> * q,
+      std::array<double, 7> * tau_nm) {
+      std::lock_guard<std::mutex> lock(sample_mu_);
+      for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+        (*q)[index] = latest_[index].valid ?
+          pulseToPosition(index, latest_[index].actual_position) : 0.0;
+      }
+      for (int joint = 0; joint < 7; ++joint) {
+        const std::size_t index = static_cast<std::size_t>(8 + joint);
+        const double rated = rated_axis_nm_[index] > 0.0 ? rated_axis_nm_[index] : rated_torque_nm_;
+        (*tau_nm)[static_cast<std::size_t>(joint)] =
+          static_cast<double>(latest_[index].actual_torque) * rated / 1000.0;
+      }
+    };
+  auto move_to = [&](const Pose & right) -> bool {
+      std::array<double, kCoffeeAxisCount> q{};
+      std::array<double, 7> ignored{};
+      read_state(&q, &ignored);
+      std::array<double, kCoffeeAxisCount> goal = q;
+      double farthest = 0.0;
+      for (int joint = 0; joint < 7; ++joint) {
+        farthest = std::max(farthest, std::abs(right.q[joint] - q[static_cast<std::size_t>(8 + joint)]));
+        goal[static_cast<std::size_t>(8 + joint)] = right.q[joint];
+      }
+      const double duration = std::max(1.5, farthest / 0.12);
+      const Result moved = requestMovePvtSegments({goal}, {duration});
+      if (!moved) {
+        say("✗ 右臂标定移动被拒绝：%s", moved.detail.c_str());
+        return false;
+      }
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+      auto quiet_since = std::chrono::steady_clock::now();
+      std::array<double, kCoffeeAxisCount> previous = q;
+      auto previous_time = std::chrono::steady_clock::now();
+      while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::array<double, kCoffeeAxisCount> now_q{};
+        read_state(&now_q, &ignored);
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double>(now - previous_time).count();
+        double speed = 0.0;
+        double error = 0.0;
+        for (int joint = 0; joint < 7; ++joint) {
+          const std::size_t index = static_cast<std::size_t>(8 + joint);
+          if (dt > 1e-3) {
+            speed = std::max(speed, std::abs(now_q[index] - previous[index]) / dt);
+          }
+          error = std::max(error, std::abs(now_q[index] - right.q[joint]));
+        }
+        previous = now_q;
+        previous_time = now;
+        if (!(speed < 0.05 && error < 0.05)) {
+          quiet_since = now;
+        } else if (std::chrono::duration<double>(now - quiet_since).count() > 1.0) {
+          return true;
+        }
+      }
+      say("✗ 右臂没有在限时内停稳");
+      return false;
+    };
+  auto record = [&](std::array<double, kCoffeeAxisCount> * q, std::array<double, 7> * tau) -> bool {
+      std::array<double, 7> sum{};
+      std::array<double, kCoffeeAxisCount> last_q{};
+      constexpr int kSamples = 10;
+      for (int sample = 0; sample < kSamples; ++sample) {
+        if (gravity_calib_stop_.load()) {
+          return false;
+        }
+        std::array<double, 7> one{};
+        read_state(&last_q, &one);
+        for (int joint = 0; joint < 7; ++joint) {
+          sum[static_cast<std::size_t>(joint)] += one[static_cast<std::size_t>(joint)];
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      *q = last_q;
+      for (int joint = 0; joint < 7; ++joint) {
+        (*tau)[static_cast<std::size_t>(joint)] = sum[static_cast<std::size_t>(joint)] / kSamples;
+      }
+      return true;
+    };
+
+  say("● 右臂开始自动标定，请让开");
+  std::vector<std::array<double, kCoffeeAxisCount>> poses;
+  std::vector<std::array<double, 7>> torques;
+  for (const Pose & goal : goals) {
+    if (gravity_calib_stop_.load()) {
+      break;
+    }
+    std::array<double, kCoffeeAxisCount> q_sum{};
+    std::array<double, 7> tau_sum{};
+    int sides = 0;
+    for (int sign : {1, -1}) {
+      Pose side = goal;
+      for (int joint = 0; joint < 7; ++joint) {
+        side.q[joint] = goal.q[joint] + sign * approach[joint];
+      }
+      side = clamp_pose(side);
+      say("● 右臂走向标定姿态");
+      if (!move_to(side)) {
+        continue;
+      }
+      std::array<double, kCoffeeAxisCount> q{};
+      std::array<double, 7> tau{};
+      if (!record(&q, &tau)) {
+        continue;
+      }
+      for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+        q_sum[index] += q[index];
+      }
+      for (int joint = 0; joint < 7; ++joint) {
+        tau_sum[static_cast<std::size_t>(joint)] += tau[static_cast<std::size_t>(joint)];
+      }
+      ++sides;
+    }
+    if (sides != 2) {
+      say("! 这一姿态两侧没有都记到，跳过");
+      continue;
+    }
+    for (double & value : q_sum) {
+      value *= 0.5;
+    }
+    for (double & value : tau_sum) {
+      value *= 0.5;
+    }
+    poses.push_back(q_sum);
+    torques.push_back(tau_sum);
+    say("✓ 已记录一对停稳力矩，累计 %zu 组", poses.size());
+  }
+  if (poses.size() < 8) {
+    say("✗ 有效姿态只有 %zu 组，没有拟合", poses.size());
+    return;
+  }
+  std::array<double, 7> scale{};
+  std::array<std::array<double, 3>, 7> delta{};
+  std::string error;
+  if (!gravity_.identifyRightArm(poses, torques, &scale, &delta, &error)) {
+    say("✗ 右臂拟合失败：%s", error.c_str());
+    return;
+  }
+  if (!gravity_.setRightArmCorrection(scale, delta)) {
+    say("✗ 拟合结果没有写进模型");
+    return;
+  }
+  if (!writeRightArmGravityFile(scale, delta)) {
+    say("! 拟合已生效，但没有写成文件");
+  }
+  say("✓ 右臂重力拟合完成，质量倍率 %.2f %.2f %.2f %.2f %.2f %.2f %.2f",
+    scale[0], scale[1], scale[2], scale[3], scale[4], scale[5], scale[6]);
 }
 
 }  // namespace x1_coffee_hardware_core
