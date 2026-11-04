@@ -245,8 +245,60 @@ bool UrdfGravity::load(const std::string & path, std::string * error)
     }
     return false;
   }
+  buildFlat();
   ready_ = true;
   return true;
+}
+
+void UrdfGravity::buildFlat()
+{
+  flat_links_.clear();
+  flat_joints_.clear();
+  flat_children_.clear();
+  std::unordered_map<std::string, int> ids;
+  for (const auto & item : links_) {
+    ids[item.first] = static_cast<int>(flat_links_.size());
+    FlatLink link;
+    link.mass = item.second.mass;
+    for (int axis = 0; axis < 3; ++axis) {
+      link.com[axis] = item.second.com[static_cast<std::size_t>(axis)];
+    }
+    flat_links_.push_back(link);
+  }
+  root_id_ = ids.count("dummy_root") ? ids["dummy_root"] : 0;
+  flat_children_.resize(flat_links_.size());
+  flat_joints_.resize(joints_.size());
+  for (std::size_t index = 0; index < joints_.size(); ++index) {
+    const Joint & source = joints_[index];
+    FlatJoint & joint = flat_joints_[index];
+    joint.parent = ids[source.parent];
+    joint.child = ids[source.child];
+    joint.axis_index = source.axis_index;
+    joint.revolute = source.revolute;
+    for (int axis = 0; axis < 3; ++axis) {
+      joint.xyz[axis] = source.xyz[static_cast<std::size_t>(axis)];
+    }
+    rpyMatrix(source.rpy, joint.origin_r);
+    double norm = std::sqrt(
+      source.axis[0] * source.axis[0] + source.axis[1] * source.axis[1] +
+      source.axis[2] * source.axis[2]);
+    for (int axis = 0; axis < 3; ++axis) {
+      joint.axis[axis] = norm > 0.0 ? source.axis[static_cast<std::size_t>(axis)] / norm : 0.0;
+    }
+    flat_children_[static_cast<std::size_t>(joint.parent)].push_back(static_cast<int>(index));
+  }
+  const auto collect = [&](auto && self, int link, FlatJoint * joint) -> void {
+      if (joint->subtree_count >= kMaxLinks) {
+        return;
+      }
+      joint->subtree[joint->subtree_count++] = link;
+      for (const int child_joint : flat_children_[static_cast<std::size_t>(link)]) {
+        self(self, flat_joints_[static_cast<std::size_t>(child_joint)].child, joint);
+      }
+    };
+  for (FlatJoint & joint : flat_joints_) {
+    collect(collect, joint.child, &joint);
+  }
 }
 
 bool UrdfGravity::torques(
@@ -257,41 +309,29 @@ bool UrdfGravity::torques(
     return false;
   }
   tau_nm->fill(0.0);
-  std::unordered_map<std::string, Pose> poses;
-  std::unordered_map<std::string, std::array<double, 3>> com_world;
-  const auto walk = [&](auto && self, const std::string & link, const Pose & pose) -> void {
-      poses[link] = pose;
-      const auto found = links_.find(link);
-      if (found != links_.end()) {
-        std::array<double, 3> com{};
-        for (int row = 0; row < 3; ++row) {
-          com[static_cast<std::size_t>(row)] = pose.p[row];
-          for (int col = 0; col < 3; ++col) {
-            com[static_cast<std::size_t>(row)] +=
-              pose.r[row][col] * found->second.com[static_cast<std::size_t>(col)];
-          }
-        }
-        com_world[link] = com;
-      }
-      const auto kids = children_.find(link);
-      if (kids == children_.end()) {
+  if (root_id_ < 0 || flat_links_.empty()) {
+    return false;
+  }
+  Pose poses[kMaxLinks];
+  double com_world[kMaxLinks][3];
+  const auto walk = [&](auto && self, int link, const Pose & pose) -> void {
+      if (link < 0 || link >= static_cast<int>(flat_links_.size()) || link >= kMaxLinks) {
         return;
       }
-      for (const int index : kids->second) {
-        const Joint & joint = joints_[static_cast<std::size_t>(index)];
-        double origin_r[3][3];
-        rpyMatrix(joint.rpy, origin_r);
-        Pose child = multiply(pose, origin_r, joint.xyz);
+      poses[link] = pose;
+      const FlatLink & body = flat_links_[static_cast<std::size_t>(link)];
+      for (int row = 0; row < 3; ++row) {
+        com_world[link][row] = pose.p[row];
+        for (int col = 0; col < 3; ++col) {
+          com_world[link][row] += pose.r[row][col] * body.com[col];
+        }
+      }
+      for (const int index : flat_children_[static_cast<std::size_t>(link)]) {
+        const FlatJoint & joint = flat_joints_[static_cast<std::size_t>(index)];
+        std::array<double, 3> xyz{joint.xyz[0], joint.xyz[1], joint.xyz[2]};
+        Pose child = multiply(pose, joint.origin_r, xyz);
         if (joint.revolute && joint.axis_index >= 0) {
-          const double norm = std::sqrt(
-            joint.axis[0] * joint.axis[0] + joint.axis[1] * joint.axis[1] +
-            joint.axis[2] * joint.axis[2]);
-          std::array<double, 3> axis = joint.axis;
-          if (norm > 0.0) {
-            for (double & component : axis) {
-              component /= norm;
-            }
-          }
+          std::array<double, 3> axis{joint.axis[0], joint.axis[1], joint.axis[2]};
           double spin[3][3];
           rodrigues(axis, q_rad[static_cast<std::size_t>(joint.axis_index)], spin);
           child = multiplyRotation(child, spin);
@@ -299,63 +339,33 @@ bool UrdfGravity::torques(
         self(self, joint.child, child);
       }
     };
-  walk(walk, "dummy_root", Pose{});
+  walk(walk, root_id_, Pose{});
 
-  const auto collect = [&](auto && self, const std::string & link, std::vector<std::string> * names) -> void {
-      names->push_back(link);
-      const auto kids = children_.find(link);
-      if (kids == children_.end()) {
-        return;
-      }
-      for (const int index : kids->second) {
-        self(self, joints_[static_cast<std::size_t>(index)].child, names);
-      }
-    };
-
-  for (const Joint & joint : joints_) {
-    if (!joint.revolute || joint.axis_index < 0) {
+  for (const FlatJoint & joint : flat_joints_) {
+    if (!joint.revolute || joint.axis_index < 0 || joint.parent < 0) {
       continue;
     }
-    const auto parent = poses.find(joint.parent);
-    if (parent == poses.end()) {
-      continue;
-    }
-    double origin_r[3][3];
-    rpyMatrix(joint.rpy, origin_r);
-    const Pose frame = multiply(parent->second, origin_r, joint.xyz);
-    double local_axis[3] = {joint.axis[0], joint.axis[1], joint.axis[2]};
-    const double norm = std::sqrt(
-      local_axis[0] * local_axis[0] + local_axis[1] * local_axis[1] + local_axis[2] * local_axis[2]);
-    if (norm > 0.0) {
-      for (double & component : local_axis) {
-        component /= norm;
-      }
-    }
+    std::array<double, 3> xyz{joint.xyz[0], joint.xyz[1], joint.xyz[2]};
+    const Pose frame = multiply(poses[joint.parent], joint.origin_r, xyz);
     double axis_w[3] = {0.0, 0.0, 0.0};
     for (int row = 0; row < 3; ++row) {
       for (int col = 0; col < 3; ++col) {
-        axis_w[row] += frame.r[row][col] * local_axis[col];
+        axis_w[row] += frame.r[row][col] * joint.axis[col];
       }
     }
-    std::vector<std::string> subtree;
-    collect(collect, joint.child, &subtree);
     double tau = 0.0;
-    for (const std::string & name : subtree) {
-      const auto link = links_.find(name);
-      const auto at = com_world.find(name);
-      if (link == links_.end() || at == com_world.end() || !(link->second.mass > 0.0)) {
+    for (int count = 0; count < joint.subtree_count; ++count) {
+      const int link = joint.subtree[count];
+      const double mass = flat_links_[static_cast<std::size_t>(link)].mass;
+      if (!(mass > 0.0)) {
         continue;
       }
-      const double rx = at->second[0] - frame.p[0];
-      const double ry = at->second[1] - frame.p[1];
-      const double rz = at->second[2] - frame.p[2];
-      const double fx = 0.0;
-      const double fy = 0.0;
-      const double fz = link->second.mass * kGravity;
-      const double mx = ry * fz - rz * fy;
-      const double my = rz * fx - rx * fz;
-      const double mz = rx * fy - ry * fx;
-      tau += axis_w[0] * mx + axis_w[1] * my + axis_w[2] * mz;
+      const double rx = com_world[link][0] - frame.p[0];
+      const double ry = com_world[link][1] - frame.p[1];
+      const double fz = mass * kGravity;
+      const double mx = ry * fz;
+      const double my = -rx * fz;
+      tau += axis_w[0] * mx + axis_w[1] * my;
     }
     // tau 是重力拖关节的力矩。电机前馈要把它抵消掉。
     (*tau_nm)[static_cast<std::size_t>(joint.axis_index)] = -tau;

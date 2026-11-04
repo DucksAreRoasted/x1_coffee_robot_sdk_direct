@@ -43,6 +43,31 @@ private:
   std::unordered_map<std::string, Link> links_;
   std::vector<Joint> joints_;
   std::unordered_map<std::string, std::vector<int>> children_;
+
+  // 加载时摊平，周期计算不再分配内存。
+  static constexpr int kMaxLinks = 32;
+  struct FlatLink
+  {
+    double mass{0.0};
+    double com[3]{0.0, 0.0, 0.0};
+  };
+  struct FlatJoint
+  {
+    int parent{-1};
+    int child{-1};
+    int axis_index{-1};
+    bool revolute{false};
+    double xyz[3]{0.0, 0.0, 0.0};
+    double origin_r[3][3]{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    double axis[3]{0.0, 0.0, 1.0};
+    int subtree[kMaxLinks]{};
+    int subtree_count{0};
+  };
+  std::vector<FlatLink> flat_links_;
+  std::vector<FlatJoint> flat_joints_;
+  std::vector<std::vector<int>> flat_children_;
+  int root_id_{-1};
+  void buildFlat();
 };
 
 }  // namespace x1_coffee_hardware_core

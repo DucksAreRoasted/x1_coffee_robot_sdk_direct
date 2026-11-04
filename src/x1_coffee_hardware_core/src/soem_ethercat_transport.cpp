@@ -828,6 +828,7 @@ private:
     say("● 周期通信已保持");
     int steady_cycle = 0;
     long told_overruns = 0;
+    int last_overrun_log = 0;
     timer.resetStats();
     while (!stopped()) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
@@ -845,10 +846,11 @@ private:
         }
         item.valid = wkc > 0;
       }
-      if (timer.overruns() != told_overruns) {
+      if (timer.overruns() != told_overruns && steady_cycle - last_overrun_log >= 2000) {
         told_overruns = timer.overruns();
+        last_overrun_log = steady_cycle;
         say(
-          "! 周期迟到 %ld 次，最晚 %lld 微秒",
+          "! 周期累计迟到 %ld 次，最晚 %lld 微秒",
           told_overruns, static_cast<long long>(timer.maxLateNs() / 1000));
       }
       ++steady_cycle;
