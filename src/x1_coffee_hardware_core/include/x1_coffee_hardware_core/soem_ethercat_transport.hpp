@@ -146,8 +146,8 @@ private:
   bool servo_wait_done_logged_{false};
   // 主站 MIT。扭矩单位是额定电流的千分比。上限 200，即额定的 20%。
   bool mit_active_{false};
-  double mit_kp_{60.0};
-  double mit_kd_{3.0};
+  double mit_kp_{180.0};
+  double mit_kd_{6.0};
   double mit_limit_{200.0};
   std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
   std::array<double, kCoffeeAxisCount> mit_prev_rad_{};
