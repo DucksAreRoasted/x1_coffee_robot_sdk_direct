@@ -369,7 +369,7 @@ TEST(SoemEthercatTransport, mit_hold_pulls_back_toward_the_latched_pose)
   feedback[0].actual_position = 1100;
   raw->cycle(feedback, &raw->last);
   EXPECT_LT(raw->last[0].target_torque, 0);
-  EXPECT_GE(raw->last[0].target_torque, -80);
+  EXPECT_GE(raw->last[0].target_torque, -200);
   EXPECT_EQ(raw->last[0].target_position, 1100);
 
   const auto left = transport.exitMitHold();

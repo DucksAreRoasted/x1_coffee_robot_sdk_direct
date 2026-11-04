@@ -49,7 +49,8 @@ MOVEIT_PID=$!
 echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}，连接下位机 192.168.2.230。"
 echo "已启动 MoveIt / RViz，日志: ${MOVEIT_LOG}"
 echo "下位机需已经打印“15 轴已使能并保持”。"
-echo "本终端是键盘：先等 missing=[]。1/2 选臂，w/s/a/d/q/e 平移 5 mm，Esc 退出。"
+echo "本终端是键盘：先等 missing=[]。1/2 选臂，w/s/a/d/q/e 平移 5 mm。"
+echo "m m 进入 MIT 保持当前位置，n 回到位置模式，Esc 退出。"
 echo "退出键盘时会关闭本次 RViz。"
 
 set +e

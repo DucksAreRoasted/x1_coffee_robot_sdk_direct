@@ -1592,7 +1592,7 @@ Result SoemEthercatTransport::enterMitHold()
   link_->requestDriveMode(kZeroErrCyclicTorqueMode);
   return Result{
     CoreError::kOk,
-    "MIT 已保持当前位置。刚度很小，请扶着手臂。按 n 回到位置模式"};
+    "MIT 已保持当前位置。扭矩不超过额定的 20%，请扶着手臂。按 n 回到位置模式"};
 }
 
 Result SoemEthercatTransport::exitMitHold()
