@@ -4,7 +4,7 @@
 
 当前机器是 15 轴 `coffee_15_no_slide`：`Joint_Body` 加左右各 7 个旋转关节。实机总线是固高 GEN/GTN 与 EtherCAT，关节模组见 eRob 手册。生产传输层是 `ProductionGtnTransport`，通过 `dlopen` 加载 `src/x1_coffee_integration/vendor/gtn/libgxn_x64.so`。未链接生产适配时使用 `PendingGtnTransport`，必须失败关闭，禁止自动改走 fake。
 
-本工作区已有 Git 仓库，保留历史提交。2026-11-04 的上下位机统一工作分支为 `sync/direct-ethercat-20261104`；目前未配置远程仓库，直连版本的工作区改动尚未提交。`.gitignore` 排除 `build/`、`install/`、`log/`、`.colcon/`、实机运行日志及已解压的重复 `manual.zip`。
+本工作区已有 Git 仓库，保留历史提交。直连 EtherCAT 的存档在分支 `main`（提交 `e2055e1`，由 `sync/direct-ethercat-20261104` 改名而来）。旧历史仍在 `master`。目前未配置远程仓库。`.gitignore` 排除 `build/`、`install/`、`log/`、`.colcon/`、实机运行日志及已解压的重复 `manual.zip`。
 
 ## 项目地图
 
