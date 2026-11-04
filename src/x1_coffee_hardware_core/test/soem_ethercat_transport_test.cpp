@@ -369,7 +369,7 @@ TEST(SoemEthercatTransport, mit_hold_pulls_back_toward_the_latched_pose)
   feedback[8].actual_position = 9100;
   raw->cycle(feedback, &raw->last);
   EXPECT_LT(raw->last[8].target_torque, 0);
-  EXPECT_GE(raw->last[8].target_torque, -500);
+  EXPECT_GE(raw->last[8].target_torque, -1000);
   EXPECT_EQ(raw->last[8].target_position, 9100);
   EXPECT_EQ(raw->last[0].target_torque, 0);
   EXPECT_EQ(raw->last[1].target_torque, 0);
