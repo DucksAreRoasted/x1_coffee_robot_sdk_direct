@@ -54,6 +54,10 @@
           <param name="motion_enabled">${motion_enabled}</param>
           <!-- 上电使能只锁存当前位置。motion_enabled 仍是运动开关，默认两者都关闭。 -->
           <param name="drives_enabled">${drives_enabled}</param>
+          <param name="gravity_urdf">$(find arm_describle)/urdf/HRB3Q-LC.urdf</param>
+          <!-- 0x6076 尚未读出。先用 URDF 的 effort 50 N·m 把牛·米换成额定电流千分比。 -->
+          <param name="rated_torque_nm">50</param>
+          <param name="gravity_scale">1.0</param>
           <param name="pt_cycle_ms">10</param>
           <!--
             Keep the initial dynamic-PT burst deliberately small.  The

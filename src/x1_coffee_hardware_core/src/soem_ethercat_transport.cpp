@@ -1011,6 +1011,24 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
       return Result::fail(CoreError::kInvalidConfiguration, "drives_enabled 必须为 true/false 或 1/0");
     }
   }
+  gravity_ready_ = false;
+  if (const std::string * urdf = findParameter(parameters, "gravity_urdf")) {
+    std::string error;
+    if (!gravity_.load(*urdf, &error)) {
+      return Result::fail(CoreError::kInvalidConfiguration, error);
+    }
+    gravity_ready_ = true;
+  }
+  if (const std::string * rated = findParameter(parameters, "rated_torque_nm")) {
+    if (!parseDouble(*rated, &rated_torque_nm_) || !(rated_torque_nm_ > 0.0)) {
+      return Result::fail(CoreError::kInvalidConfiguration, "rated_torque_nm 必须为正数");
+    }
+  }
+  if (const std::string * scale = findParameter(parameters, "gravity_scale")) {
+    if (!parseDouble(*scale, &gravity_scale_) || !std::isfinite(gravity_scale_)) {
+      return Result::fail(CoreError::kInvalidConfiguration, "gravity_scale 必须是有限数值");
+    }
+  }
   torque_axis_.fill(false);
   if (const std::string * axes = findParameter(parameters, "zero_torque_axes")) {
     std::stringstream stream(*axes);
@@ -1415,6 +1433,21 @@ void SoemEthercatTransport::onCycle(
   std::lock_guard<std::mutex> lock(sample_mu_);
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
   samplePath();
+  if (mit_active_ && gravity_ready_ && rated_torque_nm_ > 0.0) {
+    std::array<double, kCoffeeAxisCount> q{};
+    for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+      if (feedback[index].valid) {
+        q[index] = pulseToPosition(index, feedback[index].actual_position);
+      }
+    }
+    std::array<double, kCoffeeAxisCount> tau{};
+    if (gravity_.torques(q, &tau)) {
+      for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+        mit_gravity_permille_[index] =
+          gravity_scale_ * tau[index] / rated_torque_nm_ * 1000.0;
+      }
+    }
+  }
   bool servo_waiting = false;
   if (servo_ready_delay_ms_ > 0) {
     const int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1546,6 +1579,7 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   mit_have_sample_[index] = true;
   mit_velocity_[index] += 0.05 * (velocity - mit_velocity_[index]);
   double command = mit_kp_ * (desired - measured) - mit_kd_ * mit_velocity_[index];
+  command += mit_gravity_permille_[index];
   if (command > mit_limit_) {
     command = mit_limit_;
   }
@@ -1592,6 +1626,8 @@ Result SoemEthercatTransport::enterMitHold()
   link_->requestDriveMode(kZeroErrCyclicTorqueMode);
   return Result{
     CoreError::kOk,
+    gravity_ready_ ?
+    "MIT 已保持当前位置，并按当前角度补偿重力。扭矩不超过额定的 20%。请扶着手臂" :
     "MIT 已保持当前位置。扭矩不超过额定的 20%，请扶着手臂。按 n 回到位置模式"};
 }
 

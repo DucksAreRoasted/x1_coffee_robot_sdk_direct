@@ -22,6 +22,7 @@ add_library(${PROJECT_NAME} SHARED
   src/zeroerr_drive.cpp
   src/pending_gtn_transport.cpp
   src/soem_ethercat_transport.cpp
+  src/urdf_gravity.cpp
 )
 target_include_directories(${PROJECT_NAME}
   PUBLIC
@@ -65,6 +66,10 @@ if(BUILD_TESTING)
   target_link_libraries(direct_ecat_init_test ${PROJECT_NAME})
   ament_add_gtest(zeroerr_drive_test test/zeroerr_drive_test.cpp)
   target_link_libraries(zeroerr_drive_test ${PROJECT_NAME})
+  ament_add_gtest(urdf_gravity_test test/urdf_gravity_test.cpp)
+  target_link_libraries(urdf_gravity_test ${PROJECT_NAME})
+  target_compile_definitions(urdf_gravity_test PRIVATE
+    X1_GRAVITY_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../arm_describle/urdf/HRB3Q-LC.urdf")
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

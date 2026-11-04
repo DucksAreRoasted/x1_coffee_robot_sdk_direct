@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "x1_coffee_hardware_core/gtn_transport.hpp"
+#include "x1_coffee_hardware_core/urdf_gravity.hpp"
 
 namespace x1_coffee_hardware_core
 {
@@ -149,6 +150,12 @@ private:
   double mit_kp_{180.0};
   double mit_kd_{6.0};
   double mit_limit_{200.0};
+  // URDF 静重力，单位 N·m。换成 0x6071 千分比时除以额定力矩。额定力矩尚未从关节读出，先用 50 N·m。
+  UrdfGravity gravity_;
+  bool gravity_ready_{false};
+  double rated_torque_nm_{50.0};
+  double gravity_scale_{1.0};
+  std::array<double, kCoffeeAxisCount> mit_gravity_permille_{};
   std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
   std::array<double, kCoffeeAxisCount> mit_prev_rad_{};
   std::array<double, kCoffeeAxisCount> mit_velocity_{};
