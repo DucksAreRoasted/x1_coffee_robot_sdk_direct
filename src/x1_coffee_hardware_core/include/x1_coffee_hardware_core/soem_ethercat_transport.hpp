@@ -146,13 +146,14 @@ private:
   std::chrono::steady_clock::time_point servo_wait_begin_{};
   int servo_wait_logged_sec_{-1};
   bool servo_wait_done_logged_{false};
-  // 主站 MIT。扭矩单位是额定电流的千分比。上限 200，即额定的 20%。
+  // 主站 MIT。扭矩单位是额定电流的千分比。
+  // 零位肩肘重力约额定的 33%，上限必须高于它，弹簧才有余量把关节拉回按下 m 的角度。
   bool mit_active_{false};
   // 单人调试只松开右臂 r1–r7，bit 8..14。左臂和腰保持周期同步位置。
   std::uint16_t mit_mask_{0x7F00};
-  double mit_kp_{180.0};
-  double mit_kd_{6.0};
-  double mit_limit_{200.0};
+  double mit_kp_{480.0};
+  double mit_kd_{12.0};
+  double mit_limit_{500.0};
   // URDF 静重力，单位 N·m。换成 0x6071 千分比时除以额定力矩。额定力矩尚未从关节读出，先用 50 N·m。
   UrdfGravity gravity_;
   bool gravity_ready_{false};

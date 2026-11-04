@@ -1637,7 +1637,7 @@ Result SoemEthercatTransport::enterMitHold()
   return Result{
     CoreError::kOk,
     gravity_ready_ ?
-    "只松开右臂，左臂和腰仍按位置保持。右臂已加重力补偿，请扶着右臂" :
+    "只松开右臂。平衡点是按下 m 这一刻的角度，松手应回到那里。请扶着右臂" :
     "只松开右臂，左臂和腰仍按位置保持。请扶着右臂"};
 }
 
