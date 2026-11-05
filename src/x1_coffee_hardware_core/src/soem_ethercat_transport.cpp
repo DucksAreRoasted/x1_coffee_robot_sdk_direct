@@ -974,11 +974,12 @@ SoemLink * SoemLink::active_link_ = nullptr;
 constexpr double kEthercatCycleSec = 5.0e-4;
 // 手册：同一台关节下使能到再使能的间隔应大于 300 ms。500 μs 一个周期。
 constexpr int kEnableGapCycles = 600;
-// 准备接通先保持关机后的接通字 100 ms。仍不前进就按手册第 3 步发 0x000F。
-constexpr int kSwitchOnHoldCycles = 200;
-// 使能字也停 0.5 秒才关电压重走。关电压最多 0.5 秒，直到变成禁止接通。
+// 准备接通先保持接通字 0x0007 约 1 秒，等掩码离开 0x0021。
+constexpr int kSwitchOnHoldCycles = 2000;
+// 1 秒后仍是准备接通，再给使能字 0x000F 约 0.5 秒。
 constexpr int kEnableStuckCycles = 1000;
-constexpr int kEnableDisableCycles = 1000;
+// 关电压后最多再等 2 秒。看不到接通禁止就不算新一轮。
+constexpr int kVoltageOffWaitCycles = 4000;
 // 500 μs 一个周期，4000 拍约 2 秒。只给未使能的轴打摘要。
 constexpr int kEnableDebugCycles = 4000;
 
@@ -1632,18 +1633,23 @@ void SoemEthercatTransport::onCycle(
       out.control_word = 0x0006;
       continue;
     }
-    // 准备接通不前进时，先关电压回到禁止接通，再关机满 300 ms，然后重新接通。
-    // 不设次数上限，上电检查的 60 秒内会一直重试。已经使能的轴不参与。
+    // 准备接通不前进时先关电压。必须看到接通禁止，才关机满 300 ms 再接通。
+    // 状态一直停在准备接通，说明驱动器没有接受关电压，不能把它当成新一轮。
     const std::uint16_t masked_state = item.status_word & 0x006F;
     const bool ready_to_switch_on = item.valid && masked_state == 0x0021;
     if (!torque_axis_[index] && enable_phase_[index] == 1) {
       out.control_word = 0x0000;
       ++enable_backoff_cycles_[index];
       const bool switch_on_disabled = item.valid && masked_state == 0x0040;
-      if (switch_on_disabled || enable_backoff_cycles_[index] >= kEnableDisableCycles) {
+      if (switch_on_disabled) {
         enable_phase_[index] = 2;
         enable_backoff_cycles_[index] = 0;
-        say("! 轴 %zu 已关电压，等待 300 ms 后再接通", index + 1);
+        ++enable_retries_[index];
+        say("! 轴 %zu 已回到接通禁止，等待 300 ms 后再接通", index + 1);
+      } else if (enable_backoff_cycles_[index] == kVoltageOffWaitCycles) {
+        say(
+          "! 轴 %zu 没有接受关电压，状态 0x%04x，不开始新一轮",
+          index + 1, item.status_word);
       }
       continue;
     }
@@ -1660,12 +1666,12 @@ void SoemEthercatTransport::onCycle(
     }
     if (!torque_axis_[index] && ready_to_switch_on) {
       ++enable_ready_cycles_[index];
-      // 手册 5.5：0x0007 之后应发 0x000F。有的关节不把状态改成「已接通」，只认使能字。
+      // 先保持接通字。约 1 秒后掩码仍是 0x0021，才改发使能字，照顾不报告「已接通」的关节。
       if (enable_ready_cycles_[index] > kSwitchOnHoldCycles &&
         enable_ready_cycles_[index] <= kSwitchOnHoldCycles + kEnableStuckCycles)
       {
         if (enable_ready_cycles_[index] == kSwitchOnHoldCycles + 1) {
-          say("● 轴 %zu 仍是准备接通，按手册改发使能字", index + 1);
+          say("● 轴 %zu 接通字后仍是准备接通，改发使能字", index + 1);
         }
         out.control_word = 0x000F;
         continue;
@@ -1674,11 +1680,10 @@ void SoemEthercatTransport::onCycle(
         enable_phase_[index] = 1;
         enable_backoff_cycles_[index] = 0;
         enable_ready_cycles_[index] = 0;
-        ++enable_retries_[index];
         out.control_word = 0x0000;
         say(
-          "! 轴 %zu 使能字也停在准备接通，第 %d 次重试，状态 0x%04x",
-          index + 1, enable_retries_[index], item.status_word);
+          "! 轴 %zu 使能字后仍是准备接通，开始关电压，状态 0x%04x",
+          index + 1, item.status_word);
         continue;
       }
     } else if (!torque_axis_[index]) {

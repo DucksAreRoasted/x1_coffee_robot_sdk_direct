@@ -158,7 +158,7 @@ TEST(SoemEthercatTransport, target_tracks_actual_position_until_enabled)
   EXPECT_EQ(raw->last[14].control_word, 0x0007);
 }
 
-TEST(SoemEthercatTransport, each_axis_enables_on_its_own_and_a_stuck_axis_retries)
+TEST(SoemEthercatTransport, stuck_ready_axis_does_not_restart_without_switch_on_disabled)
 {
   auto link = std::make_unique<FakeLink>();
   FakeLink * raw = link.get();
@@ -181,29 +181,59 @@ TEST(SoemEthercatTransport, each_axis_enables_on_its_own_and_a_stuck_axis_retrie
     EXPECT_EQ(raw->last[2].target_position, feedback[2].actual_position);
     words.push_back(raw->last[2].control_word);
   }
-  // 停住时：接通字、使能字、关电压、关机满 300 ms，然后再次接通。
-  std::vector<int> gap_lengths;
-  int gap_cycles = 0;
-  int enable_words = 0;
-  for (const std::uint16_t word : words) {
-    EXPECT_TRUE(word == 0x0007 || word == 0x000F || word == 0x0000 || word == 0x0006);
-    if (word == 0x000F) {
-      ++enable_words;
-    }
-    if (word == 0x0006) {
-      ++gap_cycles;
-    } else if (gap_cycles > 0) {
-      gap_lengths.push_back(gap_cycles);
-      gap_cycles = 0;
+  // 停在准备接通：先 1 秒接通字，再 0.5 秒使能字，然后关电压。
+  // 状态不变成接通禁止时，不能插入 300 ms 关机再当新一轮。
+  ASSERT_EQ(words.size(), 8000u);
+  for (int cycle = 0; cycle < 2000; ++cycle) {
+    EXPECT_EQ(words[static_cast<std::size_t>(cycle)], 0x0007);
+  }
+  for (int cycle = 2000; cycle < 3000; ++cycle) {
+    EXPECT_EQ(words[static_cast<std::size_t>(cycle)], 0x000F);
+  }
+  for (int cycle = 3000; cycle < 8000; ++cycle) {
+    EXPECT_EQ(words[static_cast<std::size_t>(cycle)], 0x0000);
+  }
+}
+
+TEST(SoemEthercatTransport, voltage_off_restarts_only_after_switch_on_disabled)
+{
+  auto link = std::make_unique<FakeLink>();
+  FakeLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+
+  std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
+  for (auto & item : feedback) {
+    item.valid = true;
+    item.status_word = 0x1637;
+    item.actual_position = 1000;
+  }
+  feedback[2].status_word = 0x12b1;
+  for (int cycle = 0; cycle < 3001; ++cycle) {
+    raw->cycle(feedback, &raw->last);
+  }
+  ASSERT_EQ(raw->last[2].control_word, 0x0000);
+
+  feedback[2].status_word = 0x0040;
+  raw->cycle(feedback, &raw->last);
+  EXPECT_EQ(raw->last[2].control_word, 0x0000);
+
+  feedback[2].status_word = 0x12b1;
+  int shutdown_cycles = 0;
+  std::uint16_t word_after_gap = 0;
+  for (int cycle = 0; cycle < 700; ++cycle) {
+    raw->cycle(feedback, &raw->last);
+    if (raw->last[2].control_word == 0x0006) {
+      ++shutdown_cycles;
+    } else {
+      word_after_gap = raw->last[2].control_word;
+      break;
     }
   }
-  if (gap_cycles > 0) {
-    gap_lengths.push_back(gap_cycles);
-  }
-  EXPECT_GT(enable_words, 0);
-  ASSERT_GE(gap_lengths.size(), 2u);
-  EXPECT_EQ(gap_lengths[0], 600);
-  EXPECT_EQ(gap_lengths[1], 600);
+  EXPECT_EQ(shutdown_cycles, 600);
+  EXPECT_EQ(word_after_gap, 0x0007);
+  EXPECT_EQ(raw->last[0].control_word, 0x000F);
 }
 
 TEST(SoemEthercatTransport, csp_target_slews_without_a_single_cycle_jump)

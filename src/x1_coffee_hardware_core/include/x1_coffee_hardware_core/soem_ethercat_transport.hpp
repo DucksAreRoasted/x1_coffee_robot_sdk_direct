@@ -149,11 +149,11 @@ private:
     const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
     const std::vector<double> & segment_sec);
   void samplePath();
-  // 每台按自己的状态字走接通。停在「准备接通」超过 1 秒就退回关电压，满 300 ms 再试。
+  // 每台按自己的状态字走接通。准备接通先保持 0x0007，关电压要看到接通禁止才再试。
   std::array<int, kCoffeeAxisCount> enable_ready_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_backoff_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_retries_{};
-  // 0 按状态字走，1 关电压，2 关机并空出 300 ms。已使能的轴保持 0。
+  // 0 按状态字走，1 关电压直到接通禁止，2 关机并空出 300 ms。已使能的轴保持 0。
   std::array<int, kCoffeeAxisCount> enable_phase_{};
   // 上电使能不保证一次成功。每 2 秒打印仍未使能的轴，不改变控制字。
   void logEnableProgress(
