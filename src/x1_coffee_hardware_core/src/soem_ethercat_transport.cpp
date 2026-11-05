@@ -310,6 +310,9 @@ public:
     }
     torque_axis_ = torque_axis;
     on_cycle_ = on_cycle;
+    if (bus_operational_flag_ != nullptr) {
+      bus_operational_flag_->store(false, std::memory_order_release);
+    }
     stop_.store(false);
     {
       std::lock_guard<std::mutex> lock(wait_mu_);
@@ -448,6 +451,16 @@ public:
       return;
     }
     pending_enable_probe_.fetch_or(axis_mask);
+  }
+
+  void bindBusOperationalFlag(std::atomic<bool> * flag) override
+  {
+    bus_operational_flag_ = flag;
+  }
+
+  void bindOperationalHook(std::function<void()> hook) override
+  {
+    operational_hook_ = std::move(hook);
   }
 
   void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const override
@@ -867,9 +880,10 @@ private:
         say("● 从站进入安全运行，%d/15 台有反馈", ready);
       }
       if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
+        // 本拍的输出已经发出。simple_test 也是先送一帧有效过程数据，再请求运行。
         op_requested = true;
         op_sequence_ = OpSequence{};
-        say("● 逐台请求 15 台从站进入运行");
+        say("● 已发送有效输出，开始逐台请求 15 台从站进入运行");
       }
       // 每 100 ms 推进一步逐台进运行；广播汇总状态不能代表每台都到了运行。
       if (op_requested && (cycle % 100) == 0 && stepSequentialOp()) {
@@ -902,6 +916,13 @@ private:
       }
       wait_cv_.notify_all();
       return;
+    }
+    // 先武装 5 秒准备，再放开使能。顺序反了的话，稳态第一拍就会发出接通字。
+    if (operational_hook_) {
+      operational_hook_();
+    }
+    if (bus_operational_flag_ != nullptr) {
+      bus_operational_flag_->store(true, std::memory_order_release);
     }
     // OP 之后继续按同一节拍收发，直到关闭。
     say("● 周期通信已保持");
@@ -1279,6 +1300,8 @@ private:
   bool opened_{false};
   std::array<bool, kCoffeeAxisCount> torque_axis_{};
   Cycle on_cycle_;
+  std::atomic<bool> * bus_operational_flag_{nullptr};
+  std::function<void()> operational_hook_{};
   std::thread thread_;
   std::unique_ptr<detail::EnableTrace> enable_trace_;
   std::thread trace_thread_;
@@ -1565,6 +1588,13 @@ Result SoemEthercatTransport::activate()
     return Result::fail(CoreError::kInvalidConfiguration, "EtherCAT 传输层尚未完成配置");
   }
   debugf("activate begin");
+  link_->bindBusOperationalFlag(&bus_operational_);
+  link_->bindOperationalHook([this]() {
+      servo_ready_delay_ms_ = 5000;
+      servo_wait_begin_ = std::chrono::steady_clock::now();
+      servo_wait_logged_sec_ = -1;
+      servo_wait_done_logged_ = false;
+    });
   shutdown_outputs_ = false;
   motion_armed_ = false;
   path_active_ = false;
@@ -1586,12 +1616,6 @@ Result SoemEthercatTransport::activate()
     return opened;
   }
   debugf("activate reached OP");
-  if (dynamic_cast<SoemLink *>(link_.get()) != nullptr) {
-    servo_ready_delay_ms_ = 5000;
-    servo_wait_begin_ = std::chrono::steady_clock::now();
-    servo_wait_logged_sec_ = -1;
-    servo_wait_done_logged_ = false;
-  }
   link_->copyRatedTorqueNm(&rated_axis_nm_);
   active_ = true;
   closed_ = false;
@@ -1962,6 +1986,11 @@ void SoemEthercatTransport::onCycle(
     }
     if (!drives_enabled_) {
       out.control_word = 0x0000;
+      continue;
+    }
+    // 15 台都进入运行之前，输出只保留关机字和当前位置。使能字要等这一步之后。
+    if (!bus_operational_.load(std::memory_order_acquire)) {
+      out.control_word = 0x0006;
       continue;
     }
     // 手册 5.1.1：上电后伺服还没准备好时不写接通，只保持关机字。

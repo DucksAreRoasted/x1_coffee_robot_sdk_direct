@@ -58,6 +58,16 @@ public:
   {
     (void)axis_mask;
   }
+  // 实机主站用来通知「15 台是否都已进入运行」。替身不绑定，单测仍按已运行处理。
+  virtual void bindBusOperationalFlag(std::atomic<bool> * flag)
+  {
+    (void)flag;
+  }
+  // 全部进入运行、稳态周期开始之前调用一次。用来起 5 秒伺服准备计时。
+  virtual void bindOperationalHook(std::function<void()> hook)
+  {
+    (void)hook;
+  }
   virtual void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const
   {
     if (out != nullptr) {
@@ -134,6 +144,8 @@ private:
   bool active_{false};
   bool closed_{false};
   bool drives_enabled_{false};
+  // 真机在逐台确认运行之前为 false，这段只允许关机字。默认 true，单测替身不改它。
+  std::atomic<bool> bus_operational_{true};
   bool motion_armed_{false};
   bool shutdown_outputs_{false};
   // 周期同步位置的绝对目标。过程数据里的 0x607A 每个周期只向它走近一个速度上限。
