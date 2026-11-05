@@ -829,6 +829,7 @@ private:
     bool safeop_seen = false;
     bool op_requested = false;
     bool saw_op = false;
+    int primed_cycles = 0;
     // 重复请求运行最长约 20 秒。1 ms 一拍。超时仍按失败处理。
     for (int cycle = 0; !stopped() && cycle < 20000; ++cycle) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
@@ -872,8 +873,8 @@ private:
       if (cycle == 0 || (cycle % 1000) == 0) {
         say("● 等待从站进入运行，已有反馈 %d/15", ready);
       }
-      // 不用带超时的 statecheck：状态不符时它会睡 1 ms，把节拍拉长。
-      if ((cycle % 10) == 0) {
+      // 寄存器读取会挡住周期线程。100 ms 才看一次总线状态，不插进每一拍。
+      if (!safeop_seen && (cycle % 100) == 0) {
         ecx_readstate(&context_);
       }
       if (!safeop_seen && (context_.slavelist[0].state & 0x0f) >= EC_STATE_SAFE_OP) {
@@ -881,12 +882,16 @@ private:
         say("● 从站进入安全运行，%d/15 台有反馈", ready);
       }
       if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
-        // 本拍的输出已经发出。simple_test 也是先送一帧有效过程数据，再请求运行。
-        op_requested = true;
-        say("● 已发送有效输出，开始逐台请求 15 台从站进入运行");
+        // 官方 IgH 示例先空发若干帧，等从站自己进入运行，不每个周期改写状态。
+        if (++primed_cycles >= 100) {
+          context_.slavelist[0].state = EC_STATE_OPERATIONAL;
+          ecx_writestate(&context_, 0);
+          op_requested = true;
+          say("● 已连续发送有效输出，请求 15 台从站进入运行");
+        }
       }
-      // 每 100 ms 按 simple_test 再请求一次仍在安全运行的从站。不退回预运行。
-      if (op_requested && (cycle % 100) == 0 && pollOperational()) {
+      // 500 ms 才复查一次。还停在安全运行的从站再请求一次，不读链路寄存器。
+      if (op_requested && (cycle % 500) == 0 && pollOperational()) {
         say("✓ 15 台从站逐台确认已进入运行");
         saw_op = true;
         {
@@ -1007,8 +1012,8 @@ private:
     }
   }
 
-  // 与 SOEM simple_test 相同：读全部从站状态，错误先应答，停在安全运行就再请求运行。
-  // 不退回预运行。轴 1 常是参考时钟，退回去会把后面的从站一起打乱。
+  // 官方 IgH 示例在进运行前只收发，不反复改状态。这里 500 ms 看一次。
+  // 不退回预运行，也不在周期里读链路寄存器。
   bool pollOperational()
   {
     ecx_readstate(&context_);
@@ -1038,12 +1043,9 @@ private:
       info.state = EC_STATE_OPERATIONAL;
       ecx_writestate(&context_, slave_id);
       ++op_requests_[slave];
-      if (op_requests_[slave] == 1 || (op_requests_[slave] % 10) == 0) {
-        say(
-          "! 轴 %d 还未进入运行，状态 0x%02x AL码 0x%04x，再次请求（第 %d 次）",
-          slave, state, info.ALstatuscode, op_requests_[slave]);
-        logEscLinkDiagnostics(slave);
-      }
+      say(
+        "! 轴 %d 还未进入运行，状态 0x%02x AL码 0x%04x，再次请求（第 %d 次）",
+        slave, state, info.ALstatuscode, op_requests_[slave]);
     }
     return waiting == 0;
   }
