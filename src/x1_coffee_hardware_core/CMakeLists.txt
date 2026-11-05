@@ -38,7 +38,11 @@ target_compile_options(ecat_one_axis_jog PRIVATE -Wall -Wextra)
 add_executable(ecat_one_axis_torque src/ecat_one_axis_torque.c)
 target_link_libraries(ecat_one_axis_torque PRIVATE soem)
 target_compile_options(ecat_one_axis_torque PRIVATE -Wall -Wextra)
-install(TARGETS ecat_one_axis_jog ecat_one_axis_torque DESTINATION lib/${PROJECT_NAME})
+add_executable(ecat_safeop_diag src/ecat_safeop_diag.c)
+target_link_libraries(ecat_safeop_diag PRIVATE soem)
+target_compile_options(ecat_safeop_diag PRIVATE -Wall -Wextra)
+install(TARGETS ecat_one_axis_jog ecat_one_axis_torque ecat_safeop_diag
+  DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}
