@@ -520,12 +520,32 @@ public:
 
   int configurePdo(ecx_contextt * context, std::uint16_t slave)
   {
-    if (slave >= 1 && slave <= kCoffeeAxisCount &&
-      torque_axis_[static_cast<std::size_t>(slave - 1)])
-    {
-      return configureTorquePdo(context, slave);
+    const int result =
+      (slave >= 1 && slave <= kCoffeeAxisCount &&
+      torque_axis_[static_cast<std::size_t>(slave - 1)]) ?
+      configureTorquePdo(context, slave) :
+      configurePositionPdo(context, slave);
+    configureDcSyncMode(context, slave);
+    return result;
+  }
+
+  // eRob 通信手册 8.2.28：DC 同步模式须设 0x1C32:01h=0x2（与 SYNC0 同步）。
+  // 该对象在状态机切换时生效且不掉电保存，所以每次进安全运行前都写。
+  // 实测部分驱动读回 0x1（SM2 同步），此时安全运行到运行的切换会随机不成功。
+  static void configureDcSyncMode(ecx_contextt * context, std::uint16_t slave)
+  {
+    std::uint16_t sync_type = 0x0002;
+    const int write_rc = ecx_SDOwrite(
+      context, slave, 0x1C32, 0x01, FALSE, sizeof(sync_type), &sync_type, EC_TIMEOUTRXM);
+    std::uint16_t readback = 0;
+    int size = static_cast<int>(sizeof(readback));
+    const int read_rc = ecx_SDOread(
+      context, slave, 0x1C32, 0x01, FALSE, &size, &readback, EC_TIMEOUTRXM);
+    if (write_rc <= 0 || read_rc <= 0 || readback != sync_type) {
+      say(
+        "! 轴 %u 设 DC 同步 0x1C32:01=2 未生效，写 rc=%d 读回 0x%04x rc=%d",
+        slave, write_rc, readback, read_rc);
     }
-    return configurePositionPdo(context, slave);
   }
 
 private:
