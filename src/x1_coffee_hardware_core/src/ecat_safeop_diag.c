@@ -146,10 +146,19 @@ int main(int argc, char **argv)
   count = ecx_config_init(&ctx);
   printf("从站数 %d\n", count);
   fflush(stdout);
+  if (count == EC_NOFRAME) {
+    fprintf(stderr,
+      "没有收到任何从站应答。网口能打开，但总线上没有帧回来。\n"
+      "先停掉正在占用 enp3s0 的控制栈，确认网线链路是通的，再运行本程序。\n");
+    ecx_close(&ctx);
+    opened = 0;
+    return 1;
+  }
   if (count != MOTOR_COUNT) {
     fprintf(stderr, "从站数不是 15\n");
     return_to_init();
     ecx_close(&ctx);
+    opened = 0;
     return 1;
   }
   /* 用从站 EEPROM 里的过程数据，不重写映射，避免诊断本身改配置。 */
