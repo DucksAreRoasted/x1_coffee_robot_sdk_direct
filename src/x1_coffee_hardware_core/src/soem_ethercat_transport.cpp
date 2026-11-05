@@ -837,10 +837,11 @@ private:
         op_requested = true;
         say("● 请求 15 台从站进入运行");
       }
-      if (op_requested && context_.slavelist[0].state == EC_STATE_OPERATIONAL) {
-        say("✓ 15 台从站已进入运行");
-        // 广播读到的是汇总状态，这里逐台再核对一次。
-        superviseSlaveStates();
+      // 广播读到的是汇总状态，不能代表每台都到了运行；逐台核对，每 0.5 秒一次。
+      if (op_requested && (cycle % 1000) == 0 &&
+        superviseSlaveStates((cycle % 4000) == 0) == 0)
+      {
+        say("✓ 15 台从站逐台确认已进入运行");
         saw_op = true;
         {
           std::lock_guard<std::mutex> lock(wait_mu_);
@@ -942,25 +943,30 @@ private:
       // 每秒巡检一次各从站总线状态。安全运行态下从站只回传输入、不执行输出，
       // 状态字会一直停在准备接通。
       if ((steady_cycle % 2000) == 0) {
-        superviseSlaveStates();
+        superviseSlaveStates(true);
       }
       timer.wait(context_.DCtime);
     }
   }
 
-  void superviseSlaveStates()
+  // 返回未处于运行态的从站数量；verbose 为真时逐台打印原因和链路诊断。
+  int superviseSlaveStates(bool verbose)
   {
     ecx_readstate(&context_);
-    bool changed = false;
+    int not_op = 0;
     for (int slave = 1; slave <= context_.slavecount; ++slave) {
       ec_slavet & info = context_.slavelist[slave];
       if (info.state == EC_STATE_OPERATIONAL) {
         continue;
       }
+      ++not_op;
       // 每次掉出运行都打印，不静默恢复。
-      say(
-        "! 轴 %d 总线掉出运行，状态 0x%02x AL码 0x%04x，重新请求进入运行",
-        slave, info.state, info.ALstatuscode);
+      if (verbose) {
+        say(
+          "! 轴 %d 不在运行态，状态 0x%02x AL码 0x%04x，重新请求进入运行",
+          slave, info.state, info.ALstatuscode);
+        logEscLinkDiagnostics(slave);
+      }
       if ((info.state & EC_STATE_ERROR) != 0) {
         // 总线层错误必须先应答才能换状态；这里不动驱动器故障字。
         info.state = static_cast<std::uint16_t>((info.state & 0x0f) + EC_STATE_ACK);
@@ -970,11 +976,42 @@ private:
         info.state = EC_STATE_OPERATIONAL;
         ecx_writestate(&context_, static_cast<std::uint16_t>(slave));
       }
-      changed = true;
     }
-    if (changed) {
+    if (not_op > 0) {
       ++op_recover_requests_;
     }
+    return not_op;
+  }
+
+  // 读从站 ESC 寄存器：链路错误计数、过程数据看门狗、分布时钟同步偏差。
+  // 只读，不改任何寄存器。
+  void logEscLinkDiagnostics(int slave)
+  {
+    const std::uint16_t address = context_.slavelist[slave].configadr;
+    // 0x0300..0x0313：各端口无效帧/接收错误、转发错误、处理单元错误、链路丢失计数。
+    std::array<std::uint8_t, 20> errors{};
+    const int rc_errors = ecx_FPRD(
+      &context_.port, address, 0x0300, static_cast<std::uint16_t>(errors.size()),
+      errors.data(), EC_TIMEOUTRET);
+    // 0x0440：过程数据看门狗状态，bit0=0 表示看门狗已超时。
+    std::uint16_t watchdog = 0;
+    const int rc_watchdog = ecx_FPRD(
+      &context_.port, address, 0x0440, sizeof(watchdog), &watchdog, EC_TIMEOUTRET);
+    // 0x092C：本地时间与参考时钟的偏差，最高位是符号，低 31 位是纳秒。
+    std::uint32_t time_diff = 0;
+    const int rc_diff = ecx_FPRD(
+      &context_.port, address, 0x092C, sizeof(time_diff), &time_diff, EC_TIMEOUTRET);
+    // 0x0981：SYNC0 激活位。
+    std::uint8_t sync_active = 0;
+    const int rc_sync = ecx_FPRD(
+      &context_.port, address, 0x0981, sizeof(sync_active), &sync_active, EC_TIMEOUTRET);
+    say(
+      "! 轴 %d 链路错误 端口0 无效帧%u 接收%u 端口1 无效帧%u 接收%u 转发%u/%u 处理%u "
+      "掉线%u/%u rc=%d 看门狗 0x%04x rc=%d 时钟偏差 %s%u ns rc=%d SYNC0激活 0x%02x rc=%d",
+      slave, errors[0], errors[1], errors[2], errors[3], errors[8], errors[9], errors[12],
+      errors[0x10], errors[0x11], rc_errors,
+      watchdog, rc_watchdog, (time_diff & 0x80000000u) ? "-" : "",
+      time_diff & 0x7fffffffu, rc_diff, sync_active, rc_sync);
   }
 
   void applyPendingDriveMode()
