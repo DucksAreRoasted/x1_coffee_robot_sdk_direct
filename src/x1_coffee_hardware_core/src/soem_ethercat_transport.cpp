@@ -529,11 +529,19 @@ public:
     return result;
   }
 
-  // eRob 通信手册 8.2.28：DC 同步模式须设 0x1C32:01h=0x2（与 SYNC0 同步）。
-  // 该对象在状态机切换时生效且不掉电保存，所以每次进安全运行前都写。
-  // 实测部分驱动读回 0x1（SM2 同步），此时安全运行到运行的切换会随机不成功。
+  // eRob 通信手册 8.2.28：DC 同步模式须设 0x1C32:01h=0x2，周期写 0x1C32:0Ah。
+  // 实测只写 01h=2 时 15 台都进不了安全运行，因此默认不写，
+  // 仅在设置环境变量 X1_ECAT_DC_SYNC_TYPE2=1 时做对照实验。
   static void configureDcSyncMode(ecx_contextt * context, std::uint16_t slave)
   {
+    const char * flag = std::getenv("X1_ECAT_DC_SYNC_TYPE2");
+    if (flag == nullptr || std::string(flag) != "1") {
+      return;
+    }
+    std::uint32_t cycle_ns = 500000;
+    const int cycle_rc = ecx_SDOwrite(
+      context, slave, 0x1C32, 0x0A, FALSE, sizeof(cycle_ns), &cycle_ns, EC_TIMEOUTRXM);
+    say("● 轴 %u 实验：写 0x1C32:0A=500000 ns rc=%d", slave, cycle_rc);
     std::uint16_t sync_type = 0x0002;
     const int write_rc = ecx_SDOwrite(
       context, slave, 0x1C32, 0x01, FALSE, sizeof(sync_type), &sync_type, EC_TIMEOUTRXM);
@@ -885,6 +893,8 @@ private:
         std::lock_guard<std::mutex> lock(wait_mu_);
         failed_ = true;
         failure_detail_ = stream.str();
+        // 状态与 AL 码直接打到终端，不依赖上层是否转述。
+        say("✗ 从站未全部进入运行：%s", failure_detail_.c_str());
       }
       wait_cv_.notify_all();
       return;
