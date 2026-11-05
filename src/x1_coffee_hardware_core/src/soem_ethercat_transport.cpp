@@ -1044,7 +1044,8 @@ private:
       slave, static_cast<unsigned long long>(timeout_ns / 1000000ull), widened, rc_write);
   }
 
-  // 只读一台的 AL 状态和 AL 码。停在安全操作且没有错误时，隔 0.5 秒再请求一次运行。
+  // 只读一台的 AL 状态和 AL 码。安全操作且 AL 码为 0 时不再改写状态。
+  // 诊断里只广播一次、之后只发过程数据，15 台才会陆续进入运行。
   void refreshOneSlaveState(int slave)
   {
     if (slave < 1 || slave > context_.slavecount) {
@@ -1063,37 +1064,39 @@ private:
     last_al_state_[slave] = al.status;
     context_.slavelist[slave].state = al.status;
     context_.slavelist[slave].ALstatuscode = al.code;
-    if (!op_requested_ || (al.status & 0x0f) == EC_STATE_OPERATIONAL) {
+    if ((al.status & 0x0f) == EC_STATE_OPERATIONAL) {
+      if (op_waiting_[slave]) {
+        op_waiting_[slave] = false;
+        say("● 轴 %d 已进入运行", slave);
+      }
       return;
     }
+    if (!op_requested_) {
+      return;
+    }
+    op_waiting_[slave] = true;
     if ((al.status & EC_STATE_ERROR) != 0) {
-      // 0x001B 是同步管理器看门狗。先应答错误，下一圈再请求运行。
+      // 0x001B 是同步管理器看门狗。应答后保持发帧，不再立刻重写运行请求。
       if (last_error_logged_[slave] != al.code) {
         last_error_logged_[slave] = al.code;
         say(
           "! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x，应答",
           slave, al.status, al.code);
+        const auto ack = static_cast<std::uint16_t>((al.status & 0x0f) + EC_STATE_ACK);
+        auto ack_reg = ack;
+        ecx_FPWR(
+          &context_.port, address, 0x0120, sizeof(ack_reg), &ack_reg, EC_TIMEOUTRET);
       }
-      const auto ack = static_cast<std::uint16_t>((al.status & 0x0f) + EC_STATE_ACK);
-      auto ack_reg = ack;
-      ecx_FPWR(
-        &context_.port, address, 0x0120, sizeof(ack_reg), &ack_reg, EC_TIMEOUTRET);
       return;
     }
     if (op_quiet_cycles_[slave] > 0) {
       --op_quiet_cycles_[slave];
       return;
     }
-    auto want = static_cast<std::uint16_t>(EC_STATE_OPERATIONAL);
-    ecx_FPWR(
-      &context_.port, address, 0x0120, sizeof(want), &want, EC_TIMEOUTRET);
-    op_quiet_cycles_[slave] = 2;
-    ++op_requests_[slave];
-    if (op_requests_[slave] == 1 || (op_requests_[slave] % 4) == 0) {
-      say(
-        "! 轴 %d 还未进入运行，状态 0x%02x AL码 0x%04x，再次请求（第 %d 次）",
-        slave, al.status, al.code, op_requests_[slave]);
-    }
+    op_quiet_cycles_[slave] = 10;
+    say(
+      "! 轴 %d 仍在安全操作，状态 0x%02x AL码 0x%04x",
+      slave, al.status, al.code);
   }
 
   bool slavesAtLeast(std::uint16_t state) const
@@ -1371,6 +1374,7 @@ private:
   std::array<std::uint16_t, kCoffeeAxisCount + 1> last_al_state_{};
   std::array<std::uint16_t, kCoffeeAxisCount + 1> last_error_logged_{};
   std::array<int, kCoffeeAxisCount + 1> op_quiet_cycles_{};
+  std::array<bool, kCoffeeAxisCount + 1> op_waiting_{};
   bool op_requested_{false};
   std::atomic<bool> stop_{false};
   std::atomic<bool> thread_done_{true};
@@ -2141,7 +2145,9 @@ void SoemEthercatTransport::onCycle(
       out.target_torque = mitTorque(index, item.actual_position);
     }
   }
-  logEnableProgress(feedback, *command);
+  if (bus_operational_.load(std::memory_order_acquire)) {
+    logEnableProgress(feedback, *command);
+  }
 }
 
 void SoemEthercatTransport::logEnableProgress(
