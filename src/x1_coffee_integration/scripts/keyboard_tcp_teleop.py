@@ -741,7 +741,7 @@ HELP = """
   z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
   m m     连按两次：只对右臂做 MIT。左臂和腰保持位置，请扶右臂
   n       退出 MIT，回到位置保持
-  g g     连按两次：右臂自己走到两侧停稳点，记录力矩并拟合。请先按 n，并让开右臂
+  g g     连按两次：右臂切到周期同步扭矩，两侧软持采样并拟合。请先按 n，并让开右臂
   v v     连按两次：右臂零重力，只有重力前馈。请扶着右臂，按 n 退出
   p p     连按两次：把当前右臂重力修正写入文件
   r r     连按两次：右臂重力在内存恢复 URDF 初值，不写文件
@@ -1101,7 +1101,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_confirm_until:
                     node.gravity_confirm_until = now + 3.0
-                    print("\n再按一次 g：右臂自己走到标定姿态并记录两侧力矩。请先按 n，并让开右臂。")
+                    print("\n再按一次 g：右臂进入周期同步扭矩，从两侧软持到标定姿态。请先按 n，并让开右臂。")
                     continue
                 node.gravity_confirm_until = 0.0
                 node.call_trigger(node.gravity_calib_client, "/x1/right_arm_gravity_calib")

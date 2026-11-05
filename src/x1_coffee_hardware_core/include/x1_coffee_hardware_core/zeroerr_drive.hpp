@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace x1_coffee_hardware_core
@@ -55,5 +56,24 @@ std::uint16_t zeroErrTorqueControlWord(std::uint16_t status_word);
 
 // CSP 使能步骤，通信手册 PDF页 61。bit4–bit0 依次为 00110、00111、01111。
 std::uint16_t zeroErrCspControlWord(std::uint16_t status_word);
+
+// 手册 8.2.96：0x6076 单位是 mN·m，相对扭矩都参照它。
+// 手册 8.2.91、8.2.97：0x6071 和 0x6077 是额定电流的千分比。额定电流对应额定扭矩，
+// 所以千分比 = 扭矩(N·m) / (0x6076 的 mN·m / 1000) × 1000。不用 URDF 的 effort 代替。
+inline double torquePermilleFromNm(double newton_meters, double rated_nm)
+{
+  if (!(rated_nm > 0.0) || !std::isfinite(newton_meters)) {
+    return 0.0;
+  }
+  return newton_meters / rated_nm * 1000.0;
+}
+
+inline double torqueNmFromPermille(std::int16_t permille, double rated_nm)
+{
+  if (!(rated_nm > 0.0)) {
+    return 0.0;
+  }
+  return static_cast<double>(permille) * rated_nm / 1000.0;
+}
 
 }  // namespace x1_coffee_hardware_core

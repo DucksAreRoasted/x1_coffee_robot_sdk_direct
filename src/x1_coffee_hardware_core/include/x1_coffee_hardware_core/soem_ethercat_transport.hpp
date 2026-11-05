@@ -168,15 +168,20 @@ private:
   double mit_kp_{480.0};
   double mit_kd_{24.0};
   double mit_limit_{1000.0};
-  // URDF 静重力，单位 N·m。换成 0x6071 千分比时除以额定力矩。额定力矩尚未从关节读出，先用 50 N·m。
+  // URDF 静重力，单位 N·m。换成 0x6071 时只除以该轴读到的 0x6076。
   UrdfGravity gravity_;
   bool gravity_ready_{false};
   double rated_torque_nm_{50.0};
   double gravity_scale_{1.0};
   std::array<double, kCoffeeAxisCount> rated_axis_nm_{};
+  std::uint16_t gravity_unscaled_mask_{0};
+  bool rightArmRatedTorqueReady(std::string * missing) const;
   std::string right_arm_gravity_yaml_;
   std::array<double, 7> right_mass_scale_{};
   std::array<std::array<double, 3>, 7> right_com_delta_{};
+  // 连杆模型之后的小修正。周期同步扭矩里加进 0x6071，不再单独映射 0x60B2。
+  std::array<double, 7> right_joint_scale_{};
+  std::array<double, 7> right_joint_bias_{};
   bool right_correction_known_{false};
   void rememberRightArmCorrection(
     const std::array<double, 7> & mass_scale,
@@ -189,7 +194,14 @@ private:
   bool writeRightArmGravityFile(
     const std::array<double, 7> & mass_scale,
     const std::array<std::array<double, 3>, 7> & com_delta) const;
+  std::array<double, kCoffeeAxisCount> mit_gravity_nm_{};
   std::array<double, kCoffeeAxisCount> mit_gravity_permille_{};
+  std::array<double, kCoffeeAxisCount> mit_qdes_rad_{};
+  std::array<double, 7> mit_balance_nm_{};
+  std::array<bool, 7> mit_balance_ok_{};
+  // 标定软持时由主站给出目标角。平时 MIT 仍锁存按下瞬间的编码器。
+  bool mit_track_qdes_{false};
+  bool mit_soft_hold_{false};
   std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
   std::array<double, kCoffeeAxisCount> mit_prev_rad_{};
   std::array<double, kCoffeeAxisCount> mit_velocity_{};

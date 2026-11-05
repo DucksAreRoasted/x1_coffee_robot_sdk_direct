@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -708,7 +709,8 @@ private:
     if (rc > 0 && rated_size == 2) {
       rated_mnm &= 0xFFFF;
     }
-    if (rc > 0) {
+    // 手册 8.2.96 是 UDINT，单位 mN·m。长度不是 2 或 4 就不能拿来换算。
+    if (rc > 0 && rated_mnm > 0 && (rated_size == 2 || rated_size == 4)) {
       const double rated_nm = static_cast<double>(rated_mnm) / 1000.0;
       if (active_link_ != nullptr) {
         active_link_->rated_nm_[static_cast<std::size_t>(slave - 1)] = rated_nm;
@@ -1011,6 +1013,7 @@ SoemEthercatTransport::SoemEthercatTransport()
 SoemEthercatTransport::SoemEthercatTransport(std::unique_ptr<EthercatLink> link)
 : link_(std::move(link))
 {
+  right_joint_scale_.fill(1.0);
 }
 
 SoemEthercatTransport::~SoemEthercatTransport()
@@ -1106,6 +1109,11 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
             const int axis = key == "com_dx" ? 0 : key == "com_dy" ? 1 : 2;
             for (int slot = 0; slot < 7; ++slot) {
               com_delta[static_cast<std::size_t>(slot)][axis] = values[slot];
+            }
+          } else if (key == "joint_scale" || key == "joint_bias") {
+            auto & dest = key == "joint_scale" ? right_joint_scale_ : right_joint_bias_;
+            for (int slot = 0; slot < 7; ++slot) {
+              dest[static_cast<std::size_t>(slot)] = values[slot];
             }
           }
         }
@@ -1524,7 +1532,7 @@ void SoemEthercatTransport::onCycle(
   std::lock_guard<std::mutex> lock(sample_mu_);
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
   samplePath();
-  if (mit_active_ && gravity_ready_ && rated_torque_nm_ > 0.0) {
+  if (mit_active_ && gravity_ready_) {
     std::array<double, kCoffeeAxisCount> q{};
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
       if (feedback[index].valid) {
@@ -1534,8 +1542,17 @@ void SoemEthercatTransport::onCycle(
     std::array<double, kCoffeeAxisCount> tau{};
     if (gravity_.torques(q, &tau)) {
       for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-        const double rated = rated_axis_nm_[index] > 0.0 ? rated_axis_nm_[index] : rated_torque_nm_;
-        mit_gravity_permille_[index] = gravity_scale_ * tau[index] / rated * 1000.0;
+        mit_gravity_nm_[index] = gravity_scale_ * tau[index];
+        if (!(rated_axis_nm_[index] > 0.0)) {
+          mit_gravity_permille_[index] = 0.0;
+          if ((gravity_unscaled_mask_ & (1u << index)) == 0) {
+            gravity_unscaled_mask_ |= static_cast<std::uint16_t>(1u << index);
+            say("! 轴 %zu 没有 0x6076，重力前馈记为 0", index + 1);
+          }
+          continue;
+        }
+        mit_gravity_permille_[index] = torquePermilleFromNm(
+          gravity_scale_ * tau[index], rated_axis_nm_[index]);
       }
     }
   }
@@ -1662,7 +1679,9 @@ void SoemEthercatTransport::onCycle(
 std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t actual_pulse)
 {
   const double measured = pulseToPosition(index, actual_pulse);
-  const double desired = pulseToPosition(index, mit_hold_pulse_[index]);
+  // 标定软持跟踪主站目标角。平时 MIT 的平衡点仍是进入时锁存的编码器。
+  const double desired = mit_track_qdes_ ? mit_qdes_rad_[index] :
+    pulseToPosition(index, mit_hold_pulse_[index]);
   double velocity = 0.0;
   if (mit_have_sample_[index]) {
     velocity = (measured - mit_prev_rad_[index]) / kEthercatCycleSec;
@@ -1671,9 +1690,39 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   mit_have_sample_[index] = true;
   mit_velocity_[index] += 0.05 * (velocity - mit_velocity_[index]);
   const double error = desired - measured;
-  const double kp = mit_zero_g_ ? 0.0 : mit_kp_;
-  const double kd = mit_zero_g_ ? 0.0 : mit_kd_;
-  double command = kp * error - kd * mit_velocity_[index] + mit_gravity_permille_[index];
+  const bool right = index >= 8 && index < 15;
+  const int slot = right ? static_cast<int>(index - 8) : -1;
+  const double rated = rated_axis_nm_[index];
+  double gravity_nm = mit_gravity_nm_[index];
+  if (slot >= 0) {
+    const double scale = right_joint_scale_[static_cast<std::size_t>(slot)] > 0.0 ?
+      right_joint_scale_[static_cast<std::size_t>(slot)] : 1.0;
+    gravity_nm = scale * gravity_nm + right_joint_bias_[static_cast<std::size_t>(slot)];
+  }
+  // 手册 8.2.123：周期同步扭矩里，扭矩偏移加到 0x6071。偏置直接写进目标力矩。
+  static constexpr double kHardKpNm[7] = {22.0, 22.0, 16.0, 16.0, 8.0, 8.0, 8.0};
+  static constexpr double kHardKdNm[7] = {1.0, 1.0, 0.7, 0.7, 0.3, 0.25, 0.3};
+  static constexpr double kSoftKpNm[7] = {2.5, 2.5, 2.0, 2.0, 1.0, 1.0, 1.0};
+  static constexpr double kSoftKdNm[7] = {0.35, 0.35, 0.3, 0.3, 0.15, 0.12, 0.15};
+  double command = 0.0;
+  if (mit_track_qdes_ && slot >= 0) {
+    const double kp_nm = mit_soft_hold_ ? kSoftKpNm[slot] : kHardKpNm[slot];
+    const double kd_nm = mit_soft_hold_ ? kSoftKdNm[slot] : kHardKdNm[slot];
+    if (mit_soft_hold_) {
+      mit_balance_nm_[static_cast<std::size_t>(slot)] = gravity_nm + kp_nm * error;
+    }
+    command = torquePermilleFromNm(
+      gravity_nm + kp_nm * error - kd_nm * mit_velocity_[index], rated);
+  } else if (mit_zero_g_) {
+    const double kd_nm = slot >= 4 ? kSoftKdNm[slot] : 0.0;
+    command = torquePermilleFromNm(gravity_nm - kd_nm * mit_velocity_[index], rated);
+  } else {
+    command = mit_kp_ * error - mit_kd_ * mit_velocity_[index] +
+      torquePermilleFromNm(gravity_nm, rated);
+  }
+  if (slot >= 0) {
+    mit_balance_ok_[static_cast<std::size_t>(slot)] = std::abs(command) < mit_limit_ - 0.5;
+  }
   if (command > mit_limit_) {
     command = mit_limit_;
   }
@@ -1688,10 +1737,39 @@ Result SoemEthercatTransport::enterMitHold()
   return beginRightArmTorque(false);
 }
 
+bool SoemEthercatTransport::rightArmRatedTorqueReady(std::string * missing) const
+{
+  const auto & descriptors = coffeeAxisDescriptors();
+  std::string names;
+  for (int joint = 0; joint < 7; ++joint) {
+    const std::size_t index = static_cast<std::size_t>(8 + joint);
+    if (rated_axis_nm_[index] > 0.0) {
+      continue;
+    }
+    if (!names.empty()) {
+      names += "、";
+    }
+    names += descriptors[index].joint_name;
+  }
+  if (names.empty()) {
+    return true;
+  }
+  if (missing != nullptr) {
+    *missing = names;
+  }
+  return false;
+}
+
 Result SoemEthercatTransport::enterZeroGravity()
 {
   if (!gravity_ready_) {
     return Result::fail(CoreError::kInvalidConfiguration, "没有 URDF 重力模型，不能做零重力");
+  }
+  std::string missing;
+  if (!rightArmRatedTorqueReady(&missing)) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration,
+      "右臂没有读到额定力矩 0x6076，不能把牛·米换成驱动器千分比：" + missing);
   }
   return beginRightArmTorque(true);
 }
@@ -1735,7 +1813,7 @@ Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
   if (zero_gravity) {
     return Result{
       CoreError::kOk,
-      "右臂零重力：只有重力前馈，没有位置弹簧。请扶着右臂；松手后自己下沉或上抬，说明补偿不对"};
+      "右臂零重力：重力前馈和关节偏置直接写进周期同步扭矩。请扶着右臂；松手后下沉或上抬，说明补偿不对"};
   }
   return Result{
     CoreError::kOk,
@@ -1752,6 +1830,9 @@ Result SoemEthercatTransport::exitMitHold()
   std::lock_guard<std::mutex> lock(sample_mu_);
   mit_active_ = false;
   mit_zero_g_ = false;
+  mit_track_qdes_ = false;
+  mit_soft_hold_ = false;
+  gravity_calib_stop_.store(true);
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     if (!latest_[index].valid) {
       continue;
@@ -1814,6 +1895,15 @@ bool SoemEthercatTransport::writeRightArmGravityFile(
     }
     output << "\n";
   }
+  output << "joint_scale:";
+  for (double value : right_joint_scale_) {
+    output << " " << (value > 0.0 ? value : 1.0);
+  }
+  output << "\njoint_bias:";
+  for (double value : right_joint_bias_) {
+    output << " " << value;
+  }
+  output << "\n";
   return true;
 }
 
@@ -1829,8 +1919,10 @@ Result SoemEthercatTransport::resetRightArmGravityToUrdf()
     return Result::fail(CoreError::kInvalidConfiguration, "右臂连杆没有对上 URDF");
   }
   rememberRightArmCorrection(scale, delta);
+  right_joint_scale_.fill(1.0);
+  right_joint_bias_.fill(0.0);
   say("✓ 右臂重力已在内存恢复为 URDF 初值，尚未写入文件");
-  return Result{CoreError::kOk, "右臂已恢复 URDF 初值。按 p p 才会写入文件"};
+  return Result{CoreError::kOk, "右臂已恢复 URDF 初值，关节倍率和偏置也已清掉。按 p p 才会写入文件"};
 }
 
 void SoemEthercatTransport::rememberRightArmCorrection(
@@ -1862,6 +1954,12 @@ Result SoemEthercatTransport::startRightArmGravityCalibration()
   if (mit_active_) {
     return Result::fail(CoreError::kWriteFailed, "请先按 n 退出 MIT，右臂才能自己走到标定姿态");
   }
+  std::string missing;
+  if (!rightArmRatedTorqueReady(&missing)) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration,
+      "右臂没有读到额定力矩 0x6076，记录到的千分比不能换成牛·米：" + missing);
+  }
   if (gravity_calib_running_.exchange(true)) {
     return Result::fail(CoreError::kWriteFailed, "右臂标定已经在进行");
   }
@@ -1870,7 +1968,7 @@ Result SoemEthercatTransport::startRightArmGravityCalibration()
   }
   gravity_calib_stop_.store(false);
   gravity_calib_thread_ = std::thread([this]() {runRightArmGravityCalibration();});
-  return Result{CoreError::kOk, "右臂开始自动标定：自己走到两侧停稳点并记录力矩。请让开右臂"};
+  return Result{CoreError::kOk, "右臂进入周期同步扭矩，从两侧软持采样。请让开右臂"};
 }
 
 void SoemEthercatTransport::runRightArmGravityCalibration()
@@ -1880,143 +1978,307 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     std::atomic<bool> * flag;
     ~ClearRunning() {flag->store(false);}
   } clear{&gravity_calib_running_};
-  struct Pose { double q[7]; };
-  const Pose goals[] = {
-    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.2, 0.0}},
-    {{0.6, -0.9, 0.4, 1.0, 0.8, 0.2, 0.0}},
-    {{0.6, -0.9, 0.4, 1.0, -0.8, 0.2, 0.0}},
-    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.7, 0.0}},
-    {{0.6, -0.9, 0.4, 1.0, 0.0, -0.5, 0.0}},
-    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.2, 0.8}},
-    {{0.6, -0.9, 0.4, 1.0, 0.0, 0.2, -0.8}},
-    {{0.6, -0.9, 0.8, 1.3, 0.0, 0.2, 0.0}},
-    {{0.6, -0.9, -0.4, 0.6, 0.0, 0.2, 0.0}},
-    {{0.2, -0.5, 0.2, 0.8, 0.0, 0.1, 0.0}},
-    {{1.0, -1.3, 0.2, 1.1, 0.0, 0.2, 0.0}},
-    {{0.6, -1.5, 0.0, 0.9, 0.3, 0.0, 0.3}},
-  };
-  const double lower[7] = {-3.05, -3.05, -3.05, -2.00, -3.05, -1.65, -6.1};
-  const double upper[7] = {3.05, 0.08, 3.05, 1.48, 3.05, 1.65, 6.1};
-  const double approach[7] = {0.12, 0.10, 0.12, 0.12, 0.12, 0.10, 0.12};
+  struct LeaveTorque
+  {
+    SoemEthercatTransport * self;
+    bool armed{false};
+    ~LeaveTorque()
+    {
+      if (armed) {
+        self->exitMitHold();
+      }
+    }
+  } leave{this, false};
 
-  auto clamp_pose = [&](Pose pose) {
+  const Result entered = beginRightArmTorque(false);
+  if (!entered) {
+    say("✗ 右臂不能进入周期同步扭矩：%s", entered.detail.c_str());
+    return;
+  }
+  leave.armed = true;
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  if (gravity_calib_stop_.load()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    if (!mit_active_) {
+      return;
+    }
+    mit_track_qdes_ = true;
+    mit_soft_hold_ = false;
+    for (int joint = 0; joint < 7; ++joint) {
+      const std::size_t index = static_cast<std::size_t>(8 + joint);
+      mit_qdes_rad_[index] = latest_[index].valid ?
+        pulseToPosition(index, latest_[index].actual_position) : 0.0;
+    }
+  }
+
+  struct Pose { double q[7]; };
+  // 腕、肘、肩分开。角度留在右臂限位内，接近量再往外偏一截。
+  const Pose goals[] = {
+    {{0.5, -0.90, 0.30, 1.00, 0.00, 0.15, 0.00}},
+    {{0.5, -0.90, 0.30, 1.00, 0.70, 0.15, 0.00}},
+    {{0.5, -0.90, 0.30, 1.00, -0.70, 0.15, 0.00}},
+    {{0.5, -0.90, 0.30, 1.00, 0.00, 0.55, 0.00}},
+    {{0.5, -0.90, 0.30, 1.00, 0.00, -0.35, 0.00}},
+    {{0.5, -0.90, 0.30, 1.00, 0.00, 0.15, 0.60}},
+    {{0.5, -0.90, 0.30, 1.00, 0.40, -0.20, -0.40}},
+    {{0.5, -1.00, 0.00, 1.15, 0.00, 0.10, 0.00}},
+    {{0.5, -1.00, 0.50, 1.15, 0.00, 0.10, 0.00}},
+    {{0.5, -1.00, -0.50, 1.15, 0.00, 0.10, 0.00}},
+    {{0.5, -1.00, 0.20, 0.55, 0.00, 0.10, 0.00}},
+    {{0.5, -1.20, 0.20, 1.30, 0.00, 0.15, 0.00}},
+    {{0.0, -0.60, 0.20, 0.90, 0.00, 0.10, 0.00}},
+    {{0.8, -1.10, 0.20, 1.10, 0.00, 0.10, 0.00}},
+    {{1.2, -1.40, 0.00, 1.00, 0.00, 0.10, 0.00}},
+    {{0.4, -0.15, 0.00, 0.35, 0.00, 0.00, 0.00}},
+    {{-0.2, -0.08, 0.00, 0.40, 0.00, 0.00, 0.00}},
+    {{0.2, -0.08, 0.00, 0.40, 0.00, 0.00, 0.00}},
+  };
+  const double lower[7] = {-3.00, -2.90, -3.00, -1.90, -3.00, -1.60, -6.00};
+  const double upper[7] = {3.00, 0.05, 3.00, 1.36, 3.00, 1.60, 6.00};
+  const double approach[7] = {0.12, 0.08, 0.12, 0.12, 0.12, 0.10, 0.12};
+  const double side_lower[7] = {-3.05, -3.00, -3.05, -2.00, -3.05, -1.65, -6.10};
+  const double side_upper[7] = {3.05, 0.13, 3.05, 1.48, 3.05, 1.65, 6.10};
+  auto clamp_to = [](Pose pose, const double * lo, const double * hi) {
       for (int joint = 0; joint < 7; ++joint) {
-        pose.q[joint] = std::min(upper[joint], std::max(lower[joint], pose.q[joint]));
+        pose.q[joint] = std::min(hi[joint], std::max(lo[joint], pose.q[joint]));
       }
       return pose;
     };
-  auto read_state = [&](std::array<double, kCoffeeAxisCount> * q,
-      std::array<double, 7> * tau_nm) {
+  auto command_q = [&]() {
+      std::array<double, 7> q{};
       std::lock_guard<std::mutex> lock(sample_mu_);
-      for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-        (*q)[index] = latest_[index].valid ?
-          pulseToPosition(index, latest_[index].actual_position) : 0.0;
-      }
       for (int joint = 0; joint < 7; ++joint) {
-        const std::size_t index = static_cast<std::size_t>(8 + joint);
-        const double rated = rated_axis_nm_[index] > 0.0 ? rated_axis_nm_[index] : rated_torque_nm_;
-        (*tau_nm)[static_cast<std::size_t>(joint)] =
-          static_cast<double>(latest_[index].actual_torque) * rated / 1000.0;
+        q[static_cast<std::size_t>(joint)] =
+          mit_qdes_rad_[static_cast<std::size_t>(8 + joint)];
+      }
+      return q;
+    };
+  auto set_qdes = [&](const std::array<double, 7> & q) {
+      std::lock_guard<std::mutex> lock(sample_mu_);
+      for (int joint = 0; joint < 7; ++joint) {
+        mit_qdes_rad_[static_cast<std::size_t>(8 + joint)] = q[static_cast<std::size_t>(joint)];
       }
     };
-  auto move_to = [&](const Pose & right) -> bool {
-      std::array<double, kCoffeeAxisCount> q{};
-      std::array<double, 7> ignored{};
-      read_state(&q, &ignored);
-      std::array<double, kCoffeeAxisCount> goal = q;
-      double farthest = 0.0;
+  auto stiffen = [&]() {
+      std::lock_guard<std::mutex> lock(sample_mu_);
+      mit_soft_hold_ = false;
       for (int joint = 0; joint < 7; ++joint) {
-        farthest = std::max(farthest, std::abs(right.q[joint] - q[static_cast<std::size_t>(8 + joint)]));
-        goal[static_cast<std::size_t>(8 + joint)] = right.q[joint];
+        const std::size_t index = static_cast<std::size_t>(8 + joint);
+        if (latest_[index].valid) {
+          mit_qdes_rad_[index] = pulseToPosition(index, latest_[index].actual_position);
+        }
       }
-      const double duration = std::max(1.5, farthest / 0.12);
-      const Result moved = requestMovePvtSegments({goal}, {duration});
-      if (!moved) {
-        say("✗ 右臂标定移动被拒绝：%s", moved.detail.c_str());
-        return false;
+    };
+  struct Window
+  {
+    std::deque<std::pair<double, std::array<double, 7>>> samples;
+    void push(double time, const std::array<double, 7> & q)
+    {
+      samples.push_back({time, q});
+      while (samples.size() > 2 && time - samples[1].first >= 0.20) {
+        samples.pop_front();
       }
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    }
+    double speed() const
+    {
+      if (samples.size() < 2) {
+        return 1e9;
+      }
+      const double dt = samples.back().first - samples.front().first;
+      if (dt < 0.15) {
+        return 1e9;
+      }
+      double peak = 0.0;
+      for (int joint = 0; joint < 7; ++joint) {
+        peak = std::max(peak, std::abs(
+          samples.back().second[static_cast<std::size_t>(joint)] -
+          samples.front().second[static_cast<std::size_t>(joint)]) / dt);
+      }
+      return peak;
+    }
+  };
+  auto measured_q = [&]() {
+      std::array<double, 7> q{};
+      std::lock_guard<std::mutex> lock(sample_mu_);
+      for (int joint = 0; joint < 7; ++joint) {
+        const std::size_t index = static_cast<std::size_t>(8 + joint);
+        q[static_cast<std::size_t>(joint)] = latest_[index].valid ?
+          pulseToPosition(index, latest_[index].actual_position) : mit_qdes_rad_[index];
+      }
+      return q;
+    };
+  auto glide = [&](const Pose & target, bool soft, double duration) -> bool {
+      const std::array<double, 7> from = command_q();
+      {
+        std::lock_guard<std::mutex> lock(sample_mu_);
+        mit_soft_hold_ = soft;
+      }
+      const auto began = std::chrono::steady_clock::now();
+      while (!gravity_calib_stop_.load()) {
+        const double elapsed = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - began).count();
+        const double alpha = duration > 0.0 ? std::min(1.0, elapsed / duration) : 1.0;
+        const double smooth = alpha * alpha * (3.0 - 2.0 * alpha);
+        std::array<double, 7> next{};
+        for (int joint = 0; joint < 7; ++joint) {
+          next[static_cast<std::size_t>(joint)] = from[static_cast<std::size_t>(joint)] +
+            (target.q[joint] - from[static_cast<std::size_t>(joint)]) * smooth;
+        }
+        set_qdes(next);
+        if (alpha >= 1.0) {
+          return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      return false;
+    };
+  auto wait_quiet = [&](const Pose & target, bool hard) -> bool {
+      Window window;
       auto quiet_since = std::chrono::steady_clock::now();
-      std::array<double, kCoffeeAxisCount> previous = q;
-      auto previous_time = std::chrono::steady_clock::now();
+      auto bad_since = quiet_since;
+      bool bad = false;
+      const auto began = quiet_since;
+      const auto deadline = began + std::chrono::seconds(6);
       while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        std::array<double, kCoffeeAxisCount> now_q{};
-        read_state(&now_q, &ignored);
-        const auto now = std::chrono::steady_clock::now();
-        const double dt = std::chrono::duration<double>(now - previous_time).count();
-        double speed = 0.0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const std::array<double, 7> q = measured_q();
+        const double time = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - began).count();
+        window.push(time, q);
+        const double speed = window.speed();
         double error = 0.0;
         for (int joint = 0; joint < 7; ++joint) {
-          const std::size_t index = static_cast<std::size_t>(8 + joint);
-          if (dt > 1e-3) {
-            speed = std::max(speed, std::abs(now_q[index] - previous[index]) / dt);
-          }
-          error = std::max(error, std::abs(now_q[index] - right.q[joint]));
+          error = std::max(error, std::abs(q[static_cast<std::size_t>(joint)] - target.q[joint]));
         }
-        previous = now_q;
-        previous_time = now;
-        if (!(speed < 0.05 && error < 0.05)) {
+        const auto now = std::chrono::steady_clock::now();
+        const double error_abort = hard ? 0.75 : 1.35;
+        if (error > error_abort || speed > 1.5) {
+          if (!bad) {
+            bad = true;
+            bad_since = now;
+          } else if (std::chrono::duration<double>(now - bad_since).count() > 0.30) {
+            say("✗ 右臂跟踪超限，标定停止");
+            gravity_calib_stop_.store(true);
+            return false;
+          }
+        } else {
+          bad = false;
+        }
+        const bool quiet = speed < 0.05 && (!hard || error < 0.08);
+        if (!quiet) {
           quiet_since = now;
-        } else if (std::chrono::duration<double>(now - quiet_since).count() > 1.0) {
+        } else if (std::chrono::duration<double>(now - quiet_since).count() >= 0.40) {
           return true;
         }
       }
-      say("✗ 右臂没有在限时内停稳");
       return false;
     };
-  auto record = [&](std::array<double, kCoffeeAxisCount> * q, std::array<double, 7> * tau) -> bool {
-      std::array<double, 7> sum{};
-      std::array<double, kCoffeeAxisCount> last_q{};
-      constexpr int kSamples = 10;
-      for (int sample = 0; sample < kSamples; ++sample) {
-        if (gravity_calib_stop_.load()) {
-          return false;
+  auto record_side = [&](std::array<double, 7> * q_mean, std::array<double, 7> * y_mean) -> bool {
+      Window window;
+      std::array<double, 7> q_sum{};
+      std::array<double, 7> y_sum{};
+      int count = 0;
+      const auto began = std::chrono::steady_clock::now();
+      const auto until = began + std::chrono::seconds(3);
+      while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::array<double, 7> q{};
+        std::array<double, 7> y{};
+        bool usable = true;
+        {
+          std::lock_guard<std::mutex> lock(sample_mu_);
+          for (int joint = 0; joint < 7; ++joint) {
+            const std::size_t index = static_cast<std::size_t>(8 + joint);
+            q[static_cast<std::size_t>(joint)] = latest_[index].valid ?
+              pulseToPosition(index, latest_[index].actual_position) : 0.0;
+            y[static_cast<std::size_t>(joint)] = mit_balance_nm_[static_cast<std::size_t>(joint)];
+            usable = usable && mit_soft_hold_ && mit_balance_ok_[static_cast<std::size_t>(joint)];
+          }
         }
-        std::array<double, 7> one{};
-        read_state(&last_q, &one);
+        const double time = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - began).count();
+        window.push(time, q);
+        if (!usable || !(window.speed() < 0.05)) {
+          continue;
+        }
         for (int joint = 0; joint < 7; ++joint) {
-          sum[static_cast<std::size_t>(joint)] += one[static_cast<std::size_t>(joint)];
+          q_sum[static_cast<std::size_t>(joint)] += q[static_cast<std::size_t>(joint)];
+          y_sum[static_cast<std::size_t>(joint)] += y[static_cast<std::size_t>(joint)];
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        ++count;
+        if (count >= 50 && time >= 1.2) {
+          break;
+        }
       }
-      *q = last_q;
+      if (count < 15) {
+        return false;
+      }
       for (int joint = 0; joint < 7; ++joint) {
-        (*tau)[static_cast<std::size_t>(joint)] = sum[static_cast<std::size_t>(joint)] / kSamples;
+        (*q_mean)[static_cast<std::size_t>(joint)] =
+          q_sum[static_cast<std::size_t>(joint)] / count;
+        (*y_mean)[static_cast<std::size_t>(joint)] =
+          y_sum[static_cast<std::size_t>(joint)] / count;
       }
       return true;
     };
 
-  say("● 右臂开始自动标定，请让开");
+  say("● 右臂已是周期同步扭矩，开始两侧软持。请让开");
   std::vector<std::array<double, kCoffeeAxisCount>> poses;
   std::vector<std::array<double, 7>> torques;
-  for (const Pose & goal : goals) {
+  for (const Pose & goal_in : goals) {
     if (gravity_calib_stop_.load()) {
       break;
     }
-    std::array<double, kCoffeeAxisCount> q_sum{};
-    std::array<double, 7> tau_sum{};
+    const Pose goal = clamp_to(goal_in, lower, upper);
+    std::array<double, 7> q_sum{};
+    std::array<double, 7> y_sum{};
     int sides = 0;
     for (int sign : {1, -1}) {
+      if (gravity_calib_stop_.load()) {
+        break;
+      }
       Pose side = goal;
       for (int joint = 0; joint < 7; ++joint) {
         side.q[joint] = goal.q[joint] + sign * approach[joint];
       }
-      side = clamp_pose(side);
-      say("● 右臂走向标定姿态");
-      if (!move_to(side)) {
+      side = clamp_to(side, side_lower, side_upper);
+      const std::array<double, 7> from = command_q();
+      double farthest = 0.0;
+      for (int joint = 0; joint < 7; ++joint) {
+        farthest = std::max(
+          farthest, std::abs(side.q[joint] - from[static_cast<std::size_t>(joint)]));
+      }
+      say("● 右臂硬跟踪到%s侧", sign > 0 ? "正" : "负");
+      if (!glide(side, false, std::max(1.5, 1.5 * farthest / 0.12))) {
+        break;
+      }
+      if (!wait_quiet(side, true)) {
+        say("! 硬跟踪没有停稳，跳过这一侧");
         continue;
       }
-      std::array<double, kCoffeeAxisCount> q{};
-      std::array<double, 7> tau{};
-      if (!record(&q, &tau)) {
+      say("● 软持滑向航点");
+      if (!glide(goal, true, 1.5)) {
+        break;
+      }
+      if (!wait_quiet(goal, false)) {
+        say("! 软持没有停稳，跳过这一侧");
+        stiffen();
         continue;
       }
-      for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-        q_sum[index] += q[index];
+      std::array<double, 7> q{};
+      std::array<double, 7> y{};
+      const bool recorded = record_side(&q, &y);
+      stiffen();
+      if (!recorded) {
+        say("! 软持样本不够，跳过这一侧");
+        continue;
       }
       for (int joint = 0; joint < 7; ++joint) {
-        tau_sum[static_cast<std::size_t>(joint)] += tau[static_cast<std::size_t>(joint)];
+        q_sum[static_cast<std::size_t>(joint)] += q[static_cast<std::size_t>(joint)];
+        y_sum[static_cast<std::size_t>(joint)] += y[static_cast<std::size_t>(joint)];
       }
       ++sides;
     }
@@ -2024,24 +2286,75 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       say("! 这一姿态两侧没有都记到，跳过");
       continue;
     }
-    for (double & value : q_sum) {
-      value *= 0.5;
+    std::array<double, kCoffeeAxisCount> full{};
+    {
+      std::lock_guard<std::mutex> lock(sample_mu_);
+      for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+        full[index] = latest_[index].valid ?
+          pulseToPosition(index, latest_[index].actual_position) : 0.0;
+      }
     }
-    for (double & value : tau_sum) {
-      value *= 0.5;
+    for (int joint = 0; joint < 7; ++joint) {
+      full[static_cast<std::size_t>(8 + joint)] = 0.5 * q_sum[static_cast<std::size_t>(joint)];
+      y_sum[static_cast<std::size_t>(joint)] *= 0.5;
     }
-    poses.push_back(q_sum);
-    torques.push_back(tau_sum);
-    say("✓ 已记录一对停稳力矩，累计 %zu 组", poses.size());
+    poses.push_back(full);
+    torques.push_back(y_sum);
+    say("✓ 已记录一对软持力矩，累计 %zu 组", poses.size());
   }
-  if (poses.size() < 8) {
-    say("✗ 有效姿态只有 %zu 组，没有拟合", poses.size());
+  if (gravity_calib_stop_.load()) {
+    say("✗ 标定被中止，不拟合");
     return;
   }
+  leave.armed = false;
+  exitMitHold();
+
+  std::vector<std::array<double, kCoffeeAxisCount>> train_q;
+  std::vector<std::array<double, kCoffeeAxisCount>> held_q;
+  std::vector<std::array<double, 7>> train_y;
+  std::vector<std::array<double, 7>> held_y;
+  for (std::size_t index = 0; index < poses.size(); ++index) {
+    if (index % 3 == 2) {
+      held_q.push_back(poses[index]);
+      held_y.push_back(torques[index]);
+    } else {
+      train_q.push_back(poses[index]);
+      train_y.push_back(torques[index]);
+    }
+  }
+  if (train_q.size() < 8 || held_q.size() < 3) {
+    say("✗ 训练姿态 %zu 组、留出姿态 %zu 组，不够拟合", train_q.size(), held_q.size());
+    return;
+  }
+  auto model_of = [&](const std::array<double, kCoffeeAxisCount> & q) {
+      std::array<double, kCoffeeAxisCount> tau{};
+      gravity_.torques(q, &tau);
+      return tau;
+    };
+  auto rms = [&](int joint_only) {
+      double square = 0.0;
+      int count = 0;
+      for (std::size_t index = 0; index < held_q.size(); ++index) {
+        const auto tau = model_of(held_q[index]);
+        for (int joint = 0; joint < 7; ++joint) {
+          if (joint_only >= 0 && joint != joint_only) {
+            continue;
+          }
+          const double error = held_y[index][static_cast<std::size_t>(joint)] -
+            tau[static_cast<std::size_t>(8 + joint)];
+          square += error * error;
+          ++count;
+        }
+      }
+      return count > 0 ? std::sqrt(square / count) : 1e9;
+    };
+  const double before_held = rms(-1);
+  std::array<double, 7> saved_scale = right_mass_scale_;
+  std::array<std::array<double, 3>, 7> saved_delta = right_com_delta_;
   std::array<double, 7> scale{};
   std::array<std::array<double, 3>, 7> delta{};
   std::string error;
-  if (!gravity_.identifyRightArm(poses, torques, &scale, &delta, &error)) {
+  if (!gravity_.identifyRightArm(train_q, train_y, &scale, &delta, &error)) {
     say("✗ 右臂拟合失败：%s", error.c_str());
     return;
   }
@@ -2049,9 +2362,65 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     say("✗ 拟合结果没有写进模型");
     return;
   }
-  rememberRightArmCorrection(scale, delta);
-  say("✓ 右臂重力拟合完成，质量倍率 %.2f %.2f %.2f %.2f %.2f %.2f %.2f。按 v v 检验，按 p p 写入文件",
-    scale[0], scale[1], scale[2], scale[3], scale[4], scale[5], scale[6]);
+  const double after_held = rms(-1);
+  if (!(after_held < before_held)) {
+    gravity_.setRightArmCorrection(saved_scale, saved_delta);
+    say("! 留出姿态误差 %.3f N·m 没有小于原来的 %.3f，连杆参数保持不变",
+      after_held, before_held);
+  } else {
+    rememberRightArmCorrection(scale, delta);
+    say("✓ 连杆参数留出误差 %.3f N·m，原来 %.3f", after_held, before_held);
+  }
+  int accepted = 0;
+  for (int joint = 0; joint < 7; ++joint) {
+    double ata[2][2]{};
+    double atb[2]{};
+    for (std::size_t index = 0; index < train_q.size(); ++index) {
+      const auto tau = model_of(train_q[index]);
+      const double gravity = tau[static_cast<std::size_t>(8 + joint)];
+      const double measured = train_y[index][static_cast<std::size_t>(joint)];
+      const double a0 = gravity / 0.05;
+      const double a1 = 1.0 / 0.05;
+      ata[0][0] += a0 * a0;
+      ata[0][1] += a0 * a1;
+      ata[1][0] += a1 * a0;
+      ata[1][1] += a1 * a1;
+      atb[0] += a0 * measured / 0.05;
+      atb[1] += a1 * measured / 0.05;
+    }
+    ata[0][0] += 4.0;
+    atb[0] += 4.0;
+    ata[1][1] += 0.04;
+    const double det = ata[0][0] * ata[1][1] - ata[0][1] * ata[1][0];
+    if (std::abs(det) < 1e-9) {
+      continue;
+    }
+    double joint_scale = (atb[0] * ata[1][1] - ata[0][1] * atb[1]) / det;
+    double joint_bias = (ata[0][0] * atb[1] - atb[0] * ata[1][0]) / det;
+    joint_scale = std::min(1.2, std::max(0.8, joint_scale));
+    joint_bias = std::min(0.08, std::max(-0.08, joint_bias));
+    auto joint_rms = [&](double used_scale, double used_bias) {
+        double square = 0.0;
+        for (std::size_t index = 0; index < held_q.size(); ++index) {
+          const auto tau = model_of(held_q[index]);
+          const double predicted = used_scale * tau[static_cast<std::size_t>(8 + joint)] + used_bias;
+          const double residual = held_y[index][static_cast<std::size_t>(joint)] - predicted;
+          square += residual * residual;
+        }
+        return std::sqrt(square / static_cast<double>(held_q.size()));
+      };
+    const double previous_scale = right_joint_scale_[static_cast<std::size_t>(joint)] > 0.0 ?
+      right_joint_scale_[static_cast<std::size_t>(joint)] : 1.0;
+    const double previous = joint_rms(
+      previous_scale, right_joint_bias_[static_cast<std::size_t>(joint)]);
+    const double candidate = joint_rms(joint_scale, joint_bias);
+    if (candidate < previous) {
+      right_joint_scale_[static_cast<std::size_t>(joint)] = joint_scale;
+      right_joint_bias_[static_cast<std::size_t>(joint)] = joint_bias;
+      ++accepted;
+    }
+  }
+  say("✓ 软持拟合结束。%d 个关节的倍率或偏置留出误差变小。按 v v 检验，按 p p 写入", accepted);
 }
 
 }  // namespace x1_coffee_hardware_core

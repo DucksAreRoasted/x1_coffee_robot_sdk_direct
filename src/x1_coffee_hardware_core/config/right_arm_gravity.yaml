@@ -4,3 +4,5 @@ mass_scale: 1 1 1 1 1 1 1
 com_dx: 0 0 0 0 0 0 0
 com_dy: 0 0 0 0 0 0 0
 com_dz: 0 0 0 0 0 0 0
+joint_scale: 1 1 1 1 1 1 1
+joint_bias: 0 0 0 0 0 0 0
