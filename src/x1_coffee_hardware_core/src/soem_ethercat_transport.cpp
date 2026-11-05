@@ -360,6 +360,9 @@ public:
     debugf("before ecx_configdc");
     ecx_configdc(&context_);
     for (int slave = 1; slave <= count; ++slave) {
+      if (!context_.slavelist[slave].hasdc) {
+        say("! 轴 %d 不支持分布时钟，过程数据输出可能不会按 SYNC0 生效", slave);
+      }
       ecx_dcsync0(&context_, static_cast<std::uint16_t>(slave), TRUE, 500000, 0);
       const bool torque = torque_axis_[static_cast<std::size_t>(slave - 1)];
       const int expect_out = torque ? static_cast<int>(sizeof(TorqueOutput)) :
@@ -868,9 +871,29 @@ private:
     int steady_cycle = 0;
     long told_overruns = 0;
     int last_overrun_log = 0;
+    // 工作计数不足说明有从站没有处理本帧输出。每 2 秒汇总一次，不开调试也打印。
+    int wkc_window_cycles = 0;
+    int wkc_bad_frames = 0;
+    int wkc_window_min = expected_wkc_;
     timer.resetStats();
     while (!stopped()) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
+      if (wkc != expected_wkc_) {
+        ++wkc_bad_frames;
+      }
+      if (wkc < wkc_window_min) {
+        wkc_window_min = wkc;
+      }
+      if (++wkc_window_cycles >= 4000) {
+        if (wkc_bad_frames > 0) {
+          say(
+            "! 2 秒内 %d 帧工作计数不符，期望 %d，最低 %d",
+            wkc_bad_frames, expected_wkc_, wkc_window_min);
+        }
+        wkc_window_cycles = 0;
+        wkc_bad_frames = 0;
+        wkc_window_min = expected_wkc_;
+      }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
         SlaveFeedback & item = feedback[static_cast<std::size_t>(slave - 1)];
@@ -955,11 +978,62 @@ private:
     if (mask == 0) {
       return;
     }
+    ecx_readstate(&context_);
     for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
       if ((mask & (1u << (slave - 1))) == 0) {
         continue;
       }
       const auto slave_id = static_cast<std::uint16_t>(slave);
+      const ec_slavet & info = context_.slavelist[slave];
+      say(
+        "! 轴 %d 总线状态 0x%02x AL码 0x%04x 分布时钟 %d 输出 %u 字节 偏移 %ld 位 %u",
+        slave, info.state, info.ALstatuscode, info.hasdc ? 1 : 0, info.Obytes,
+        info.outputs != nullptr ? static_cast<long>(info.outputs - iomap_) : -1L,
+        static_cast<unsigned>(info.Ostartbit));
+      // 输出映射和同步方式。另外 13 轴读回值相同，才能排除映射与同步配置。
+      auto read8 = [&](std::uint16_t index, std::uint8_t subindex, int * rc) {
+          std::uint8_t value = 0;
+          int size = static_cast<int>(sizeof(value));
+          *rc = ecx_SDOread(
+            &context_, slave_id, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM);
+          return value;
+        };
+      auto read16 = [&](std::uint16_t index, std::uint8_t subindex, int * rc) {
+          std::uint16_t value = 0;
+          int size = static_cast<int>(sizeof(value));
+          *rc = ecx_SDOread(
+            &context_, slave_id, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM);
+          return value;
+        };
+      auto read32 = [&](std::uint16_t index, std::uint8_t subindex, int * rc) {
+          std::uint32_t value = 0;
+          int size = static_cast<int>(sizeof(value));
+          *rc = ecx_SDOread(
+            &context_, slave_id, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM);
+          return value;
+        };
+      int rc_assign_count = 0;
+      int rc_assign = 0;
+      int rc_map_count = 0;
+      int rc_map_control = 0;
+      int rc_sync_type = 0;
+      int rc_sync_cycle = 0;
+      int rc_status = 0;
+      const std::uint8_t assign_count = read8(0x1C12, 0x00, &rc_assign_count);
+      const std::uint16_t assign = read16(0x1C12, 0x01, &rc_assign);
+      const std::uint8_t map_count = read8(0x1600, 0x00, &rc_map_count);
+      const std::uint32_t map_control = read32(0x1600, 0x03, &rc_map_control);
+      const std::uint16_t sync_type = read16(0x1C32, 0x01, &rc_sync_type);
+      const std::uint32_t sync_cycle = read32(0x1C32, 0x02, &rc_sync_cycle);
+      const std::uint16_t status = read16(0x6041, 0x00, &rc_status);
+      say(
+        "! 轴 %d 输出分配 0x1C12 数量 %u rc=%d 首项 0x%04x rc=%d "
+        "0x1600 条目 %u rc=%d 第3条 0x%08x rc=%d",
+        slave, assign_count, rc_assign_count, assign, rc_assign,
+        map_count, rc_map_count, map_control, rc_map_control);
+      say(
+        "! 轴 %d 输出同步 0x1C32 方式 %u rc=%d 周期 %u ns rc=%d 邮箱状态字 0x%04x rc=%d",
+        slave, sync_type, rc_sync_type, sync_cycle, rc_sync_cycle, status, rc_status);
       std::uint16_t control_word = 0;
       int control_size = static_cast<int>(sizeof(control_word));
       const int control_rc = ecx_SDOread(
@@ -997,7 +1071,11 @@ private:
       std::uint16_t switch_on = 0x0007;
       const int switch_rc = ecx_SDOwrite(
         &context_, slave_id, 0x6040, 0x00, FALSE, sizeof(switch_on), &switch_on, EC_TIMEOUTRXM);
-      say("● 轴 %d 邮箱写接通字 0x0007，返回 %d", slave, switch_rc);
+      int rc_after = 0;
+      const std::uint16_t status_after = read16(0x6041, 0x00, &rc_after);
+      say(
+        "● 轴 %d 邮箱写接通字 0x0007，返回 %d，随后邮箱状态字 0x%04x rc=%d",
+        slave, switch_rc, status_after, rc_after);
     }
   }
 
