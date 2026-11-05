@@ -839,6 +839,8 @@ private:
       }
       if (op_requested && context_.slavelist[0].state == EC_STATE_OPERATIONAL) {
         say("✓ 15 台从站已进入运行");
+        // 广播读到的是汇总状态，这里逐台再核对一次。
+        superviseSlaveStates();
         saw_op = true;
         {
           std::lock_guard<std::mutex> lock(wait_mu_);
@@ -937,7 +939,41 @@ private:
       traceCycle(feedback, command, true, wkc, send_rc);
       applyPendingDriveMode();
       applyStuckEnableProbe();
+      // 每秒巡检一次各从站总线状态。安全运行态下从站只回传输入、不执行输出，
+      // 状态字会一直停在准备接通。
+      if ((steady_cycle % 2000) == 0) {
+        superviseSlaveStates();
+      }
       timer.wait(context_.DCtime);
+    }
+  }
+
+  void superviseSlaveStates()
+  {
+    ecx_readstate(&context_);
+    bool changed = false;
+    for (int slave = 1; slave <= context_.slavecount; ++slave) {
+      ec_slavet & info = context_.slavelist[slave];
+      if (info.state == EC_STATE_OPERATIONAL) {
+        continue;
+      }
+      // 每次掉出运行都打印，不静默恢复。
+      say(
+        "! 轴 %d 总线掉出运行，状态 0x%02x AL码 0x%04x，重新请求进入运行",
+        slave, info.state, info.ALstatuscode);
+      if ((info.state & EC_STATE_ERROR) != 0) {
+        // 总线层错误必须先应答才能换状态；这里不动驱动器故障字。
+        info.state = static_cast<std::uint16_t>((info.state & 0x0f) + EC_STATE_ACK);
+        ecx_writestate(&context_, static_cast<std::uint16_t>(slave));
+      }
+      if ((info.state & 0x0f) == EC_STATE_SAFE_OP) {
+        info.state = EC_STATE_OPERATIONAL;
+        ecx_writestate(&context_, static_cast<std::uint16_t>(slave));
+      }
+      changed = true;
+    }
+    if (changed) {
+      ++op_recover_requests_;
     }
   }
 
@@ -1092,6 +1128,8 @@ private:
   std::thread trace_thread_;
   std::atomic<bool> trace_stop_{false};
   int expected_wkc_{0};
+  // 周期中重新请求进入运行的次数，仅用于诊断。
+  int op_recover_requests_{0};
   std::atomic<bool> stop_{false};
   std::atomic<bool> thread_done_{true};
   std::atomic<bool> shutdown_started_{false};
