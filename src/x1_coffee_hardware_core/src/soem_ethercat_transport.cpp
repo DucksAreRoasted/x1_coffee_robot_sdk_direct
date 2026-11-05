@@ -374,6 +374,8 @@ public:
       ecx_dcsync0(
         &context_, static_cast<std::uint16_t>(slave), TRUE,
         static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+      // 过程数据看门狗短于约 100 ms 时，读一次状态就会让从站报 0x001B 并停在安全操作。
+      widenProcessDataWatchdog(slave);
       const bool torque = torque_axis_[static_cast<std::size_t>(slave - 1)];
       const int expect_out = torque ? static_cast<int>(sizeof(TorqueOutput)) :
         static_cast<int>(sizeof(ZeroErrOutput));
@@ -873,25 +875,25 @@ private:
       if (cycle == 0 || (cycle % 1000) == 0) {
         say("● 等待从站进入运行，已有反馈 %d/15", ready);
       }
-      // 寄存器读取会挡住周期线程。100 ms 才看一次总线状态，不插进每一拍。
-      if (!safeop_seen && (cycle % 100) == 0) {
-        ecx_readstate(&context_);
+      // 每 20 拍只读一台 AL 状态。一次读完全部 15 台会把帧间隔拉过同步管理器看门狗。
+      if ((cycle % 20) == 0) {
+        refreshOneSlaveState(1 + ((cycle / 20) % static_cast<int>(kCoffeeAxisCount)));
       }
-      if (!safeop_seen && (context_.slavelist[0].state & 0x0f) >= EC_STATE_SAFE_OP) {
+      if (!safeop_seen && slavesAtLeast(EC_STATE_SAFE_OP)) {
         safeop_seen = true;
         say("● 从站进入安全运行，%d/15 台有反馈", ready);
       }
       if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
-        // 官方 IgH 示例先空发若干帧，等从站自己进入运行，不每个周期改写状态。
+        // 先连发有效输出，再广播一次进入运行。之后不再成批改状态。
         if (++primed_cycles >= 100) {
           context_.slavelist[0].state = EC_STATE_OPERATIONAL;
           ecx_writestate(&context_, 0);
           op_requested = true;
+          op_requested_ = true;
           say("● 已连续发送有效输出，请求 15 台从站进入运行");
         }
       }
-      // 500 ms 才复查一次。还停在安全运行的从站再请求一次，不读链路寄存器。
-      if (op_requested && (cycle % 500) == 0 && pollOperational()) {
+      if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL)) {
         say("✓ 15 台从站逐台确认已进入运行");
         saw_op = true;
         {
@@ -1012,8 +1014,102 @@ private:
     }
   }
 
-  // 官方 IgH 示例在进运行前只收发，不反复改状态。这里 500 ms 看一次。
-  // 不退回预运行，也不在周期里读链路寄存器。
+  // 过程数据看门狗：单位是 (分频器+2)*40 ns。短于 100 ms 就拉长到约 100 ms。0 表示关闭，不动。
+  void widenProcessDataWatchdog(int slave)
+  {
+    const auto address = context_.slavelist[slave].configadr;
+    std::uint16_t divider = 0;
+    std::uint16_t counts = 0;
+    const int rc_div = ecx_FPRD(
+      &context_.port, address, 0x0400, sizeof(divider), &divider, EC_TIMEOUTRET);
+    const int rc_cnt = ecx_FPRD(
+      &context_.port, address, 0x0420, sizeof(counts), &counts, EC_TIMEOUTRET);
+    if (rc_div <= 0 || rc_cnt <= 0 || counts == 0) {
+      say(
+        "! 轴 %d 读不到过程数据看门狗，分频 %u rc=%d 计数 %u rc=%d",
+        slave, divider, rc_div, counts, rc_cnt);
+      return;
+    }
+    const std::uint64_t unit_ns = (static_cast<std::uint64_t>(divider) + 2ull) * 40ull;
+    const std::uint64_t timeout_ns = unit_ns * counts;
+    constexpr std::uint64_t kWantNs = 100000000ull;
+    if (timeout_ns >= kWantNs) {
+      return;
+    }
+    auto widened = static_cast<std::uint16_t>((kWantNs + unit_ns - 1ull) / unit_ns);
+    const int rc_write = ecx_FPWR(
+      &context_.port, address, 0x0420, sizeof(widened), &widened, EC_TIMEOUTRET);
+    say(
+      "● 轴 %d 过程数据看门狗由 %llu ms 改为约 100 ms，0x0420=%u rc=%d",
+      slave, static_cast<unsigned long long>(timeout_ns / 1000000ull), widened, rc_write);
+  }
+
+  // 只读一台的 AL 状态和 AL 码。停在安全操作且没有错误时，隔 0.5 秒再请求一次运行。
+  void refreshOneSlaveState(int slave)
+  {
+    if (slave < 1 || slave > context_.slavecount) {
+      return;
+    }
+    struct {
+      std::uint16_t status;
+      std::uint16_t code;
+    } al{};
+    const auto address = context_.slavelist[slave].configadr;
+    const int rc = ecx_FPRD(
+      &context_.port, address, 0x0130, sizeof(al), &al, EC_TIMEOUTRET);
+    if (rc <= 0) {
+      return;
+    }
+    last_al_state_[slave] = al.status;
+    context_.slavelist[slave].state = al.status;
+    context_.slavelist[slave].ALstatuscode = al.code;
+    if (!op_requested_ || (al.status & 0x0f) == EC_STATE_OPERATIONAL) {
+      return;
+    }
+    if ((al.status & EC_STATE_ERROR) != 0) {
+      // 0x001B 是同步管理器看门狗。先应答错误，下一圈再请求运行。
+      if (last_error_logged_[slave] != al.code) {
+        last_error_logged_[slave] = al.code;
+        say(
+          "! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x，应答",
+          slave, al.status, al.code);
+      }
+      const auto ack = static_cast<std::uint16_t>((al.status & 0x0f) + EC_STATE_ACK);
+      auto ack_reg = ack;
+      ecx_FPWR(
+        &context_.port, address, 0x0120, sizeof(ack_reg), &ack_reg, EC_TIMEOUTRET);
+      return;
+    }
+    if (op_quiet_cycles_[slave] > 0) {
+      --op_quiet_cycles_[slave];
+      return;
+    }
+    auto want = static_cast<std::uint16_t>(EC_STATE_OPERATIONAL);
+    ecx_FPWR(
+      &context_.port, address, 0x0120, sizeof(want), &want, EC_TIMEOUTRET);
+    op_quiet_cycles_[slave] = 2;
+    ++op_requests_[slave];
+    if (op_requests_[slave] == 1 || (op_requests_[slave] % 4) == 0) {
+      say(
+        "! 轴 %d 还未进入运行，状态 0x%02x AL码 0x%04x，再次请求（第 %d 次）",
+        slave, al.status, al.code, op_requests_[slave]);
+    }
+  }
+
+  bool slavesAtLeast(std::uint16_t state) const
+  {
+    if (context_.slavecount < static_cast<int>(kCoffeeAxisCount)) {
+      return false;
+    }
+    for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
+      if ((last_al_state_[slave] & 0x0f) < state) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // 官方 IgH 示例在进运行前只收发，不反复改状态。这里保留给稳态巡检。
   bool pollOperational()
   {
     ecx_readstate(&context_);
@@ -1272,6 +1368,10 @@ private:
   int op_recover_requests_{0};
   // 下标是从站号。重复请求运行的次数，进入运行后清零。
   std::array<int, kCoffeeAxisCount + 1> op_requests_{};
+  std::array<std::uint16_t, kCoffeeAxisCount + 1> last_al_state_{};
+  std::array<std::uint16_t, kCoffeeAxisCount + 1> last_error_logged_{};
+  std::array<int, kCoffeeAxisCount + 1> op_quiet_cycles_{};
+  bool op_requested_{false};
   std::atomic<bool> stop_{false};
   std::atomic<bool> thread_done_{true};
   std::atomic<bool> shutdown_started_{false};
