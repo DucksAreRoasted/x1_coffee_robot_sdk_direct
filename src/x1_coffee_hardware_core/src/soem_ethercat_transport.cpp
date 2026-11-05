@@ -26,6 +26,7 @@
 #include <time.h>
 
 #include "soem/soem.h"
+#include "x1_coffee_hardware_core/coffee_axis_model.hpp"
 #include "x1_coffee_hardware_core/zeroerr_drive.hpp"
 #include "enable_trace.hpp"
 
@@ -978,6 +979,33 @@ constexpr int kSwitchOnHoldCycles = 200;
 // 使能字也停 0.5 秒才关电压重走。关电压最多 0.5 秒，直到变成禁止接通。
 constexpr int kEnableStuckCycles = 1000;
 constexpr int kEnableDisableCycles = 1000;
+// 500 μs 一个周期，4000 拍约 2 秒。只给未使能的轴打摘要。
+constexpr int kEnableDebugCycles = 4000;
+
+// 日志用的掩码名称，和本文件里比较的 0x006F 一致。不消解状态字 bit5/bit6 的手册冲突。
+const char * maskedEnableState(std::uint16_t status_word)
+{
+  switch (status_word & 0x006F) {
+    case 0x0000: return "未就绪";
+    case 0x0040: return "接通禁止";
+    case 0x0021: return "准备接通";
+    case 0x0023: return "已接通";
+    case 0x0027: return "已使能";
+    case 0x0007: return "快速停机";
+    case 0x0008: return "故障";
+    case 0x000F: return "故障反应";
+    default: return "未知掩码";
+  }
+}
+
+const char * enablePhaseLabel(int phase)
+{
+  switch (phase) {
+    case 1: return "关电压";
+    case 2: return "等待300ms";
+    default: return "跟随状态字";
+  }
+}
 
 static int velocityStep(double pulses_per_unit, double velocity_rad_s)
 {
@@ -1673,6 +1701,74 @@ void SoemEthercatTransport::onCycle(
       out.target_position = item.actual_position;
       out.target_torque = mitTorque(index, item.actual_position);
     }
+  }
+  logEnableProgress(feedback, *command);
+}
+
+void SoemEthercatTransport::logEnableProgress(
+  const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback,
+  const std::array<SlaveCommand, kCoffeeAxisCount> & command)
+{
+  if (!drives_enabled_ || shutdown_outputs_) {
+    return;
+  }
+  std::uint16_t enabled_now = 0;
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    const SlaveFeedback & item = feedback[index];
+    if (item.valid && (item.status_word & 0x006F) == 0x0027) {
+      enabled_now = static_cast<std::uint16_t>(enabled_now | (1u << index));
+    }
+  }
+  if (enabled_now == 0x7FFF) {
+    if (!all_enabled_logged_) {
+      all_enabled_logged_ = true;
+      say("✓ 15 轴状态字掩码都是已使能 0x0027");
+    }
+    enable_debug_cycles_ = 0;
+    enabled_mask_seen_ = enabled_now;
+    return;
+  }
+  all_enabled_logged_ = false;
+  if (++enable_debug_cycles_ < kEnableDebugCycles) {
+    return;
+  }
+  enable_debug_cycles_ = 0;
+  const std::uint16_t dropped = static_cast<std::uint16_t>(enabled_mask_seen_ & ~enabled_now);
+  enabled_mask_seen_ = enabled_now;
+  int enabled_count = 0;
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    if ((enabled_now & (1u << index)) != 0) {
+      ++enabled_count;
+    }
+  }
+  say(
+    "%s使能 %d/15，未使能 %d 轴",
+    servo_ready_delay_ms_ > 0 && !servo_wait_done_logged_ ? "伺服准备中，" : "",
+    enabled_count, static_cast<int>(kCoffeeAxisCount) - enabled_count);
+  const auto & names = coffeeAxisDescriptors();
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+    if ((enabled_now & (1u << index)) != 0) {
+      continue;
+    }
+    const SlaveFeedback & item = feedback[index];
+    const char * dropped_note = (dropped & (1u << index)) != 0 ? " 本段曾离开已使能" : "";
+    if (!item.valid) {
+      say(
+        "! %s 无过程数据 控制字 0x%04x 阶段 %s 重试 %d%s",
+        names[index].joint_name.data(), command[index].control_word,
+        enablePhaseLabel(enable_phase_[index]), enable_retries_[index], dropped_note);
+      continue;
+    }
+    say(
+      "! %s 状态 0x%04x 掩码 0x%04x %s bit3=%d bit4=%d bit7=%d "
+      "控制字 0x%04x 阶段 %s 重试 %d 准备接通已保持 %d 周期 位置 %d%s",
+      names[index].joint_name.data(), item.status_word, item.status_word & 0x006F,
+      maskedEnableState(item.status_word),
+      (item.status_word & 0x0008) != 0 ? 1 : 0,
+      (item.status_word & 0x0010) != 0 ? 1 : 0,
+      (item.status_word & 0x0080) != 0 ? 1 : 0,
+      command[index].control_word, enablePhaseLabel(enable_phase_[index]),
+      enable_retries_[index], enable_ready_cycles_[index], item.actual_position, dropped_note);
   }
 }
 
