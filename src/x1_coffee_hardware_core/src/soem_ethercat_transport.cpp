@@ -2015,27 +2015,27 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     }
   }
 
-  struct Pose { double q[7]; };
-  // 腕、肘、肩分开。角度留在右臂限位内，接近量再往外偏一截。
+  struct Pose { const char * name; double q[7]; };
+  // 每个航点换一个朝向。同一航点的正负侧只差一个小偏置，看起来会接近。
   const Pose goals[] = {
-    {{0.5, -0.90, 0.30, 1.00, 0.00, 0.15, 0.00}},
-    {{0.5, -0.90, 0.30, 1.00, 0.70, 0.15, 0.00}},
-    {{0.5, -0.90, 0.30, 1.00, -0.70, 0.15, 0.00}},
-    {{0.5, -0.90, 0.30, 1.00, 0.00, 0.55, 0.00}},
-    {{0.5, -0.90, 0.30, 1.00, 0.00, -0.35, 0.00}},
-    {{0.5, -0.90, 0.30, 1.00, 0.00, 0.15, 0.60}},
-    {{0.5, -0.90, 0.30, 1.00, 0.40, -0.20, -0.40}},
-    {{0.5, -1.00, 0.00, 1.15, 0.00, 0.10, 0.00}},
-    {{0.5, -1.00, 0.50, 1.15, 0.00, 0.10, 0.00}},
-    {{0.5, -1.00, -0.50, 1.15, 0.00, 0.10, 0.00}},
-    {{0.5, -1.00, 0.20, 0.55, 0.00, 0.10, 0.00}},
-    {{0.5, -1.20, 0.20, 1.30, 0.00, 0.15, 0.00}},
-    {{0.0, -0.60, 0.20, 0.90, 0.00, 0.10, 0.00}},
-    {{0.8, -1.10, 0.20, 1.10, 0.00, 0.10, 0.00}},
-    {{1.2, -1.40, 0.00, 1.00, 0.00, 0.10, 0.00}},
-    {{0.4, -0.15, 0.00, 0.35, 0.00, 0.00, 0.00}},
-    {{-0.2, -0.08, 0.00, 0.40, 0.00, 0.00, 0.00}},
-    {{0.2, -0.08, 0.00, 0.40, 0.00, 0.00, 0.00}},
+    {"前下伸直", {0.30, 0.00, 0.00, 0.30, 0.00, 0.10, 0.00}},
+    {"前下屈肘", {0.60, -0.20, 0.40, 1.20, 0.30, 0.00, 0.00}},
+    {"侧前平举", {1.00, -0.90, 0.00, 1.10, 0.00, 0.20, 0.00}},
+    {"低后伸", {-2.00, -0.80, 0.00, 0.30, 0.00, -0.30, 0.00}},
+    {"侧后平举", {-1.30, -1.00, 0.00, 0.90, 0.00, 0.00, 0.00}},
+    {"正侧伸直", {0.20, -1.50, 0.00, 0.25, 0.00, 0.10, 0.00}},
+    {"正侧屈肘", {0.20, -1.40, 0.80, -0.70, 0.20, 0.30, 0.00}},
+    {"侧上", {0.40, -2.10, 0.00, 0.80, 0.00, 0.20, 0.00}},
+    {"上举", {0.00, -2.60, 0.00, 0.40, 0.00, 0.00, 0.00}},
+    {"上举偏后", {-0.80, -2.30, -0.40, 0.70, -0.40, 0.20, 0.00}},
+    {"远侧高举", {1.60, -1.80, 0.00, 1.20, 0.00, 0.30, 0.00}},
+    {"后下", {-1.80, -0.50, 0.00, 0.50, 0.00, -0.20, 0.00}},
+    {"收肘贴身", {0.50, -0.40, 0.60, -1.20, 0.00, 0.20, 0.40}},
+    {"外展高肘", {-0.40, -1.70, -0.70, 1.30, 0.30, -0.20, 0.00}},
+    {"斜前低", {0.90, -0.35, -0.50, 0.80, -0.50, 0.40, -0.40}},
+    {"斜后高", {-1.00, -2.00, 0.50, 1.00, 0.50, 0.10, 0.60}},
+    {"侧平翻肘", {0.00, -1.20, 1.20, 1.00, 0.00, 0.00, 0.00}},
+    {"侧平反翻肘", {0.00, -1.20, -1.20, 0.60, 0.00, 0.20, 0.00}},
   };
   const double lower[7] = {-3.00, -2.90, -3.00, -1.90, -3.00, -1.60, -6.00};
   const double upper[7] = {3.00, 0.05, 3.00, 1.36, 3.00, 1.60, 6.00};
@@ -2145,16 +2145,29 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       const auto deadline = began + std::chrono::seconds(8);
       double error = 0.0;
       double speed = 0.0;
+      int worst = 0;
+      std::array<double, 7> joint_error{};
+      std::array<double, 7> last_q{};
       while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        const std::array<double, 7> q = measured_q();
+        last_q = measured_q();
         const double time = std::chrono::duration<double>(
           std::chrono::steady_clock::now() - began).count();
-        window.push(time, q);
+        window.push(time, last_q);
         speed = window.speed();
         error = 0.0;
+        bool on_approach_side = true;
         for (int joint = 0; joint < 7; ++joint) {
-          error = std::max(error, std::abs(q[static_cast<std::size_t>(joint)] - target.q[joint]));
+          joint_error[static_cast<std::size_t>(joint)] = std::abs(
+            last_q[static_cast<std::size_t>(joint)] - target.q[joint]);
+          if (joint_error[static_cast<std::size_t>(joint)] > error) {
+            error = joint_error[static_cast<std::size_t>(joint)];
+            worst = joint;
+          }
+          // 允许误差小于该轴接近量的 85%。0.053 rad 仍落在 0.08 rad 的接近侧。
+          if (hard && joint_error[static_cast<std::size_t>(joint)] > approach[joint] * 0.85) {
+            on_approach_side = false;
+          }
         }
         const auto now = std::chrono::steady_clock::now();
         const double error_abort = hard ? 0.75 : 1.35;
@@ -2163,15 +2176,15 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
             bad = true;
             bad_since = now;
           } else if (std::chrono::duration<double>(now - bad_since).count() > 0.30) {
-            say("✗ 右臂跟踪超限，标定停止");
+            say("✗ 右臂跟踪超限，标定停止。最大是 r%d，误差 %.3f rad，速度 %.3f rad/s",
+              worst + 1, error, speed > 100.0 ? -1.0 : speed);
             gravity_calib_stop_.store(true);
             return false;
           }
         } else {
           bad = false;
         }
-        // 最小接近量是 0.08 rad。误差小于 0.05 才算落到了这一侧，而不是还停在航点另一边。
-        const bool quiet = speed < 0.05 && (!hard || error < 0.05);
+        const bool quiet = speed < 0.05 && (!hard || on_approach_side);
         if (!quiet) {
           quiet_since = now;
         } else if (std::chrono::duration<double>(now - quiet_since).count() >= 0.40) {
@@ -2179,11 +2192,29 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         }
       }
       if (!gravity_calib_stop_.load()) {
+        std::array<bool, 7> saturated{};
+        {
+          std::lock_guard<std::mutex> lock(sample_mu_);
+          saturated = mit_balance_ok_;
+        }
+        const double allow = approach[worst] * 0.85;
         const double shown_speed = speed > 100.0 ? -1.0 : speed;
         say(hard ?
-          "! 硬跟踪没有停稳，误差 %.3f rad，速度 %.3f rad/s" :
-          "! 软持没有停稳，误差 %.3f rad，速度 %.3f rad/s",
-          error, shown_speed);
+          "! 硬跟踪没有停稳。最大是 r%d，误差 %.3f rad，允许 %.3f，速度 %.3f rad/s" :
+          "! 软持没有停稳。最大是 r%d，误差 %.3f rad，允许 %.3f，速度 %.3f rad/s",
+          worst + 1, error, allow, shown_speed);
+        say("! 七轴误差 rad: %.3f %.3f %.3f %.3f %.3f %.3f %.3f",
+          joint_error[0], joint_error[1], joint_error[2], joint_error[3],
+          joint_error[4], joint_error[5], joint_error[6]);
+        say("! 目标 rad: %.3f %.3f %.3f %.3f %.3f %.3f %.3f",
+          target.q[0], target.q[1], target.q[2], target.q[3],
+          target.q[4], target.q[5], target.q[6]);
+        say("! 实测 rad: %.3f %.3f %.3f %.3f %.3f %.3f %.3f",
+          last_q[0], last_q[1], last_q[2], last_q[3], last_q[4], last_q[5], last_q[6]);
+        say("! 力矩顶满: %s %s %s %s %s %s %s",
+          saturated[0] ? "否" : "是", saturated[1] ? "否" : "是", saturated[2] ? "否" : "是",
+          saturated[3] ? "否" : "是", saturated[4] ? "否" : "是", saturated[5] ? "否" : "是",
+          saturated[6] ? "否" : "是");
       }
       return false;
     };
@@ -2244,6 +2275,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       break;
     }
     const Pose goal = clamp_to(goal_in, lower, upper);
+    say("● 右臂换到%s", goal.name);
     std::array<double, 7> q_sum{};
     std::array<double, 7> y_sum{};
     int sides = 0;
