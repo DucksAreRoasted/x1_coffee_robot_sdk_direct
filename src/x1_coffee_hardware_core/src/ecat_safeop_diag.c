@@ -4,10 +4,13 @@
  * 用法: ecat_safeop_diag [网口]
  * 默认 enp3s0。看到全部进入运行，或 15 秒到时，程序自己退出。
  */
+#include <net/if.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -49,6 +52,38 @@ static void on_signal(int signo)
 {
   (void)signo;
   stop_requested = 1;
+}
+
+/* SOEM 只加混杂和广播，不保证网口是 up。链路没起来时广播会没有任何帧回来。 */
+static void bring_link_up(const char *ifname)
+{
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  struct ifreq req;
+  if (sock < 0) {
+    printf("无法读取网口状态\n");
+    return;
+  }
+  memset(&req, 0, sizeof(req));
+  snprintf(req.ifr_name, sizeof(req.ifr_name), "%s", ifname);
+  if (ioctl(sock, SIOCGIFFLAGS, &req) != 0) {
+    printf("网口 %s 不存在\n", ifname);
+    close(sock);
+    return;
+  }
+  printf(
+    "打开前 up=%d running=%d\n",
+    (req.ifr_flags & IFF_UP) ? 1 : 0, (req.ifr_flags & IFF_RUNNING) ? 1 : 0);
+  req.ifr_flags |= IFF_UP | IFF_PROMISC | IFF_BROADCAST;
+  if (ioctl(sock, SIOCSIFFLAGS, &req) != 0) {
+    printf("无法把网口设为 up\n");
+  }
+  if (ioctl(sock, SIOCGIFFLAGS, &req) == 0) {
+    printf(
+      "打开后 up=%d running=%d（running=0 表示没有载波，网线或对端没通）\n",
+      (req.ifr_flags & IFF_UP) ? 1 : 0, (req.ifr_flags & IFF_RUNNING) ? 1 : 0);
+  }
+  close(sock);
+  fflush(stdout);
 }
 
 static int64_t now_ns(void)
@@ -133,23 +168,45 @@ int main(int argc, char **argv)
   memset(reached, 0, sizeof(reached));
   memset(logged_wait, 0, sizeof(logged_wait));
   printf("诊断安全操作 0x04。不使能，输出保持 0，周期 1 ms，SYNC0 偏移 0。\n");
-  printf("网口 %s。最多 %d 秒。Ctrl-C 会先收回初始化再退出。\n", ifname, DIAG_SEC);
+  printf("网口 %s。最多 %d 秒。发现失败时不会改总线。\n", ifname, DIAG_SEC);
+  printf("有效用户 %d。不是 0 就没有原始网口权限。\n", (int)geteuid());
   fflush(stdout);
 
   signal(SIGINT, on_signal);
   signal(SIGTERM, on_signal);
+  bring_link_up(ifname);
   if (!ecx_init(&ctx, ifname)) {
     fprintf(stderr, "打不开网口 %s\n", ifname);
     return 1;
   }
   opened = 1;
-  count = ecx_config_init(&ctx);
-  printf("从站数 %d\n", count);
-  fflush(stdout);
+  {
+    struct ifreq req;
+    memset(&req, 0, sizeof(req));
+    snprintf(req.ifr_name, sizeof(req.ifr_name), "%s", ifname);
+    if (ioctl(ctx.port.sockhandle, SIOCGIFFLAGS, &req) == 0) {
+      printf(
+        "网口已打开 up=%d running=%d（running=0 表示链路灯不亮或没有载波）\n",
+        (req.ifr_flags & IFF_UP) ? 1 : 0, (req.ifr_flags & IFF_RUNNING) ? 1 : 0);
+    }
+  }
+  count = EC_NOFRAME;
+  {
+    int attempt;
+    for (attempt = 1; attempt <= 3; ++attempt) {
+      count = ecx_config_init(&ctx);
+      printf("第 %d 次发现从站，返回 %d\n", attempt, count);
+      fflush(stdout);
+      if (count > 0) {
+        break;
+      }
+      sleep(1);
+    }
+  }
   if (count == EC_NOFRAME) {
     fprintf(stderr,
       "没有收到任何从站应答。网口能打开，但总线上没有帧回来。\n"
-      "先停掉正在占用 enp3s0 的控制栈，确认网线链路是通的，再运行本程序。\n");
+      "先停掉占用这块网口的控制栈，确认链路灯亮着，再运行。\n");
     ecx_close(&ctx);
     opened = 0;
     return 1;
