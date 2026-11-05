@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -181,18 +182,37 @@ TEST(SoemEthercatTransport, stuck_ready_axis_does_not_restart_without_switch_on_
     EXPECT_EQ(raw->last[2].target_position, feedback[2].actual_position);
     words.push_back(raw->last[2].control_word);
   }
-  // 停在准备接通：先 1 秒接通字，再 0.5 秒使能字，然后关电压。
-  // 状态不变成接通禁止时，不能插入 300 ms 关机再当新一轮。
+  // 停在准备接通：先接通字，再使能字，再关电压。看不到接通禁止就不发关机字。
+  // 替身不读邮箱。关电压超时后只再按状态字走一轮。
   ASSERT_EQ(words.size(), 8000u);
-  for (int cycle = 0; cycle < 2000; ++cycle) {
-    EXPECT_EQ(words[static_cast<std::size_t>(cycle)], 0x0007);
+  std::size_t cursor = 0;
+  int switch_on = 0;
+  while (cursor < words.size() && words[cursor] == 0x0007) {
+    ++switch_on;
+    ++cursor;
   }
-  for (int cycle = 2000; cycle < 3000; ++cycle) {
-    EXPECT_EQ(words[static_cast<std::size_t>(cycle)], 0x000F);
+  int enable_operation = 0;
+  while (cursor < words.size() && words[cursor] == 0x000F) {
+    ++enable_operation;
+    ++cursor;
   }
-  for (int cycle = 3000; cycle < 8000; ++cycle) {
-    EXPECT_EQ(words[static_cast<std::size_t>(cycle)], 0x0000);
+  int voltage_off = 0;
+  while (cursor < words.size() && words[cursor] == 0x0000) {
+    ++voltage_off;
+    ++cursor;
   }
+  int restarted = 0;
+  while (cursor < words.size() && words[cursor] == 0x0007) {
+    ++restarted;
+    ++cursor;
+  }
+  EXPECT_EQ(switch_on, 2000);
+  EXPECT_EQ(enable_operation, 1000);
+  // 进入关电压的那一拍不计入等待，所以比 2 秒阈值多 1 拍。
+  EXPECT_EQ(voltage_off, 4001);
+  EXPECT_GT(restarted, 0);
+  EXPECT_EQ(cursor, words.size());
+  EXPECT_EQ(std::count(words.begin(), words.end(), static_cast<std::uint16_t>(0x0006)), 0);
 }
 
 TEST(SoemEthercatTransport, voltage_off_restarts_only_after_switch_on_disabled)

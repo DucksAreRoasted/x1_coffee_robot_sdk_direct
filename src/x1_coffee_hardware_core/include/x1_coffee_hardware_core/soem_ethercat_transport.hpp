@@ -53,6 +53,11 @@ public:
     (void)mode;
     (void)axis_mask;
   }
+  // 关电压没有改变状态字时读回 0x6040、0x6061、0x603F，并尝试用邮箱接通。
+  virtual void requestStuckEnableProbe(std::uint16_t axis_mask)
+  {
+    (void)axis_mask;
+  }
   virtual void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const
   {
     if (out != nullptr) {
@@ -162,6 +167,7 @@ private:
   int enable_debug_cycles_{0};
   std::uint16_t enabled_mask_seen_{0};
   bool all_enabled_logged_{false};
+  std::array<bool, kCoffeeAxisCount> enable_probe_sent_{};
   // eRob 手册 5.1.1：上电到伺服准备好。实机先等 5 秒再接通，单测为 0。
   int servo_ready_delay_ms_{0};
   std::chrono::steady_clock::time_point servo_wait_begin_{};

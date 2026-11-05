@@ -27,6 +27,7 @@
 
 #include "soem/soem.h"
 #include "x1_coffee_hardware_core/coffee_axis_model.hpp"
+#include "x1_coffee_hardware_core/erob_error_names.hpp"
 #include "x1_coffee_hardware_core/zeroerr_drive.hpp"
 #include "enable_trace.hpp"
 
@@ -430,6 +431,14 @@ public:
     const std::uint32_t packed =
       (static_cast<std::uint32_t>(axis_mask) << 8) | static_cast<std::uint32_t>(mode);
     pending_drive_mode_.store(packed);
+  }
+
+  void requestStuckEnableProbe(std::uint16_t axis_mask) override
+  {
+    if (axis_mask == 0) {
+      return;
+    }
+    pending_enable_probe_.fetch_or(axis_mask);
   }
 
   void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const override
@@ -904,6 +913,7 @@ private:
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, true, wkc, send_rc);
       applyPendingDriveMode();
+      applyStuckEnableProbe();
       timer.wait(context_.DCtime);
     }
   }
@@ -939,8 +949,61 @@ private:
     }
   }
 
+  void applyStuckEnableProbe()
+  {
+    const std::uint16_t mask = pending_enable_probe_.exchange(0);
+    if (mask == 0) {
+      return;
+    }
+    for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
+      if ((mask & (1u << (slave - 1))) == 0) {
+        continue;
+      }
+      const auto slave_id = static_cast<std::uint16_t>(slave);
+      std::uint16_t control_word = 0;
+      int control_size = static_cast<int>(sizeof(control_word));
+      const int control_rc = ecx_SDOread(
+        &context_, slave_id, 0x6040, 0x00, FALSE, &control_size, &control_word, EC_TIMEOUTRXM);
+      std::uint8_t mode_display = 0;
+      int mode_size = static_cast<int>(sizeof(mode_display));
+      const int mode_rc = ecx_SDOread(
+        &context_, slave_id, 0x6061, 0x00, FALSE, &mode_size, &mode_display, EC_TIMEOUTRXM);
+      std::uint32_t error_code = 0;
+      int error_size = static_cast<int>(sizeof(error_code));
+      const int error_rc = ecx_SDOread(
+        &context_, slave_id, 0x603F, 0x00, FALSE, &error_size, &error_code, EC_TIMEOUTRXM);
+      if (error_rc > 0 && error_size == 2) {
+        error_code &= 0xFFFF;
+      }
+      const auto error_name = erobErrorName(static_cast<std::uint16_t>(error_code));
+      say(
+        "! 轴 %d 邮箱读回 控制字 0x%04x rc=%d 模式 0x%02x rc=%d 错误码 0x%04x rc=%d %s",
+        slave, control_word, control_rc, mode_display, mode_rc,
+        static_cast<unsigned>(error_code & 0xFFFF), error_rc,
+        error_name ? error_name->c_str() : "未收录");
+      if (error_rc > 0 && error_code != 0) {
+        std::uint16_t fault_reset = 0x0080;
+        const int reset_rc = ecx_SDOwrite(
+          &context_, slave_id, 0x6040, 0x00, FALSE, sizeof(fault_reset), &fault_reset,
+          EC_TIMEOUTRXM);
+        say("● 轴 %d 邮箱写故障复位 0x0080，返回 %d", slave, reset_rc);
+      }
+      if (mode_rc <= 0 || mode_display != kZeroErrCyclicPositionMode) {
+        std::uint8_t mode = kZeroErrCyclicPositionMode;
+        const int write_mode_rc = ecx_SDOwrite(
+          &context_, slave_id, 0x6060, 0x00, FALSE, sizeof(mode), &mode, EC_TIMEOUTRXM);
+        say("● 轴 %d 邮箱重写周期同步位置 0x08，返回 %d", slave, write_mode_rc);
+      }
+      std::uint16_t switch_on = 0x0007;
+      const int switch_rc = ecx_SDOwrite(
+        &context_, slave_id, 0x6040, 0x00, FALSE, sizeof(switch_on), &switch_on, EC_TIMEOUTRXM);
+      say("● 轴 %d 邮箱写接通字 0x0007，返回 %d", slave, switch_rc);
+    }
+  }
+
   ecx_contextt context_{};
   std::atomic<std::uint32_t> pending_drive_mode_{0};
+  std::atomic<std::uint16_t> pending_enable_probe_{0};
   std::array<double, kCoffeeAxisCount> rated_nm_{};
   std::uint8_t iomap_[8192]{};
   bool opened_{false};
@@ -1646,10 +1709,17 @@ void SoemEthercatTransport::onCycle(
         enable_backoff_cycles_[index] = 0;
         ++enable_retries_[index];
         say("! 轴 %zu 已回到接通禁止，等待 300 ms 后再接通", index + 1);
-      } else if (enable_backoff_cycles_[index] == kVoltageOffWaitCycles) {
+      } else if (enable_backoff_cycles_[index] == kVoltageOffWaitCycles && !enable_probe_sent_[index]) {
+        enable_probe_sent_[index] = true;
         say(
-          "! 轴 %zu 没有接受关电压，状态 0x%04x，不开始新一轮",
+          "! 轴 %zu 没有接受关电压，状态 0x%04x，改为邮箱读回并接通",
           index + 1, item.status_word);
+        if (link_ != nullptr) {
+          link_->requestStuckEnableProbe(static_cast<std::uint16_t>(1u << index));
+        }
+        enable_phase_[index] = 0;
+        enable_backoff_cycles_[index] = 0;
+        enable_ready_cycles_[index] = 0;
       }
       continue;
     }
