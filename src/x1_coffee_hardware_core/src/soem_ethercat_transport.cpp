@@ -1700,8 +1700,9 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
     gravity_nm = scale * gravity_nm + right_joint_bias_[static_cast<std::size_t>(slot)];
   }
   // 手册 8.2.123：周期同步扭矩里，扭矩偏移加到 0x6071。偏置直接写进目标力矩。
-  static constexpr double kHardKpNm[7] = {22.0, 22.0, 16.0, 16.0, 8.0, 8.0, 8.0};
-  static constexpr double kHardKdNm[7] = {1.0, 1.0, 0.7, 0.7, 0.3, 0.25, 0.3};
+  // 硬跟踪要落到接近点附近。22 N·m/rad 时，2 N·m 的模型残差就会停在 0.08 rad 以外。
+  static constexpr double kHardKpNm[7] = {320.0, 320.0, 160.0, 160.0, 48.0, 40.0, 36.0};
+  static constexpr double kHardKdNm[7] = {24.0, 24.0, 12.0, 12.0, 3.0, 2.4, 2.0};
   static constexpr double kSoftKpNm[7] = {2.5, 2.5, 2.0, 2.0, 1.0, 1.0, 1.0};
   static constexpr double kSoftKdNm[7] = {0.35, 0.35, 0.3, 0.3, 0.15, 0.12, 0.15};
   double command = 0.0;
@@ -2141,15 +2142,17 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       auto bad_since = quiet_since;
       bool bad = false;
       const auto began = quiet_since;
-      const auto deadline = began + std::chrono::seconds(6);
+      const auto deadline = began + std::chrono::seconds(8);
+      double error = 0.0;
+      double speed = 0.0;
       while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         const std::array<double, 7> q = measured_q();
         const double time = std::chrono::duration<double>(
           std::chrono::steady_clock::now() - began).count();
         window.push(time, q);
-        const double speed = window.speed();
-        double error = 0.0;
+        speed = window.speed();
+        error = 0.0;
         for (int joint = 0; joint < 7; ++joint) {
           error = std::max(error, std::abs(q[static_cast<std::size_t>(joint)] - target.q[joint]));
         }
@@ -2167,12 +2170,20 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         } else {
           bad = false;
         }
-        const bool quiet = speed < 0.05 && (!hard || error < 0.08);
+        // 最小接近量是 0.08 rad。误差小于 0.05 才算落到了这一侧，而不是还停在航点另一边。
+        const bool quiet = speed < 0.05 && (!hard || error < 0.05);
         if (!quiet) {
           quiet_since = now;
         } else if (std::chrono::duration<double>(now - quiet_since).count() >= 0.40) {
           return true;
         }
+      }
+      if (!gravity_calib_stop_.load()) {
+        const double shown_speed = speed > 100.0 ? -1.0 : speed;
+        say(hard ?
+          "! 硬跟踪没有停稳，误差 %.3f rad，速度 %.3f rad/s" :
+          "! 软持没有停稳，误差 %.3f rad，速度 %.3f rad/s",
+          error, shown_speed);
       }
       return false;
     };
@@ -2256,7 +2267,6 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         break;
       }
       if (!wait_quiet(side, true)) {
-        say("! 硬跟踪没有停稳，跳过这一侧");
         continue;
       }
       say("● 软持滑向航点");
@@ -2264,7 +2274,6 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         break;
       }
       if (!wait_quiet(goal, false)) {
-        say("! 软持没有停稳，跳过这一侧");
         stiffen();
         continue;
       }
