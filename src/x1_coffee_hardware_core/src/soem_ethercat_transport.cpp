@@ -36,12 +36,13 @@ namespace x1_coffee_hardware_core
 namespace
 {
 
-// 主站节拍：按绝对时间睡眠，并用 DC 时间把发帧时刻锁到 SYNC0 两个脉冲的中间。
-// usleep(500) 实测平均约 560 µs，比 SYNC0 慢，帧会周期性撞上驱动器采样时刻。
+// 主站节拍与固高 Gecat.eni 的 slave_dc 一致：SYNC0 周期 1 ms，偏移 100 µs。
+// 发帧锁在两个 SYNC0 脉冲的中间，避免撞上驱动器采样时刻。
 class DcCycleTimer
 {
 public:
-  static constexpr std::int64_t kCycleNs = 500000;
+  static constexpr std::int64_t kCycleNs = 1000000;
+  static constexpr std::int32_t kSync0ShiftNs = 100000;
 
   void start()
   {
@@ -359,11 +360,16 @@ public:
     say("✓ 15 轴过程数据已映射");
     debugf("before ecx_configdc");
     ecx_configdc(&context_);
+    say(
+      "● 分布时钟 SYNC0 周期 %lld ns，偏移 %d ns",
+      static_cast<long long>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
     for (int slave = 1; slave <= count; ++slave) {
       if (!context_.slavelist[slave].hasdc) {
         say("! 轴 %d 不支持分布时钟，过程数据输出可能不会按 SYNC0 生效", slave);
       }
-      ecx_dcsync0(&context_, static_cast<std::uint16_t>(slave), TRUE, 500000, 0);
+      ecx_dcsync0(
+        &context_, static_cast<std::uint16_t>(slave), TRUE,
+        static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
       const bool torque = torque_axis_[static_cast<std::size_t>(slave - 1)];
       const int expect_out = torque ? static_cast<int>(sizeof(TorqueOutput)) :
         static_cast<int>(sizeof(ZeroErrOutput));
@@ -538,10 +544,10 @@ public:
     if (flag == nullptr || std::string(flag) != "1") {
       return;
     }
-    std::uint32_t cycle_ns = 500000;
+    std::uint32_t cycle_ns = static_cast<std::uint32_t>(DcCycleTimer::kCycleNs);
     const int cycle_rc = ecx_SDOwrite(
       context, slave, 0x1C32, 0x0A, FALSE, sizeof(cycle_ns), &cycle_ns, EC_TIMEOUTRXM);
-    say("● 轴 %u 实验：写 0x1C32:0A=500000 ns rc=%d", slave, cycle_rc);
+    say("● 轴 %u 实验：写 0x1C32:0A=%u ns rc=%d", slave, cycle_ns, cycle_rc);
     std::uint16_t sync_type = 0x0002;
     const int write_rc = ecx_SDOwrite(
       context, slave, 0x1C32, 0x01, FALSE, sizeof(sync_type), &sync_type, EC_TIMEOUTRXM);
@@ -809,8 +815,8 @@ private:
     bool safeop_seen = false;
     bool op_requested = false;
     bool saw_op = false;
-    // 逐台进运行加上退回重走，最长约 20 秒；超时仍按失败处理。
-    for (int cycle = 0; !stopped() && cycle < 40000; ++cycle) {
+    // 逐台进运行加上退回重走，最长约 20 秒；超时仍按失败处理。1 ms 一拍。
+    for (int cycle = 0; !stopped() && cycle < 20000; ++cycle) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
@@ -849,10 +855,10 @@ private:
       }
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, false, wkc, send_rc);
-      if (cycle == 0 || (cycle % 2000) == 0) {
+      if (cycle == 0 || (cycle % 1000) == 0) {
         say("● 等待从站进入运行，已有反馈 %d/15", ready);
       }
-      if ((cycle % 20) == 0) {
+      if ((cycle % 10) == 0) {
         const std::uint16_t want = op_requested ? EC_STATE_OPERATIONAL : EC_STATE_SAFE_OP;
         ecx_statecheck(&context_, 0, want, 1000);
       }
@@ -866,7 +872,7 @@ private:
         say("● 逐台请求 15 台从站进入运行");
       }
       // 每 100 ms 推进一步逐台进运行；广播汇总状态不能代表每台都到了运行。
-      if (op_requested && (cycle % 200) == 0 && stepSequentialOp()) {
+      if (op_requested && (cycle % 100) == 0 && stepSequentialOp()) {
         say("✓ 15 台从站逐台确认已进入运行");
         saw_op = true;
         {
@@ -915,7 +921,7 @@ private:
       if (wkc < wkc_window_min) {
         wkc_window_min = wkc;
       }
-      if (++wkc_window_cycles >= 4000) {
+      if (++wkc_window_cycles >= 2000) {
         if (wkc_bad_frames > 0) {
           say(
             "! 2 秒内 %d 帧工作计数不符，期望 %d，最低 %d",
@@ -940,7 +946,7 @@ private:
         }
         item.valid = wkc > 0;
       }
-      if (timer.overruns() != told_overruns && steady_cycle - last_overrun_log >= 2000) {
+      if (timer.overruns() != told_overruns && steady_cycle - last_overrun_log >= 1000) {
         told_overruns = timer.overruns();
         last_overrun_log = steady_cycle;
         say(
@@ -970,7 +976,7 @@ private:
       applyStuckEnableProbe();
       // 每秒巡检一次各从站总线状态。安全运行态下从站只回传输入、不执行输出，
       // 状态字会一直停在准备接通。
-      if ((steady_cycle % 2000) == 0) {
+      if ((steady_cycle % 1000) == 0) {
         superviseSlaveStates(true);
       }
       timer.wait(context_.DCtime);
@@ -1300,18 +1306,18 @@ SoemLink * SoemLink::active_link_ = nullptr;
 
 }  // namespace
 
-// 与 cycleLoop 里的 usleep(500) 一致。CSP 每个通信周期写一次 0x607A。
-constexpr double kEthercatCycleSec = 5.0e-4;
-// 手册：同一台关节下使能到再使能的间隔应大于 300 ms。500 μs 一个周期。
-constexpr int kEnableGapCycles = 600;
+// 与 DcCycleTimer 的 1 ms 节拍一致。CSP 每个通信周期写一次 0x607A。
+constexpr double kEthercatCycleSec = 1.0e-3;
+// 手册：同一台关节下使能到再使能的间隔应大于 300 ms。1 ms 一个周期。
+constexpr int kEnableGapCycles = 300;
 // 准备接通先保持接通字 0x0007 约 1 秒，等掩码离开 0x0021。
-constexpr int kSwitchOnHoldCycles = 2000;
+constexpr int kSwitchOnHoldCycles = 1000;
 // 1 秒后仍是准备接通，再给使能字 0x000F 约 0.5 秒。
-constexpr int kEnableStuckCycles = 1000;
+constexpr int kEnableStuckCycles = 500;
 // 关电压后最多再等 2 秒。看不到接通禁止就不算新一轮。
-constexpr int kVoltageOffWaitCycles = 4000;
-// 500 μs 一个周期，4000 拍约 2 秒。只给未使能的轴打摘要。
-constexpr int kEnableDebugCycles = 4000;
+constexpr int kVoltageOffWaitCycles = 2000;
+// 1 ms 一个周期，2000 拍约 2 秒。只给未使能的轴打摘要。
+constexpr int kEnableDebugCycles = 2000;
 
 // 日志用的掩码名称，和本文件里比较的 0x006F 一致。不消解状态字 bit5/bit6 的手册冲突。
 const char * maskedEnableState(std::uint16_t status_word)

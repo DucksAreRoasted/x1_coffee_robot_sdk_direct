@@ -175,7 +175,8 @@ TEST(SoemEthercatTransport, stuck_ready_axis_does_not_restart_without_switch_on_
   }
   feedback[2].status_word = 0x12b1;
   std::vector<std::uint16_t> words;
-  for (int cycle = 0; cycle < 8000; ++cycle) {
+  // 1000 拍接通字 + 500 拍使能字 + 2001 拍关电压，再留在下一轮接通字里。
+  for (int cycle = 0; cycle < 4500; ++cycle) {
     feedback[2].actual_position = 1000 + cycle % 3;
     raw->cycle(feedback, &raw->last);
     EXPECT_EQ(raw->last[0].control_word, 0x000F);
@@ -184,7 +185,7 @@ TEST(SoemEthercatTransport, stuck_ready_axis_does_not_restart_without_switch_on_
   }
   // 停在准备接通：先接通字，再使能字，再关电压。看不到接通禁止就不发关机字。
   // 替身不读邮箱。关电压超时后只再按状态字走一轮。
-  ASSERT_EQ(words.size(), 8000u);
+  ASSERT_EQ(words.size(), 4500u);
   std::size_t cursor = 0;
   int switch_on = 0;
   while (cursor < words.size() && words[cursor] == 0x0007) {
@@ -206,10 +207,10 @@ TEST(SoemEthercatTransport, stuck_ready_axis_does_not_restart_without_switch_on_
     ++restarted;
     ++cursor;
   }
-  EXPECT_EQ(switch_on, 2000);
-  EXPECT_EQ(enable_operation, 1000);
+  EXPECT_EQ(switch_on, 1000);
+  EXPECT_EQ(enable_operation, 500);
   // 进入关电压的那一拍不计入等待，所以比 2 秒阈值多 1 拍。
-  EXPECT_EQ(voltage_off, 4001);
+  EXPECT_EQ(voltage_off, 2001);
   EXPECT_GT(restarted, 0);
   EXPECT_EQ(cursor, words.size());
   EXPECT_EQ(std::count(words.begin(), words.end(), static_cast<std::uint16_t>(0x0006)), 0);
@@ -251,7 +252,7 @@ TEST(SoemEthercatTransport, voltage_off_restarts_only_after_switch_on_disabled)
       break;
     }
   }
-  EXPECT_EQ(shutdown_cycles, 600);
+  EXPECT_EQ(shutdown_cycles, 300);
   EXPECT_EQ(word_after_gap, 0x0007);
   EXPECT_EQ(raw->last[0].control_word, 0x000F);
 }
@@ -295,12 +296,13 @@ TEST(SoemEthercatTransport, coordinated_path_passes_the_middle_knot_before_the_e
   waypoints[0][0] = 1.5;
   waypoints[1][0] = 2.0;
   ASSERT_TRUE(transport.requestMovePvtSegments(waypoints, {0.5, 0.5}));
-  for (int cycle = 0; cycle < 1000; ++cycle) {
+  // 1 ms 一拍，500 拍是第一段 0.5 秒，再 500 拍到总时间 1 秒。
+  for (int cycle = 0; cycle < 500; ++cycle) {
     raw->replay();
   }
   EXPECT_NEAR(raw->last[0].target_position, 1500, 5);
   EXPECT_NEAR(raw->last[1].target_position, 2000, 1);
-  for (int cycle = 0; cycle < 1000; ++cycle) {
+  for (int cycle = 0; cycle < 500; ++cycle) {
     raw->replay();
   }
   EXPECT_NEAR(raw->last[0].target_position, 2000, 5);
