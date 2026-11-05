@@ -36,13 +36,14 @@ namespace x1_coffee_hardware_core
 namespace
 {
 
-// 主站节拍与固高 Gecat.eni 的 slave_dc 一致：SYNC0 周期 1 ms，偏移 100 µs。
-// 发帧锁在两个 SYNC0 脉冲的中间，避免撞上驱动器采样时刻。
+// 零差官方 IgH 示例 eRob_IGH_EtherCAT：周期 1 ms，
+// ecrt_slave_config_dc(..., 0x0300, PERIOD_NS, 0, 0, 0)，偏移为 0。
+// 上次失败的是 1 ms 再加 100 µs 偏移。发帧仍锁在两个 SYNC0 脉冲的中间。
 class DcCycleTimer
 {
 public:
   static constexpr std::int64_t kCycleNs = 1000000;
-  static constexpr std::int32_t kSync0ShiftNs = 100000;
+  static constexpr std::int32_t kSync0ShiftNs = 0;
 
   void start()
   {
@@ -828,7 +829,7 @@ private:
     bool safeop_seen = false;
     bool op_requested = false;
     bool saw_op = false;
-    // 逐台进运行加上退回重走，最长约 20 秒；超时仍按失败处理。1 ms 一拍。
+    // 重复请求运行最长约 20 秒。1 ms 一拍。超时仍按失败处理。
     for (int cycle = 0; !stopped() && cycle < 20000; ++cycle) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
@@ -871,9 +872,9 @@ private:
       if (cycle == 0 || (cycle % 1000) == 0) {
         say("● 等待从站进入运行，已有反馈 %d/15", ready);
       }
+      // 不用带超时的 statecheck：状态不符时它会睡 1 ms，把节拍拉长。
       if ((cycle % 10) == 0) {
-        const std::uint16_t want = op_requested ? EC_STATE_OPERATIONAL : EC_STATE_SAFE_OP;
-        ecx_statecheck(&context_, 0, want, 1000);
+        ecx_readstate(&context_);
       }
       if (!safeop_seen && (context_.slavelist[0].state & 0x0f) >= EC_STATE_SAFE_OP) {
         safeop_seen = true;
@@ -882,11 +883,10 @@ private:
       if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
         // 本拍的输出已经发出。simple_test 也是先送一帧有效过程数据，再请求运行。
         op_requested = true;
-        op_sequence_ = OpSequence{};
         say("● 已发送有效输出，开始逐台请求 15 台从站进入运行");
       }
-      // 每 100 ms 推进一步逐台进运行；广播汇总状态不能代表每台都到了运行。
-      if (op_requested && (cycle % 100) == 0 && stepSequentialOp()) {
+      // 每 100 ms 按 simple_test 再请求一次仍在安全运行的从站。不退回预运行。
+      if (op_requested && (cycle % 100) == 0 && pollOperational()) {
         say("✓ 15 台从站逐台确认已进入运行");
         saw_op = true;
         {
@@ -898,7 +898,10 @@ private:
       }
       timer.wait(context_.DCtime);
     }
-    if (!saw_op && !stopped()) {
+    if (stopped() || !saw_op) {
+      if (stopped()) {
+        return;
+      }
       ecx_readstate(&context_);
       std::ostringstream stream;
       stream << "bus state=0x" << std::hex << context_.slavelist[0].state;
@@ -1004,89 +1007,45 @@ private:
     }
   }
 
-  // 逐台进运行的进度。每次调用推进一步，周期收发不停。
-  struct OpSequence
+  // 与 SOEM simple_test 相同：读全部从站状态，错误先应答，停在安全运行就再请求运行。
+  // 不退回预运行。轴 1 常是参考时钟，退回去会把后面的从站一起打乱。
+  bool pollOperational()
   {
-    int slave = 1;        // 当前处理的从站
-    int requests = 0;     // 本轮已请求运行的次数
-    int bounces = 0;      // 已退回预运行重走的次数
-    int bounce_step = 0;  // 0 未退回；1 已请求预运行；2 已请求安全运行
-  };
-
-  static constexpr int kOpRequestsPerRound = 5;  // 每轮最多等 5 次（约 0.5 秒）
-  static constexpr int kOpMaxBounces = 3;        // 每台最多退回重走 3 次
-
-  // 返回 true 表示 15 台都已逐台确认在运行态。
-  bool stepSequentialOp()
-  {
-    OpSequence & seq = op_sequence_;
-    while (seq.slave <= context_.slavecount) {
-      const auto slave = static_cast<std::uint16_t>(seq.slave);
+    ecx_readstate(&context_);
+    int waiting = 0;
+    for (int slave = 1; slave <= context_.slavecount && slave <= static_cast<int>(kCoffeeAxisCount);
+      ++slave)
+    {
       ec_slavet & info = context_.slavelist[slave];
-      // 返回值去掉了错误位；完整状态（含错误位）和 AL 码写在 slavelist 里。
-      // 状态不符时 SOEM 会睡 1 ms，100 ms 才调一次，可接受。
-      ecx_statecheck(&context_, slave, EC_STATE_OPERATIONAL, 0);
-      const std::uint16_t state = info.state;
-      if (state == EC_STATE_OPERATIONAL && seq.bounce_step == 0) {
-        if (seq.requests > 1 || seq.bounces > 0) {
-          say(
-            "● 轴 %d 已进入运行（请求 %d 次，退回重走 %d 次）",
-            seq.slave, seq.requests, seq.bounces);
+      const auto slave_id = static_cast<std::uint16_t>(slave);
+      if (info.state == EC_STATE_OPERATIONAL) {
+        if (op_requests_[slave] > 0) {
+          say("● 轴 %d 已进入运行（重复请求 %d 次）", slave, op_requests_[slave]);
+          op_requests_[slave] = 0;
         }
-        seq = OpSequence{seq.slave + 1, 0, 0, 0};
         continue;
       }
+      ++waiting;
+      const std::uint16_t state = info.state;
       if ((state & EC_STATE_ERROR) != 0) {
-        // 总线层错误必须先应答才能换状态；不动驱动器故障字，并打印出来。
-        say("! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x，应答", seq.slave, state, info.ALstatuscode);
+        say(
+          "! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x，应答",
+          slave, state, info.ALstatuscode);
         info.state = static_cast<std::uint16_t>((state & 0x0f) + EC_STATE_ACK);
-        ecx_writestate(&context_, slave);
-        return false;
+        ecx_writestate(&context_, slave_id);
+        continue;
       }
-      if (seq.bounce_step == 1) {
-        if ((state & 0x0f) == EC_STATE_PRE_OP) {
-          info.state = EC_STATE_SAFE_OP;
-          ecx_writestate(&context_, slave);
-          seq.bounce_step = 2;
-        }
-        return false;
+      info.state = EC_STATE_OPERATIONAL;
+      ecx_writestate(&context_, slave_id);
+      ++op_requests_[slave];
+      if (op_requests_[slave] == 1 || (op_requests_[slave] % 10) == 0) {
+        say(
+          "! 轴 %d 还未进入运行，状态 0x%02x AL码 0x%04x，再次请求（第 %d 次）",
+          slave, state, info.ALstatuscode, op_requests_[slave]);
+        logEscLinkDiagnostics(slave);
       }
-      if (seq.bounce_step == 2) {
-        if ((state & 0x0f) == EC_STATE_SAFE_OP) {
-          seq.bounce_step = 0;
-          seq.requests = 0;
-        }
-        return false;
-      }
-      if (seq.requests < kOpRequestsPerRound) {
-        info.state = EC_STATE_OPERATIONAL;
-        ecx_writestate(&context_, slave);
-        ++seq.requests;
-        return false;
-      }
-      if (seq.bounces >= kOpMaxBounces) {
-        // 不再重试；由外层超时判失败并打印各台状态。
-        if (seq.requests == kOpRequestsPerRound) {
-          say(
-            "✗ 轴 %d 退回重走 %d 次仍进不了运行，状态 0x%02x AL码 0x%04x",
-            seq.slave, seq.bounces, state, info.ALstatuscode);
-          logEscLinkDiagnostics(seq.slave);
-          ++seq.requests;
-        }
-        return false;
-      }
-      // 本轮请求没被接受：退回预运行，让从站重新走同步配置，再进安全运行和运行。
-      ++seq.bounces;
-      say(
-        "! 轴 %d 请求运行 %d 次未成功，状态 0x%02x AL码 0x%04x，退回预运行重走（第 %d 次）",
-        seq.slave, seq.requests, state, info.ALstatuscode, seq.bounces);
-      logEscLinkDiagnostics(seq.slave);
-      info.state = EC_STATE_PRE_OP;
-      ecx_writestate(&context_, slave);
-      seq.bounce_step = 1;
-      return false;
     }
-    return true;
+    return waiting == 0;
   }
 
   // 返回未处于运行态的从站数量；verbose 为真时逐台打印原因和链路诊断。
@@ -1309,7 +1268,8 @@ private:
   int expected_wkc_{0};
   // 周期中重新请求进入运行的次数，仅用于诊断。
   int op_recover_requests_{0};
-  OpSequence op_sequence_{};
+  // 下标是从站号。重复请求运行的次数，进入运行后清零。
+  std::array<int, kCoffeeAxisCount + 1> op_requests_{};
   std::atomic<bool> stop_{false};
   std::atomic<bool> thread_done_{true};
   std::atomic<bool> shutdown_started_{false};
