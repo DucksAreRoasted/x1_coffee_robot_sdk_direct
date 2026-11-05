@@ -2471,10 +2471,13 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     {"侧伸", {0.05, -1.40, 0.10, 0.45, 0.10, -0.10, 0.10}},
     {"斜侧", {0.75, -1.10, -0.20, 1.10, 0.20, 0.10, 0.20}},
     {"侧前略收", {0.60, -0.60, 0.15, 1.20, 0.15, 0.15, 0.15}},
+    {"侧下", {-0.90, -0.35, 0.10, 0.55, 0.10, 0.10, 0.00}},
+    {"侧向外", {-0.60, -1.05, 0.00, 0.90, 0.00, 0.15, 0.10}},
+    {"侧前", {-0.25, -0.70, 0.20, 1.05, 0.20, 0.00, 0.00}},
   };
   const double approach[7] = {0.12, 0.08, 0.12, 0.12, 0.12, 0.10, 0.12};
-  // 含两侧偏置之后仍在身前和身侧。r1 不进身后，r2 不举过头顶，肘不反折。
-  const double side_lower[7] = {-0.30, -1.55, -0.65, 0.05, -0.75, -0.55, -0.65};
+  // r1=-1 rad 仍是侧下方，不是翻到身后。再往负超过约 -1.2 rad 才会绕到背后。
+  const double side_lower[7] = {-1.20, -1.55, -0.65, 0.05, -0.75, -0.55, -0.65};
   const double side_upper[7] = {1.30, 0.08, 0.65, 1.42, 0.75, 0.55, 0.65};
   double lower[7];
   double upper[7];
@@ -2712,8 +2715,8 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     if (start_q[static_cast<std::size_t>(joint)] < side_lower[joint] ||
       start_q[static_cast<std::size_t>(joint)] > side_upper[joint])
     {
-      say("✗ 右臂 r%d 在 %.3f rad，不在前方或侧方。请先挪到身前，标定不会从身后绕过去",
-        joint + 1, start_q[static_cast<std::size_t>(joint)]);
+      say("✗ 右臂 r%d 在 %.3f rad，允许 %.2f 到 %.2f。超出后会绕到身后或翻过头顶，标定不动",
+        joint + 1, start_q[static_cast<std::size_t>(joint)], side_lower[joint], side_upper[joint]);
       return;
     }
   }
