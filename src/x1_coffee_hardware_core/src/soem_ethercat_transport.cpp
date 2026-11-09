@@ -921,7 +921,7 @@ private:
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
       last_dc = context_.DCtime;
       // 只在已经请求运行之后确认状态。上一帧已收回，这时读不会把过程数据回帧冲掉。
-      if (op_requested && (cycle % 50) == 0) {
+      if (op_requested && (cycle % 100) == 0) {
         recoverWatchdogSlaves(watchdog_acks, watchdog_reop);
       }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
@@ -1184,7 +1184,7 @@ private:
       address[static_cast<std::size_t>(index)] = context_.slavelist[index + 1].configadr;
     }
     if (ecx_FPRD_multi(
-          &context_, n, address.data(), status.data(), kStatePollTimeoutUs) < 0)
+          &context_, n, address.data(), status.data(), EC_TIMEOUTRET) < 0)
     {
       return;
     }
@@ -1196,24 +1196,26 @@ private:
       context_.slavelist[slave].state = state;
       context_.slavelist[slave].ALstatuscode = code;
       if ((state & EC_STATE_ERROR) != 0 && code == 0x001B && ack_count[slave] < kMaxAck) {
-        // 只清 EtherCAT 状态错误，不写驱动器控制字 0x6040。
+        // 只清 EtherCAT 状态错误，不写驱动器控制字 0x6040。一次只写一台，避免把周期拖晚。
         const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP | EC_STATE_ACK));
-        ecx_FPWRw(
+        const int rc = ecx_FPWRw(
           &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
-          kStatePollTimeoutUs);
+          EC_TIMEOUTRET);
         ++ack_count[slave];
         op_again[slave] = 0;
-        say("! 轴 %d 同步管理器看门狗，应答后再次请求运行", slave);
-      } else if (state == EC_STATE_SAFE_OP && op_again[slave] < kMaxReop) {
-        // 停在安全操作就继续只对这一台请求运行。只写一次的话会留在 0x04。
+        say("! 轴 %d 同步管理器看门狗，应答 rc=%d", slave, rc);
+        return;
+      }
+      if (state == EC_STATE_SAFE_OP && op_again[slave] < kMaxReop) {
         const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
         const int rc = ecx_FPWRw(
           &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
-          kStatePollTimeoutUs);
+          EC_TIMEOUTRET);
         ++op_again[slave];
-        if (rc <= 0 || op_again[slave] == 1) {
+        if (op_again[slave] == 1 || rc <= 0) {
           say("● 轴 %d 第 %d 次请求运行 rc=%d", slave, op_again[slave], rc);
         }
+        return;
       }
     }
   }
