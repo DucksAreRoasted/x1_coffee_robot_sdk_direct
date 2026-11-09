@@ -909,7 +909,7 @@ private:
     int pre_safeop_cycles = 0;
     int primed_cycles = 0;
     std::array<int, kCoffeeAxisCount + 1> watchdog_acks{};
-    std::array<bool, kCoffeeAxisCount + 1> watchdog_reop{};
+    std::array<int, kCoffeeAxisCount + 1> watchdog_reop{};
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
     ecx_send_processdata(&context_);
@@ -1170,9 +1170,10 @@ private:
   // 一帧读回各台状态。0x001B 只应答该台并再次请求运行，不写控制字 0x6040，也不改已经在运行的轴。
   void recoverWatchdogSlaves(
     std::array<int, kCoffeeAxisCount + 1> & ack_count,
-    std::array<bool, kCoffeeAxisCount + 1> & op_again)
+    std::array<int, kCoffeeAxisCount + 1> & op_again)
   {
     constexpr int kMaxAck = 3;
+    constexpr int kMaxReop = 40;
     const int n = std::min(context_.slavecount, static_cast<int>(kCoffeeAxisCount));
     if (n <= 0) {
       return;
@@ -1195,19 +1196,24 @@ private:
       context_.slavelist[slave].state = state;
       context_.slavelist[slave].ALstatuscode = code;
       if ((state & EC_STATE_ERROR) != 0 && code == 0x001B && ack_count[slave] < kMaxAck) {
+        // 只清 EtherCAT 状态错误，不写驱动器控制字 0x6040。
         const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP | EC_STATE_ACK));
         ecx_FPWRw(
           &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
           kStatePollTimeoutUs);
         ++ack_count[slave];
-        op_again[slave] = false;
+        op_again[slave] = 0;
         say("! 轴 %d 同步管理器看门狗，应答后再次请求运行", slave);
-      } else if (state == EC_STATE_SAFE_OP && ack_count[slave] > 0 && !op_again[slave]) {
+      } else if (state == EC_STATE_SAFE_OP && op_again[slave] < kMaxReop) {
+        // 停在安全操作就继续只对这一台请求运行。只写一次的话会留在 0x04。
         const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
-        ecx_FPWRw(
+        const int rc = ecx_FPWRw(
           &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
           kStatePollTimeoutUs);
-        op_again[slave] = true;
+        ++op_again[slave];
+        if (rc <= 0 || op_again[slave] == 1) {
+          say("● 轴 %d 第 %d 次请求运行 rc=%d", slave, op_again[slave], rc);
+        }
       }
     }
   }
