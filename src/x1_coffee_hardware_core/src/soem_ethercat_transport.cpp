@@ -909,7 +909,7 @@ private:
     int pre_safeop_cycles = 0;
     int primed_cycles = 0;
     std::array<int, kCoffeeAxisCount + 1> watchdog_acks{};
-    std::array<int, kCoffeeAxisCount + 1> watchdog_reop{};
+    int op_broadcasts = 0;
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
     ecx_send_processdata(&context_);
@@ -921,8 +921,15 @@ private:
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
       last_dc = context_.DCtime;
       // 只在已经请求运行之后确认状态。上一帧已收回，这时读不会把过程数据回帧冲掉。
-      if (op_requested && (cycle % 100) == 0) {
-        recoverWatchdogSlaves(watchdog_acks, watchdog_reop);
+      if (op_requested && (cycle % 200) == 0 &&
+        recoverWatchdogSlaves(watchdog_acks) && op_broadcasts < 6)
+      {
+        std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
+        context_.slavelist[0].state = EC_STATE_OPERATIONAL;
+        const int rc = ecx_BWR(
+          &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, EC_TIMEOUTRET);
+        ++op_broadcasts;
+        say("● 仍有轴在安全操作，第 %d 次广播请求运行 rc=%d", op_broadcasts, rc);
       }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
@@ -1168,15 +1175,14 @@ private:
   }
 
   // 一帧读回各台状态。0x001B 只应答该台并再次请求运行，不写控制字 0x6040，也不改已经在运行的轴。
-  void recoverWatchdogSlaves(
-    std::array<int, kCoffeeAxisCount + 1> & ack_count,
-    std::array<int, kCoffeeAxisCount + 1> & op_again)
+  bool recoverWatchdogSlaves(
+    std::array<int, kCoffeeAxisCount + 1> & ack_count)
   {
     constexpr int kMaxAck = 3;
-    constexpr int kMaxReop = 40;
+    bool still_safe = false;
     const int n = std::min(context_.slavecount, static_cast<int>(kCoffeeAxisCount));
     if (n <= 0) {
-      return;
+      return false;
     }
     std::array<std::uint16_t, kCoffeeAxisCount> address{};
     std::array<ec_alstatust, kCoffeeAxisCount> status{};
@@ -1186,7 +1192,7 @@ private:
     if (ecx_FPRD_multi(
           &context_, n, address.data(), status.data(), EC_TIMEOUTRET) < 0)
     {
-      return;
+      return false;
     }
     for (int index = 0; index < n; ++index) {
       const int slave = index + 1;
@@ -1196,28 +1202,21 @@ private:
       context_.slavelist[slave].state = state;
       context_.slavelist[slave].ALstatuscode = code;
       if ((state & EC_STATE_ERROR) != 0 && code == 0x001B && ack_count[slave] < kMaxAck) {
-        // 只清 EtherCAT 状态错误，不写驱动器控制字 0x6040。一次只写一台，避免把周期拖晚。
+        // 只清 EtherCAT 状态错误，不写驱动器控制字 0x6040。一次只写一台。
         const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP | EC_STATE_ACK));
         const int rc = ecx_FPWRw(
           &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
           EC_TIMEOUTRET);
         ++ack_count[slave];
-        op_again[slave] = 0;
         say("! 轴 %d 同步管理器看门狗，应答 rc=%d", slave, rc);
-        return;
+        return true;
       }
-      if (state == EC_STATE_SAFE_OP && op_again[slave] < kMaxReop) {
-        const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
-        const int rc = ecx_FPWRw(
-          &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
-          EC_TIMEOUTRET);
-        ++op_again[slave];
-        if (op_again[slave] == 1 || rc <= 0) {
-          say("● 轴 %d 第 %d 次请求运行 rc=%d", slave, op_again[slave], rc);
-        }
-        return;
+      if (state == EC_STATE_SAFE_OP) {
+        // 单台写运行请求即使返回成功，这台也会留在 0x04。交给调用方再广播一次。
+        still_safe = true;
       }
     }
+    return still_safe;
   }
 
   // 一帧广播读 15 台 AL 状态。状态一致才写入缓存。逐台读会把过程数据帧间隔拉过看门狗。
