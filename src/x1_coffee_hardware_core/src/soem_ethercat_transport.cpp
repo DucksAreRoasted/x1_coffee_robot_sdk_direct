@@ -909,10 +909,11 @@ private:
       say("✓ 周期线程内存已锁定");
     }
     // TwinCAT 在开 SYNC0 前会快速分发约一万次参考时钟。1 ms 节拍太慢，先紧凑发一串。
-    distributeReferenceClock();
+    // SYNC0 寄存器要在节拍开始前写完。写 15 台大约 20 ms，放进 1 ms 循环会把那一拍拖晚。
+    const bool sync0_armed_early = distributeReferenceClock();
     DcCycleTimer timer;
     timer.start();
-    bool sync0_armed = false;
+    bool sync0_armed = sync0_armed_early;
     bool safeop_requested = false;
     bool op_requested = false;
     bool saw_op = false;
@@ -1198,7 +1199,8 @@ private:
   }
 
   // 紧凑发送过程数据，帧尾的参考时钟读会刷新各从站 0x092C。
-  void distributeReferenceClock()
+  // 差已经小于 1 µs 时顺手启动 SYNC0，并返回是否已经启动。
+  bool distributeReferenceClock()
   {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
     int frames = 0;
@@ -1230,6 +1232,19 @@ private:
     say(
       "● 参考时钟已分发 %d 帧，时钟差最大 %d ns [%s]",
       frames, worst, diffs.str().c_str());
+    if (worst > 1000 || n <= 0) {
+      return false;
+    }
+    for (int index = 1; index <= n; ++index) {
+      if (!context_.slavelist[index].hasdc) {
+        continue;
+      }
+      ecx_dcsync0(
+        &context_, static_cast<std::uint16_t>(index), TRUE,
+        static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+    }
+    say("● 从站时钟差最大 %d ns，启动 SYNC0", worst);
+    return true;
   }
 
   // 周期帧里的参考时钟读会让各从站更新 0x092C。差小于 1 µs 再开 SYNC0。
