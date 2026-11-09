@@ -36,8 +36,9 @@ namespace x1_coffee_hardware_core
 namespace
 {
 
-// eRob 示例与固高配置的 SYNC0 偏移都是 0。脉冲在周期起点。
-// 收帧锁在脉冲前 500 µs。issue 725 的半周期偏移会让这 15 台停在安全操作、不再进运行。
+// issue 725 的相对关系：主站先发帧，从站过半个周期再取输出。
+// 那篇把主站对齐周期起点、把 SYNC0 放在中点。eRob 的脉冲固定在周期起点，
+// 偏移改成半周期会让 15 台停在安全操作，所以改由主站提前 500 µs 发出，差值相同。
 // 周期收帧最多等 200 µs。
 constexpr int kCycleFrameTimeoutUs = 200;
 constexpr std::int64_t kSendLeadNs = 500000;
@@ -438,11 +439,10 @@ public:
         static_cast<long long>(shortest_watchdog_ns / 1000000));
     }
 
-    // 先进入安全操作，周期线程再按节拍请求运行。半周期偏移下这 15 台会停在 0x04。
+    // 725：周期线程先按 DC 节拍收发，再在线程里请求安全操作和运行。
+    // 不能在收发开始前用 ecx_writestate 切状态，那段时间没有周期帧。
     startEnableTrace();
-    debugf("request SAFE_OP and start cycle thread");
-    context_.slavelist[0].state = EC_STATE_SAFE_OP;
-    ecx_writestate(&context_, 0);
+    debugf("start cycle thread before SAFE_OP");
     thread_done_.store(false);
     thread_ = std::thread([this]() {cycleLoop();});
     debugf("cycle thread started");
@@ -890,9 +890,11 @@ private:
     raiseCycleThreadPriority();
     DcCycleTimer timer;
     timer.start();
+    bool safeop_requested = false;
     bool safeop_seen = false;
     bool op_requested = false;
     bool saw_op = false;
+    int pre_safeop_cycles = 0;
     int primed_cycles = 0;
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
@@ -944,6 +946,21 @@ private:
           position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
           position_out_[slave]->reserved = 0;
         }
+      }
+      // 先按 1 ms 收发 200 拍，再请求安全操作。看门狗从这一步才开始计。
+      if (!safeop_requested && ++pre_safeop_cycles >= 200) {
+        std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP));
+        context_.slavelist[0].state = EC_STATE_SAFE_OP;
+        ecx_BWR(
+          &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
+        safeop_requested = true;
+        say("● 周期帧已按 DC 节拍发送，请求进入安全操作");
+      } else if (safeop_requested && !safeop_seen && (cycle % 500) == 0) {
+        // 200 µs 内没写上时再试一次。已经在安全操作或运行的不重复写。
+        std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP));
+        context_.slavelist[0].state = EC_STATE_SAFE_OP;
+        ecx_BWR(
+          &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
       }
       // 收帧还没到脉冲前时不请求运行。
       const bool before_sync = detail::outputReadyBeforeSync(
