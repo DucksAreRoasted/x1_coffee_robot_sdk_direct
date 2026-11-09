@@ -62,6 +62,13 @@ inline std::int64_t syncLeadErrorNs(
   return delta;
 }
 
+// ESC 0x092C 不是补码。bit31 表示本地时钟比收到的参考时钟慢，低 31 位是纳秒。
+inline std::int32_t systemTimeDifferenceNs(std::uint32_t raw)
+{
+  const std::int32_t magnitude = static_cast<std::int32_t>(raw & 0x7fffffffu);
+  return (raw & 0x80000000u) != 0u ? -magnitude : magnitude;
+}
+
 // 收帧落在脉冲前的窗口里，随后发出的输出才会赶在 SYNC0 之前写入从站。
 inline bool outputReadyBeforeSync(
   std::int64_t dc_time, std::int64_t cycle_ns, std::int64_t lead_ns)

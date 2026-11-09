@@ -1216,7 +1216,8 @@ private:
         &context_.port, context_.slavelist[slave].configadr, ECT_REG_DCSYSDIFF,
         sizeof(raw), &raw, kStatePollTimeoutUs);
       const std::int32_t diff = rc > 0 ?
-        static_cast<std::int32_t>(etohl(static_cast<std::uint32_t>(raw))) : 0;
+        detail::systemTimeDifferenceNs(static_cast<std::uint32_t>(etohl(static_cast<std::uint32_t>(raw)))) :
+        0;
       if (slave > 1) {
         diffs << ',';
       }
@@ -1260,7 +1261,8 @@ private:
       &context_.port, context_.slavelist[slave].configadr, ECT_REG_DCSYSDIFF,
       sizeof(raw), &raw, kStatePollTimeoutUs);
     if (rc > 0) {
-      diff[slave] = static_cast<std::int32_t>(etohl(static_cast<std::uint32_t>(raw)));
+      diff[slave] = detail::systemTimeDifferenceNs(
+        static_cast<std::uint32_t>(etohl(static_cast<std::uint32_t>(raw))));
       seen[slave] = true;
     }
     cursor = slave % n + 1;

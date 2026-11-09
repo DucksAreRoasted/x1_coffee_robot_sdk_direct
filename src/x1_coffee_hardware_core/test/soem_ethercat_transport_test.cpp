@@ -123,6 +123,15 @@ TEST(EthercatStartup, send_phase_stays_ahead_of_sync0)
   EXPECT_FALSE(outputReadyBeforeSync(0, cycle, lead));
 }
 
+TEST(EthercatStartup, system_time_difference_uses_sign_magnitude)
+{
+  using x1_coffee_hardware_core::detail::systemTimeDifferenceNs;
+  EXPECT_EQ(systemTimeDifferenceNs(0), 0);
+  EXPECT_EQ(systemTimeDifferenceNs(8), 8);
+  EXPECT_EQ(systemTimeDifferenceNs(0x8000000au), -10);
+  EXPECT_EQ(systemTimeDifferenceNs(0x80000099u), -153);
+}
+
 TEST(EthercatStartup, partial_or_missing_process_data_is_invalid)
 {
   using x1_coffee_hardware_core::detail::completeProcessData;
