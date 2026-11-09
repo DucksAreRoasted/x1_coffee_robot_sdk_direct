@@ -108,6 +108,22 @@ TEST(EthercatStartup, error_and_unknown_states_cannot_confirm_operational)
   EXPECT_FALSE(alStateReady(0x04, 0x08));
 }
 
+TEST(EthercatStartup, send_phase_stays_ahead_of_sync0)
+{
+  using x1_coffee_hardware_core::detail::outputReadyBeforeSync;
+  using x1_coffee_hardware_core::detail::syncLeadErrorNs;
+  constexpr std::int64_t cycle = 1000000;
+  constexpr std::int64_t lead = 500000;
+  EXPECT_EQ(syncLeadErrorNs(500000, cycle, lead), 0);
+  EXPECT_EQ(syncLeadErrorNs(1500000, cycle, lead), 0);
+  // 相位 0 就是 SYNC0，比目标晚了 500 µs。
+  EXPECT_EQ(syncLeadErrorNs(1000000, cycle, lead), 500000);
+  EXPECT_TRUE(outputReadyBeforeSync(500000, cycle, lead));
+  EXPECT_TRUE(outputReadyBeforeSync(900000, cycle, lead));
+  EXPECT_FALSE(outputReadyBeforeSync(100000, cycle, lead));
+  EXPECT_FALSE(outputReadyBeforeSync(0, cycle, lead));
+}
+
 TEST(EthercatStartup, partial_or_missing_process_data_is_invalid)
 {
   using x1_coffee_hardware_core::detail::completeProcessData;

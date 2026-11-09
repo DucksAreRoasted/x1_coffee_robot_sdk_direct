@@ -36,11 +36,11 @@ namespace x1_coffee_hardware_core
 namespace
 {
 
-// 零差官方 IgH 示例 eRob_IGH_EtherCAT：周期 1 ms，
-// ecrt_slave_config_dc(..., 0x0300, PERIOD_NS, 0, 0, 0)，偏移为 0。
-// 发帧相位跟 eRob_CSP.cpp 的 ec_sync，锁到 SYNC0，不再错开半个周期。
-// 周期收帧最多等 200 µs。更长的等待会叠进 1 ms 节拍，从站报 0x001B。
+// 零差官方 IgH 示例：SYNC0 周期 1 ms，偏移 0。从站在脉冲上升沿取走输出。
+// 收帧锁在脉冲前 500 µs，发帧就赶在 SYNC0 之前。锁在脉冲上时，数据是脉冲之后才到的。
+// 周期收帧最多等 200 µs。更长的等待会把这一帧推过脉冲，从站报 0x001B。
 constexpr int kCycleFrameTimeoutUs = 200;
+constexpr std::int64_t kSendLeadNs = 500000;
 // 状态广播单独限时，并且几拍才读一次，不跟每拍的过程数据抢网口。
 constexpr int kStatePollTimeoutUs = 200;
 constexpr int kStatePollCycles = 200;
@@ -63,11 +63,8 @@ public:
   {
     std::int64_t offset = 0;
     if (dc_time > 0) {
-      // eRob_CSP.cpp ec_sync：把本拍唤醒对齐到分布时钟周期起点（SYNC0）。
-      std::int64_t delta = dc_time % kCycleNs;
-      if (delta > kCycleNs / 2) {
-        delta -= kCycleNs;
-      }
+      // 正误差表示收帧偏晚。把它拉回脉冲前 kSendLeadNs，而不是拉到脉冲上。
+      const std::int64_t delta = detail::syncLeadErrorNs(dc_time, kCycleNs, kSendLeadNs);
       if (delta > 0) {
         ++integral_;
       } else if (delta < 0) {
@@ -948,7 +945,14 @@ private:
           position_out_[slave]->reserved = 0;
         }
       }
-      if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount) &&
+      // 相位还在脉冲之后时不请求运行，避免从站在切换中报 0x001B。
+      const bool before_sync = detail::outputReadyBeforeSync(
+        last_dc, DcCycleTimer::kCycleNs, kSendLeadNs);
+      if (!before_sync) {
+        primed_cycles = 0;
+      }
+      if (before_sync && safeop_seen && !op_requested &&
+        ready == static_cast<int>(kCoffeeAxisCount) &&
         ++primed_cycles >= 100)
       {
         // ecx_writestate 会按 6 ms 重试。这里只发一次广播，避免把过程数据间隔拉长。
@@ -992,7 +996,8 @@ private:
       }
       std::ostringstream stream;
       stream << "bus state=0x" << std::hex << context_.slavelist[0].state
-             << std::dec << " late_us=" << (timer.maxLateNs() / 1000);
+             << std::dec << " late_us=" << (timer.maxLateNs() / 1000)
+             << " phase_us=" << (detail::dcPhaseNs(last_dc, DcCycleTimer::kCycleNs) / 1000);
       for (int slave = 1; slave <= context_.slavecount; ++slave) {
         stream << " slave" << std::dec << slave << "=0x" << std::hex
                << context_.slavelist[slave].state << "/0x"
