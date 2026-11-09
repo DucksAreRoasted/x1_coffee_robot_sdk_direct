@@ -216,6 +216,8 @@ private:
   // 连杆模型之后的小修正。周期同步扭矩里加进 0x6071，不再单独映射 0x60B2。
   std::array<double, 7> right_joint_scale_{};
   std::array<double, 7> right_joint_bias_{};
+  // 零差形式的单关节残余幅值，单位 N·m。右臂来自重力文件的 sin_amplitude，默认 0。
+  std::array<double, kCoffeeAxisCount> gravity_amplitude_nm_{};
   bool right_correction_known_{false};
   void rememberRightArmCorrection(
     const std::array<double, 7> & mass_scale,

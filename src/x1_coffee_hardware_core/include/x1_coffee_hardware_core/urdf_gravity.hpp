@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -9,6 +10,17 @@
 
 namespace x1_coffee_hardware_core
 {
+
+// 零差单关节补偿是 A·k·sin(θ)，连杆水平时 θ 为 90°，正弦取满幅。
+// 串联臂的主项是 URDF 静重力，k 已经含在 urdf_nm 的倍率里。
+// A·sin(θ) 只补模型外的单关节负载。A 为 0 时结果就是原来的 URDF 力矩。
+// θ 用本轴关节角。URDF 零位不是竖直向下时，A 要连同相位一起标定。
+inline double fusedGravityNm(
+  double urdf_nm, double gain, double amplitude_nm, double angle_rad)
+{
+  return gain * urdf_nm + amplitude_nm * std::sin(angle_rad);
+}
+
 
 // 由 URDF 的质量、重心和关节轴计算当前姿态的静重力矩。
 // 夹爪暂按 1 kg 点质量放在末端坐标系原点，手册给出重心后再改。

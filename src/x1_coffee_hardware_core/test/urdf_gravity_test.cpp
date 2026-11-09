@@ -22,6 +22,14 @@ int indexOf(const char * name)
 
 }  // namespace
 
+TEST(UrdfGravity, fusedTorqueKeepsTheModelAndAddsTheSingleJointSine)
+{
+  using x1_coffee_hardware_core::fusedGravityNm;
+  EXPECT_NEAR(fusedGravityNm(10.0, 1.0, 0.0, 1.2), 10.0, 1e-9);
+  EXPECT_NEAR(fusedGravityNm(10.0, 0.5, -2.0, M_PI / 2.0), 3.0, 1e-9);
+  EXPECT_NEAR(fusedGravityNm(10.0, 1.0, -2.0, 0.0), 10.0, 1e-9);
+}
+
 TEST(UrdfGravity, zeroPoseAndBentPoseMatchThePointMassModel)
 {
   UrdfGravity gravity;

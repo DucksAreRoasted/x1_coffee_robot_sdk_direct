@@ -1765,6 +1765,10 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
             for (int slot = 0; slot < 7; ++slot) {
               dest[static_cast<std::size_t>(slot)] = values[slot];
             }
+          } else if (key == "sin_amplitude") {
+            for (int slot = 0; slot < 7; ++slot) {
+              gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)] = values[slot];
+            }
           }
         }
         if (gravity_.setRightArmCorrection(mass_scale, com_delta)) {
@@ -2465,12 +2469,13 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   const bool right = index >= 8 && index < 15;
   const int slot = right ? static_cast<int>(index - 8) : -1;
   const double rated = rated_axis_nm_[index];
-  double gravity_nm = mit_gravity_nm_[index];
-  if (slot >= 0) {
-    const double scale = right_joint_scale_[static_cast<std::size_t>(slot)] > 0.0 ?
-      right_joint_scale_[static_cast<std::size_t>(slot)] : 1.0;
-    gravity_nm = scale * gravity_nm + right_joint_bias_[static_cast<std::size_t>(slot)];
-  }
+  const double joint_scale = slot >= 0 &&
+    right_joint_scale_[static_cast<std::size_t>(slot)] > 0.0 ?
+    right_joint_scale_[static_cast<std::size_t>(slot)] : 1.0;
+  const double bias = slot >= 0 ? right_joint_bias_[static_cast<std::size_t>(slot)] : 0.0;
+  // URDF 主项乘倍率，再叠加零差的 A·sin(θ)。幅值为 0 时和第二项无关。
+  double gravity_nm = fusedGravityNm(
+    mit_gravity_nm_[index], joint_scale, gravity_amplitude_nm_[index], measured) + bias;
   // 手册 8.2.123：周期同步扭矩里，扭矩偏移加到 0x6071。偏置直接写进目标力矩。
   // 硬跟踪要落到接近点附近。22 N·m/rad 时，2 N·m 的模型残差就会停在 0.08 rad 以外。
   static constexpr double kHardKpNm[7] = {320.0, 320.0, 160.0, 160.0, 48.0, 40.0, 36.0};
@@ -2676,6 +2681,10 @@ bool SoemEthercatTransport::writeRightArmGravityFile(
   for (double value : right_joint_bias_) {
     output << " " << value;
   }
+  output << "\n# 零差单关节残余，单位 N·m。0 表示只用 URDF。\nsin_amplitude:";
+  for (int slot = 0; slot < 7; ++slot) {
+    output << " " << gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)];
+  }
   output << "\n";
   return true;
 }
@@ -2694,6 +2703,9 @@ Result SoemEthercatTransport::resetRightArmGravityToUrdf()
   rememberRightArmCorrection(scale, delta);
   right_joint_scale_.fill(1.0);
   right_joint_bias_.fill(0.0);
+  for (int slot = 0; slot < 7; ++slot) {
+    gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)] = 0.0;
+  }
   say("✓ 右臂重力已在内存恢复为 URDF 初值，尚未写入文件");
   return Result{CoreError::kOk, "右臂已恢复 URDF 初值，关节倍率和偏置也已清掉。按 p p 才会写入文件"};
 }
@@ -2813,6 +2825,20 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
   // r1=-1 rad 仍是侧下方，不是翻到身后。再往负超过约 -1.2 rad 才会绕到背后。
   const double side_lower[7] = {-1.20, -1.55, -0.65, 0.05, -0.75, -0.55, -0.65};
   const double side_upper[7] = {1.30, 0.08, 0.65, 1.42, 0.75, 0.55, 0.65};
+  // 目标点仍只在身前。启动检查对肘和腕用 URDF 限位内收 0.05 rad。
+  // 直肘 0.017 rad 或腕转到 1.6 rad 并不等于肩已经绕到身后。
+  const double urdf_lower[7] = {-3.1416, -3.1416, -3.1416, -2.0944, -3.1416, -1.7453, -6.2832};
+  const double urdf_upper[7] = {3.1416, 0.15, 3.1416, 1.5708, 3.1416, 1.7453, 6.2832};
+  double start_lower[7];
+  double start_upper[7];
+  for (int joint = 0; joint < 7; ++joint) {
+    start_lower[joint] = urdf_lower[joint] + 0.05;
+    start_upper[joint] = urdf_upper[joint] - 0.05;
+  }
+  start_lower[0] = side_lower[0];
+  start_upper[0] = side_upper[0];
+  start_lower[1] = side_lower[1];
+  start_upper[1] = side_upper[1];
   double lower[7];
   double upper[7];
   for (int joint = 0; joint < 7; ++joint) {
@@ -3046,11 +3072,14 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
 
   const std::array<double, 7> start_q = command_q();
   for (int joint = 0; joint < 7; ++joint) {
-    if (start_q[static_cast<std::size_t>(joint)] < side_lower[joint] ||
-      start_q[static_cast<std::size_t>(joint)] > side_upper[joint])
+    if (start_q[static_cast<std::size_t>(joint)] < start_lower[joint] ||
+      start_q[static_cast<std::size_t>(joint)] > start_upper[joint])
     {
-      say("✗ 右臂 r%d 在 %.3f rad，允许 %.2f 到 %.2f。超出后会绕到身后或翻过头顶，标定不动",
-        joint + 1, start_q[static_cast<std::size_t>(joint)], side_lower[joint], side_upper[joint]);
+      say(joint < 2 ?
+        "✗ 右臂 r%d 在 %.3f rad，允许 %.2f 到 %.2f。超出后会绕到身后或翻过头顶，标定不动" :
+        "✗ 右臂 r%d 在 %.3f rad，允许 %.2f 到 %.2f。已贴近物理限位，标定不动",
+        joint + 1, start_q[static_cast<std::size_t>(joint)],
+        start_lower[joint], start_upper[joint]);
       return;
     }
   }
