@@ -27,9 +27,9 @@
 
 #include "soem/soem.h"
 #include "x1_coffee_hardware_core/coffee_axis_model.hpp"
-#include "x1_coffee_hardware_core/erob_error_names.hpp"
 #include "x1_coffee_hardware_core/zeroerr_drive.hpp"
 #include "enable_trace.hpp"
+#include "ethercat_startup.hpp"
 
 namespace x1_coffee_hardware_core
 {
@@ -309,6 +309,15 @@ public:
     if (opened_) {
       return Result::fail(CoreError::kTransportUnavailable, "网口已经打开");
     }
+    // 再次启动时必须重新逐台确认，不能沿用上一次连接的 OP 缓存或诊断请求。
+    last_al_state_.fill(0);
+    last_error_logged_.fill(0);
+    al_error_logged_.fill(false);
+    op_quiet_cycles_.fill(0);
+    op_waiting_.fill(false);
+    op_requested_ = false;
+    pending_enable_probe_.store(0);
+    pending_drive_mode_.store(0);
     torque_axis_ = torque_axis;
     on_cycle_ = on_cycle;
     if (bus_operational_flag_ != nullptr) {
@@ -832,8 +841,9 @@ private:
     bool op_requested = false;
     bool saw_op = false;
     int primed_cycles = 0;
-    // 重复请求运行最长约 20 秒。1 ms 一拍。超时仍按失败处理。
-    for (int cycle = 0; !stopped() && cycle < 20000; ++cycle) {
+    // 用墙钟限时，并在外层 15 秒等待结束前留下逐轴失败原因。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(14);
+    for (int cycle = 0; !stopped() && std::chrono::steady_clock::now() < deadline; ++cycle) {
       const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
@@ -849,7 +859,10 @@ private:
           item.actual_position = position_in_[slave]->actual_position;
           item.actual_torque = position_in_[slave]->actual_torque;
         }
-        item.valid = wkc > 0 && item.status_word != 0;
+        // SAFE_OP 可能只有输入工作计数；请求 OP 后必须等完整计数，不能信任旧过程映像。
+        const bool complete = detail::completeProcessData(wkc, expected_wkc_) ||
+          (!op_requested && detail::completeProcessData(wkc, context_.grouplist[0].inputsWKC));
+        item.valid = complete && item.status_word != 0;
         if (item.valid) {
           ++ready;
         }
@@ -883,6 +896,9 @@ private:
         safeop_seen = true;
         say("● 从站进入安全运行，%d/15 台有反馈", ready);
       }
+      if (ready != static_cast<int>(kCoffeeAxisCount)) {
+        primed_cycles = 0;
+      }
       if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
         // 先连发有效输出，再广播一次进入运行。之后不再成批改状态。
         if (++primed_cycles >= 100) {
@@ -893,7 +909,9 @@ private:
           say("● 已连续发送有效输出，请求 15 台从站进入运行");
         }
       }
-      if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL)) {
+      if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL) &&
+        detail::completeProcessData(wkc, expected_wkc_))
+      {
         say("✓ 15 台从站逐台确认已进入运行");
         saw_op = true;
         {
@@ -909,7 +927,7 @@ private:
       if (stopped()) {
         return;
       }
-      ecx_readstate(&context_);
+      // 使用分拍采集的状态，超时路径也不批量阻塞周期通信。
       std::ostringstream stream;
       stream << "bus state=0x" << std::hex << context_.slavelist[0].state;
       for (int slave = 1; slave <= context_.slavecount; ++slave) {
@@ -975,7 +993,7 @@ private:
           item.actual_position = position_in_[slave]->actual_position;
           item.actual_torque = position_in_[slave]->actual_torque;
         }
-        item.valid = wkc > 0;
+        item.valid = detail::completeProcessData(wkc, expected_wkc_) && item.status_word != 0;
       }
       if (timer.overruns() != told_overruns && steady_cycle - last_overrun_log >= 1000) {
         told_overruns = timer.overruns();
@@ -1005,10 +1023,13 @@ private:
       traceCycle(feedback, command, true, wkc, send_rc);
       applyPendingDriveMode();
       applyStuckEnableProbe();
-      // 每秒巡检一次各从站总线状态。安全运行态下从站只回传输入、不执行输出，
-      // 状态字会一直停在准备接通。
-      if ((steady_cycle % 1000) == 0) {
-        superviseSlaveStates(true);
+      // 巡检同样分拍进行，避免诊断阻塞 15 轴的过程数据发送。
+      if ((steady_cycle % 20) == 0) {
+        refreshOneSlaveState(1 + ((steady_cycle / 20 - 1) % static_cast<int>(kCoffeeAxisCount)));
+        if (!slavesAtLeast(EC_STATE_OPERATIONAL) && bus_operational_flag_ != nullptr) {
+          // 掉出 OP 后锁住使能，需重新启动；不自动写状态把故障掩盖掉。
+          bus_operational_flag_->store(false, std::memory_order_release);
+        }
       }
       timer.wait(context_.DCtime);
     }
@@ -1044,27 +1065,30 @@ private:
       slave, static_cast<unsigned long long>(timeout_ns / 1000000ull), widened, rc_write);
   }
 
-  // 只读一台的 AL 状态和 AL 码。安全操作且 AL 码为 0 时不再改写状态。
+  // 只读一台的 AL 状态和 AL 码，不自动应答错误或改写状态。
   // 诊断里只广播一次、之后只发过程数据，15 台才会陆续进入运行。
   void refreshOneSlaveState(int slave)
   {
     if (slave < 1 || slave > context_.slavecount) {
       return;
     }
-    struct {
-      std::uint16_t status;
-      std::uint16_t code;
-    } al{};
+    std::array<std::uint8_t, 6> registers{};
     const auto address = context_.slavelist[slave].configadr;
     const int rc = ecx_FPRD(
-      &context_.port, address, 0x0130, sizeof(al), &al, EC_TIMEOUTRET);
+      &context_.port, address, 0x0130, registers.size(), registers.data(), EC_TIMEOUTRET);
     if (rc <= 0) {
+      // 读取失败不能继续使用上一轮 OP 状态。
+      last_al_state_[slave] = 0;
+      context_.slavelist[slave].state = 0;
+      say("! 轴 %d AL 状态读取失败 rc=%d", slave, rc);
       return;
     }
-    last_al_state_[slave] = al.status;
-    context_.slavelist[slave].state = al.status;
+    const auto al = detail::decodeAlStatus(registers);
+    last_al_state_[slave] = al.state;
+    context_.slavelist[slave].state = al.state;
     context_.slavelist[slave].ALstatuscode = al.code;
-    if ((al.status & 0x0f) == EC_STATE_OPERATIONAL) {
+    if (al.state == EC_STATE_OPERATIONAL) {
+      al_error_logged_[slave] = false;
       if (op_waiting_[slave]) {
         op_waiting_[slave] = false;
         say("● 轴 %d 已进入运行", slave);
@@ -1075,20 +1099,16 @@ private:
       return;
     }
     op_waiting_[slave] = true;
-    if ((al.status & EC_STATE_ERROR) != 0) {
-      // 0x001B 是同步管理器看门狗。应答后保持发帧，不再立刻重写运行请求。
-      if (last_error_logged_[slave] != al.code) {
+    if ((al.state & EC_STATE_ERROR) != 0) {
+      // 只记录真实 AL 码，不自动应答错误或重新请求运行。
+      if (last_error_logged_[slave] != al.code || !al_error_logged_[slave]) {
         last_error_logged_[slave] = al.code;
-        say(
-          "! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x，应答",
-          slave, al.status, al.code);
-        const auto ack = static_cast<std::uint16_t>((al.status & 0x0f) + EC_STATE_ACK);
-        auto ack_reg = ack;
-        ecx_FPWR(
-          &context_.port, address, 0x0120, sizeof(ack_reg), &ack_reg, EC_TIMEOUTRET);
+        al_error_logged_[slave] = true;
+        say("! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x", slave, al.state, al.code);
       }
       return;
     }
+    al_error_logged_[slave] = false;
     if (op_quiet_cycles_[slave] > 0) {
       --op_quiet_cycles_[slave];
       return;
@@ -1096,7 +1116,7 @@ private:
     op_quiet_cycles_[slave] = 10;
     say(
       "! 轴 %d 仍在安全操作，状态 0x%02x AL码 0x%04x",
-      slave, al.status, al.code);
+      slave, al.state, al.code);
   }
 
   bool slavesAtLeast(std::uint16_t state) const
@@ -1105,113 +1125,11 @@ private:
       return false;
     }
     for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
-      if ((last_al_state_[slave] & 0x0f) < state) {
+      if (!detail::alStateReady(last_al_state_[slave], state)) {
         return false;
       }
     }
     return true;
-  }
-
-  // 官方 IgH 示例在进运行前只收发，不反复改状态。这里保留给稳态巡检。
-  bool pollOperational()
-  {
-    ecx_readstate(&context_);
-    int waiting = 0;
-    for (int slave = 1; slave <= context_.slavecount && slave <= static_cast<int>(kCoffeeAxisCount);
-      ++slave)
-    {
-      ec_slavet & info = context_.slavelist[slave];
-      const auto slave_id = static_cast<std::uint16_t>(slave);
-      if (info.state == EC_STATE_OPERATIONAL) {
-        if (op_requests_[slave] > 0) {
-          say("● 轴 %d 已进入运行（重复请求 %d 次）", slave, op_requests_[slave]);
-          op_requests_[slave] = 0;
-        }
-        continue;
-      }
-      ++waiting;
-      const std::uint16_t state = info.state;
-      if ((state & EC_STATE_ERROR) != 0) {
-        say(
-          "! 轴 %d 总线错误，状态 0x%02x AL码 0x%04x，应答",
-          slave, state, info.ALstatuscode);
-        info.state = static_cast<std::uint16_t>((state & 0x0f) + EC_STATE_ACK);
-        ecx_writestate(&context_, slave_id);
-        continue;
-      }
-      info.state = EC_STATE_OPERATIONAL;
-      ecx_writestate(&context_, slave_id);
-      ++op_requests_[slave];
-      say(
-        "! 轴 %d 还未进入运行，状态 0x%02x AL码 0x%04x，再次请求（第 %d 次）",
-        slave, state, info.ALstatuscode, op_requests_[slave]);
-    }
-    return waiting == 0;
-  }
-
-  // 返回未处于运行态的从站数量；verbose 为真时逐台打印原因和链路诊断。
-  int superviseSlaveStates(bool verbose)
-  {
-    ecx_readstate(&context_);
-    int not_op = 0;
-    for (int slave = 1; slave <= context_.slavecount; ++slave) {
-      ec_slavet & info = context_.slavelist[slave];
-      if (info.state == EC_STATE_OPERATIONAL) {
-        continue;
-      }
-      ++not_op;
-      // 每次掉出运行都打印，不静默恢复。
-      if (verbose) {
-        say(
-          "! 轴 %d 不在运行态，状态 0x%02x AL码 0x%04x，重新请求进入运行",
-          slave, info.state, info.ALstatuscode);
-        logEscLinkDiagnostics(slave);
-      }
-      if ((info.state & EC_STATE_ERROR) != 0) {
-        // 总线层错误必须先应答才能换状态；这里不动驱动器故障字。
-        info.state = static_cast<std::uint16_t>((info.state & 0x0f) + EC_STATE_ACK);
-        ecx_writestate(&context_, static_cast<std::uint16_t>(slave));
-      }
-      if ((info.state & 0x0f) == EC_STATE_SAFE_OP) {
-        info.state = EC_STATE_OPERATIONAL;
-        ecx_writestate(&context_, static_cast<std::uint16_t>(slave));
-      }
-    }
-    if (not_op > 0) {
-      ++op_recover_requests_;
-    }
-    return not_op;
-  }
-
-  // 读从站 ESC 寄存器：链路错误计数、过程数据看门狗、分布时钟同步偏差。
-  // 只读，不改任何寄存器。
-  void logEscLinkDiagnostics(int slave)
-  {
-    const std::uint16_t address = context_.slavelist[slave].configadr;
-    // 0x0300..0x0313：各端口无效帧/接收错误、转发错误、处理单元错误、链路丢失计数。
-    std::array<std::uint8_t, 20> errors{};
-    const int rc_errors = ecx_FPRD(
-      &context_.port, address, 0x0300, static_cast<std::uint16_t>(errors.size()),
-      errors.data(), EC_TIMEOUTRET);
-    // 0x0440：过程数据看门狗状态，bit0=0 表示看门狗已超时。
-    std::uint16_t watchdog = 0;
-    const int rc_watchdog = ecx_FPRD(
-      &context_.port, address, 0x0440, sizeof(watchdog), &watchdog, EC_TIMEOUTRET);
-    // 0x092C：本地时间与参考时钟的偏差，最高位是符号，低 31 位是纳秒。
-    std::uint32_t time_diff = 0;
-    const int rc_diff = ecx_FPRD(
-      &context_.port, address, 0x092C, sizeof(time_diff), &time_diff, EC_TIMEOUTRET);
-    // 0x0981：SYNC0 激活位。
-    std::uint8_t sync_active = 0;
-    const int rc_sync = ecx_FPRD(
-      &context_.port, address, 0x0981, sizeof(sync_active), &sync_active, EC_TIMEOUTRET);
-    say(
-      "! 轴 %d 链路错误 端口0 无效帧%u 接收%u 端口1 无效帧%u 接收%u 转发%u/%u 处理%u "
-      "掉线%u/%u rc=%d 看门狗 0x%04x rc=%d 时钟偏差 %s%u ns rc=%d SYNC0激活 0x%02x rc=%d",
-      slave, errors[0], errors[1], errors[2], errors[3], errors[8], errors[9], errors[12],
-      errors[0x10], errors[0x11], rc_errors,
-      watchdog, rc_watchdog, (time_diff & 0x80000000u) ? "-" : "",
-      time_diff & 0x7fffffffu, rc_diff, sync_active, rc_sync);
   }
 
   void applyPendingDriveMode()
@@ -1251,104 +1169,14 @@ private:
     if (mask == 0) {
       return;
     }
-    ecx_readstate(&context_);
+    // 使用已采集的 AL 状态；禁止在 1 ms 周期中批量访问邮箱或改写驱动器控制字。
     for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
       if ((mask & (1u << (slave - 1))) == 0) {
         continue;
       }
-      const auto slave_id = static_cast<std::uint16_t>(slave);
       const ec_slavet & info = context_.slavelist[slave];
-      say(
-        "! 轴 %d 总线状态 0x%02x AL码 0x%04x 分布时钟 %d 输出 %u 字节 偏移 %ld 位 %u",
-        slave, info.state, info.ALstatuscode, info.hasdc ? 1 : 0, info.Obytes,
-        info.outputs != nullptr ? static_cast<long>(info.outputs - iomap_) : -1L,
-        static_cast<unsigned>(info.Ostartbit));
-      // 输出映射和同步方式。另外 13 轴读回值相同，才能排除映射与同步配置。
-      auto read8 = [&](std::uint16_t index, std::uint8_t subindex, int * rc) {
-          std::uint8_t value = 0;
-          int size = static_cast<int>(sizeof(value));
-          *rc = ecx_SDOread(
-            &context_, slave_id, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM);
-          return value;
-        };
-      auto read16 = [&](std::uint16_t index, std::uint8_t subindex, int * rc) {
-          std::uint16_t value = 0;
-          int size = static_cast<int>(sizeof(value));
-          *rc = ecx_SDOread(
-            &context_, slave_id, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM);
-          return value;
-        };
-      auto read32 = [&](std::uint16_t index, std::uint8_t subindex, int * rc) {
-          std::uint32_t value = 0;
-          int size = static_cast<int>(sizeof(value));
-          *rc = ecx_SDOread(
-            &context_, slave_id, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM);
-          return value;
-        };
-      int rc_assign_count = 0;
-      int rc_assign = 0;
-      int rc_map_count = 0;
-      int rc_map_control = 0;
-      int rc_sync_type = 0;
-      int rc_sync_cycle = 0;
-      int rc_status = 0;
-      const std::uint8_t assign_count = read8(0x1C12, 0x00, &rc_assign_count);
-      const std::uint16_t assign = read16(0x1C12, 0x01, &rc_assign);
-      const std::uint8_t map_count = read8(0x1600, 0x00, &rc_map_count);
-      const std::uint32_t map_control = read32(0x1600, 0x03, &rc_map_control);
-      const std::uint16_t sync_type = read16(0x1C32, 0x01, &rc_sync_type);
-      const std::uint32_t sync_cycle = read32(0x1C32, 0x02, &rc_sync_cycle);
-      const std::uint16_t status = read16(0x6041, 0x00, &rc_status);
-      say(
-        "! 轴 %d 输出分配 0x1C12 数量 %u rc=%d 首项 0x%04x rc=%d "
-        "0x1600 条目 %u rc=%d 第3条 0x%08x rc=%d",
-        slave, assign_count, rc_assign_count, assign, rc_assign,
-        map_count, rc_map_count, map_control, rc_map_control);
-      say(
-        "! 轴 %d 输出同步 0x1C32 方式 %u rc=%d 周期 %u ns rc=%d 邮箱状态字 0x%04x rc=%d",
-        slave, sync_type, rc_sync_type, sync_cycle, rc_sync_cycle, status, rc_status);
-      std::uint16_t control_word = 0;
-      int control_size = static_cast<int>(sizeof(control_word));
-      const int control_rc = ecx_SDOread(
-        &context_, slave_id, 0x6040, 0x00, FALSE, &control_size, &control_word, EC_TIMEOUTRXM);
-      std::uint8_t mode_display = 0;
-      int mode_size = static_cast<int>(sizeof(mode_display));
-      const int mode_rc = ecx_SDOread(
-        &context_, slave_id, 0x6061, 0x00, FALSE, &mode_size, &mode_display, EC_TIMEOUTRXM);
-      std::uint32_t error_code = 0;
-      int error_size = static_cast<int>(sizeof(error_code));
-      const int error_rc = ecx_SDOread(
-        &context_, slave_id, 0x603F, 0x00, FALSE, &error_size, &error_code, EC_TIMEOUTRXM);
-      if (error_rc > 0 && error_size == 2) {
-        error_code &= 0xFFFF;
-      }
-      const auto error_name = erobErrorName(static_cast<std::uint16_t>(error_code));
-      say(
-        "! 轴 %d 邮箱读回 控制字 0x%04x rc=%d 模式 0x%02x rc=%d 错误码 0x%04x rc=%d %s",
-        slave, control_word, control_rc, mode_display, mode_rc,
-        static_cast<unsigned>(error_code & 0xFFFF), error_rc,
-        error_name ? error_name->c_str() : "未收录");
-      if (error_rc > 0 && error_code != 0) {
-        std::uint16_t fault_reset = 0x0080;
-        const int reset_rc = ecx_SDOwrite(
-          &context_, slave_id, 0x6040, 0x00, FALSE, sizeof(fault_reset), &fault_reset,
-          EC_TIMEOUTRXM);
-        say("● 轴 %d 邮箱写故障复位 0x0080，返回 %d", slave, reset_rc);
-      }
-      if (mode_rc <= 0 || mode_display != kZeroErrCyclicPositionMode) {
-        std::uint8_t mode = kZeroErrCyclicPositionMode;
-        const int write_mode_rc = ecx_SDOwrite(
-          &context_, slave_id, 0x6060, 0x00, FALSE, sizeof(mode), &mode, EC_TIMEOUTRXM);
-        say("● 轴 %d 邮箱重写周期同步位置 0x08，返回 %d", slave, write_mode_rc);
-      }
-      std::uint16_t switch_on = 0x0007;
-      const int switch_rc = ecx_SDOwrite(
-        &context_, slave_id, 0x6040, 0x00, FALSE, sizeof(switch_on), &switch_on, EC_TIMEOUTRXM);
-      int rc_after = 0;
-      const std::uint16_t status_after = read16(0x6041, 0x00, &rc_after);
-      say(
-        "● 轴 %d 邮箱写接通字 0x0007，返回 %d，随后邮箱状态字 0x%04x rc=%d",
-        slave, switch_rc, status_after, rc_after);
+      say("! 轴 %d 使能停滞，缓存总线状态 0x%02x AL码 0x%04x；保留故障供排查",
+        slave, info.state, info.ALstatuscode);
     }
   }
 
@@ -1367,12 +1195,9 @@ private:
   std::thread trace_thread_;
   std::atomic<bool> trace_stop_{false};
   int expected_wkc_{0};
-  // 周期中重新请求进入运行的次数，仅用于诊断。
-  int op_recover_requests_{0};
-  // 下标是从站号。重复请求运行的次数，进入运行后清零。
-  std::array<int, kCoffeeAxisCount + 1> op_requests_{};
   std::array<std::uint16_t, kCoffeeAxisCount + 1> last_al_state_{};
   std::array<std::uint16_t, kCoffeeAxisCount + 1> last_error_logged_{};
+  std::array<bool, kCoffeeAxisCount + 1> al_error_logged_{};
   std::array<int, kCoffeeAxisCount + 1> op_quiet_cycles_{};
   std::array<bool, kCoffeeAxisCount + 1> op_waiting_{};
   bool op_requested_{false};
@@ -1670,6 +1495,7 @@ Result SoemEthercatTransport::activate()
   enable_backoff_cycles_.fill(0);
   enable_retries_.fill(0);
   enable_phase_.fill(0);
+  enable_probe_sent_.fill(false);
   held_.fill(false);
   const Result opened = link_->openAndReachOp(
     ifname_, torque_axis_,
@@ -1707,6 +1533,9 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
   if (!active_) {
     return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
   }
+  if (!bus_operational_.load(std::memory_order_acquire)) {
+    return Result::fail(CoreError::kReadFailed, "EtherCAT 总线未全部处于 OP，需检查后重新启动");
+  }
   std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
   std::array<bool, kCoffeeAxisCount> held{};
   {
@@ -1719,7 +1548,7 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
     AxisState & axis = snapshot->axes[index];
     const SlaveFeedback & item = feedback[index];
     if (!item.valid || !held[index]) {
-      return Result::fail(CoreError::kReadFailed, "从站位置尚未锁存");
+      return Result::fail(CoreError::kReadFailed, "从站反馈无效或位置尚未锁存");
     }
     axis.encoder_pulse_raw = item.actual_position;
     axis.encoder_valid = true;
@@ -2046,6 +1875,11 @@ void SoemEthercatTransport::onCycle(
     SlaveCommand & out = (*command)[index];
     out.target_position = held_[index] ? held_pulse_[index] : 0;
     out.target_torque = 0;
+    // 不完整帧不能推进使能状态机，也不能触发任何自动故障复位（含故障反应态）。
+    if (!item.valid || (item.status_word & 0x0008) != 0) {
+      out.control_word = 0x0000;
+      continue;
+    }
     if (shutdown_outputs_ || !held_[index]) {
       out.control_word = shutdown_outputs_ ? 0x0006 : 0x0000;
       continue;
@@ -2080,7 +1914,7 @@ void SoemEthercatTransport::onCycle(
       } else if (enable_backoff_cycles_[index] == kVoltageOffWaitCycles && !enable_probe_sent_[index]) {
         enable_probe_sent_[index] = true;
         say(
-          "! 轴 %zu 没有接受关电压，状态 0x%04x，改为邮箱读回并接通",
+          "! 轴 %zu 没有接受关电压，状态 0x%04x，记录总线状态供排查",
           index + 1, item.status_word);
         if (link_ != nullptr) {
           link_->requestStuckEnableProbe(static_cast<std::uint16_t>(1u << index));

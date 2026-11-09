@@ -53,7 +53,7 @@ public:
     (void)mode;
     (void)axis_mask;
   }
-  // 关电压没有改变状态字时读回 0x6040、0x6061、0x603F，并尝试用邮箱接通。
+  // 关电压没有改变状态字时记录缓存总线状态，不访问邮箱或自动复位。
   virtual void requestStuckEnableProbe(std::uint16_t axis_mask)
   {
     (void)axis_mask;

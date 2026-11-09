@@ -6,6 +6,7 @@
 #include "gtest/gtest.h"
 #include "x1_coffee_hardware_core/soem_ethercat_transport.hpp"
 #include "../src/enable_trace.hpp"
+#include "../src/ethercat_startup.hpp"
 
 namespace
 {
@@ -27,6 +28,13 @@ public:
   std::uint16_t status{0x1250};
   std::array<SlaveCommand, kCoffeeAxisCount> last{};
   int shutdowns{0};
+  bool feedback_valid{true};
+  std::atomic<bool> * bus_operational{nullptr};
+
+  void bindBusOperationalFlag(std::atomic<bool> * flag) override
+  {
+    bus_operational = flag;
+  }
   Cycle cycle;
 
   x1_coffee_hardware_core::Result openAndReachOp(
@@ -43,7 +51,7 @@ public:
   {
     std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-      feedback[index].valid = true;
+      feedback[index].valid = feedback_valid;
       feedback[index].status_word = status;
       feedback[index].actual_position = 1000 * static_cast<std::int32_t>(index + 1);
     }
@@ -76,6 +84,122 @@ HardwareParameters parameters(bool drives_enabled, const std::string & zero_torq
     values["wrap_period_pulse." + joint] = "0";
   }
   return values;
+}
+
+// 回归覆盖寄存器保留字、错误状态和不完整工作计数，全部使用内存数据。
+TEST(EthercatStartup, reads_al_code_after_reserved_register_and_decodes_little_endian)
+{
+  const auto al = x1_coffee_hardware_core::detail::decodeAlStatus(
+    {0x14, 0x00, 0xAB, 0xCD, 0x30, 0x12});
+  EXPECT_EQ(al.state, 0x0014);
+  EXPECT_EQ(al.code, 0x1230);
+}
+
+TEST(EthercatStartup, error_and_unknown_states_cannot_confirm_operational)
+{
+  using x1_coffee_hardware_core::detail::alStateReady;
+  EXPECT_TRUE(alStateReady(0x04, 0x04));
+  EXPECT_TRUE(alStateReady(0x08, 0x04));
+  EXPECT_TRUE(alStateReady(0x08, 0x08));
+  for (const std::uint16_t state : {0x00, 0x02, 0x14, 0x18, 0x0F}) {
+    EXPECT_FALSE(alStateReady(state, 0x04));
+    EXPECT_FALSE(alStateReady(state, 0x08));
+  }
+  EXPECT_FALSE(alStateReady(0x04, 0x08));
+}
+
+TEST(EthercatStartup, partial_or_missing_process_data_is_invalid)
+{
+  using x1_coffee_hardware_core::detail::completeProcessData;
+  EXPECT_TRUE(completeProcessData(45, 45));
+  for (const int wkc : {-1, 0, 1, 15, 43, 44, 46}) {
+    EXPECT_FALSE(completeProcessData(wkc, 45));
+  }
+  EXPECT_FALSE(completeProcessData(0, 0));
+}
+
+TEST(SoemEthercatTransport, invalid_feedback_does_not_enable_or_advance_retry)
+{
+  auto link = std::make_unique<FakeLink>();
+  link->status = 0x1231;
+  FakeLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  raw->feedback_valid = false;
+  for (int cycle = 0; cycle < 1600; ++cycle) {
+    raw->replay();
+    EXPECT_EQ(raw->last[0].control_word, 0x0000);
+    EXPECT_EQ(raw->last[0].target_torque, 0);
+  }
+  HardwareSnapshot snapshot;
+  EXPECT_FALSE(transport.read(&snapshot));
+  raw->feedback_valid = true;
+  raw->replay();
+  EXPECT_EQ(raw->last[0].control_word, 0x0007);
+  EXPECT_EQ(raw->last[0].target_position, 1000);
+}
+
+TEST(SoemEthercatTransport, first_invalid_feedback_does_not_latch_position)
+{
+  auto link = std::make_unique<FakeLink>();
+  link->feedback_valid = false;
+  FakeLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  EXPECT_EQ(raw->last[0].target_position, 0);
+  EXPECT_EQ(raw->last[0].control_word, 0);
+  HardwareSnapshot snapshot;
+  EXPECT_FALSE(transport.read(&snapshot));
+  raw->feedback_valid = true;
+  raw->replay();
+  ASSERT_TRUE(transport.read(&snapshot));
+  EXPECT_EQ(raw->last[0].target_position, 1000);
+}
+
+TEST(SoemEthercatTransport, faults_never_emit_automatic_reset_in_csp_or_cst)
+{
+  for (const std::uint16_t fault : {0x1208, 0x1288, 0x120F}) {
+    auto link = std::make_unique<FakeLink>();
+    link->status = 0x1237;
+    FakeLink * raw = link.get();
+    SoemEthercatTransport transport(std::move(link));
+    ASSERT_TRUE(transport.configure(parameters(true, "1")));
+    ASSERT_TRUE(transport.activate());
+    raw->status = fault;
+    for (int cycle = 0; cycle < 10; ++cycle) {
+      raw->replay();
+      // 第 1 轴 CST，其余 CSP；两条生产路径都必须保留故障。
+      for (const auto & command : raw->last) {
+        EXPECT_EQ(command.control_word, 0x0000);
+        EXPECT_EQ(command.target_torque, 0);
+      }
+    }
+    HardwareSnapshot snapshot;
+    ASSERT_TRUE(transport.read(&snapshot));
+    EXPECT_TRUE(snapshot.axes[0].alarm);
+    EXPECT_FALSE(snapshot.axes[0].enabled);
+  }
+}
+
+TEST(SoemEthercatTransport, latched_bus_drop_blocks_enable_and_reports_read_failure)
+{
+  auto link = std::make_unique<FakeLink>();
+  link->status = 0x1237;
+  FakeLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  ASSERT_NE(raw->bus_operational, nullptr);
+  raw->bus_operational->store(false);
+  raw->replay();
+  for (const auto & command : raw->last) {
+    EXPECT_EQ(command.control_word, 0x0006);
+    EXPECT_EQ(command.target_torque, 0);
+  }
+  HardwareSnapshot snapshot;
+  EXPECT_FALSE(transport.read(&snapshot));
 }
 
 TEST(SoemEthercatTransport, rejects_missing_interface_name)
