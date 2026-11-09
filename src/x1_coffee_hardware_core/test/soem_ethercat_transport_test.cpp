@@ -136,7 +136,8 @@ TEST(SoemEthercatTransport, invalid_feedback_does_not_enable_or_advance_retry)
   EXPECT_FALSE(transport.read(&snapshot));
   raw->feedback_valid = true;
   raw->replay();
-  EXPECT_EQ(raw->last[0].control_word, 0x0007);
+  // 无效帧不推进官方节拍。下一拍仍在 400 ms 复位段。
+  EXPECT_EQ(raw->last[0].control_word, 0x0080);
   EXPECT_EQ(raw->last[0].target_position, 1000);
 }
 
@@ -170,11 +171,17 @@ TEST(SoemEthercatTransport, faults_never_emit_automatic_reset_in_csp_or_cst)
     raw->status = fault;
     for (int cycle = 0; cycle < 10; ++cycle) {
       raw->replay();
-      // 第 1 轴 CST，其余 CSP；两条生产路径都必须保留故障。
-      for (const auto & command : raw->last) {
-        EXPECT_EQ(command.control_word, 0x0000);
-        EXPECT_EQ(command.target_torque, 0);
-      }
+      // 第 1 轴是周期同步扭矩，故障时保持 0。位置轴在官方头 400 ms 发 0x0080。
+      EXPECT_EQ(raw->last[0].control_word, 0x0000);
+      EXPECT_EQ(raw->last[0].target_torque, 0);
+      EXPECT_EQ(raw->last[1].control_word, 0x0080);
+    }
+    for (int cycle = 0; cycle < 1000; ++cycle) {
+      raw->replay();
+    }
+    raw->replay();
+    for (const auto & command : raw->last) {
+      EXPECT_EQ(command.control_word, 0x0000);
     }
     HardwareSnapshot snapshot;
     ASSERT_TRUE(transport.read(&snapshot));
@@ -220,7 +227,7 @@ TEST(SoemEthercatTransport, enable_holds_actual_position_and_not_pulse_zero)
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
   EXPECT_EQ(raw->last[0].target_position, 1000);
-  EXPECT_EQ(raw->last[0].control_word, 0x0006);
+  EXPECT_EQ(raw->last[0].control_word, 0x0080);
   EXPECT_NE(raw->last[0].target_position, 0);
   HardwareSnapshot snapshot;
   ASSERT_TRUE(transport.read(&snapshot));
@@ -249,7 +256,7 @@ TEST(SoemEthercatTransport, zero_torque_axis_uses_cst_word_and_zero_torque)
   ASSERT_TRUE(transport.activate());
   EXPECT_EQ(raw->last[0].control_word, 0x000F);
   EXPECT_EQ(raw->last[0].target_torque, 0);
-  EXPECT_EQ(raw->last[1].control_word, 0x000F);
+  EXPECT_EQ(raw->last[1].control_word, 0x0080);
   const auto zero = transport.requestZeroTorque();
   EXPECT_TRUE(zero);
   const auto motion = transport.startMotion();
@@ -265,9 +272,9 @@ TEST(SoemEthercatTransport, target_tracks_actual_position_until_enabled)
   SoemEthercatTransport transport(std::move(link));
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
-  EXPECT_EQ(raw->last[0].control_word, 0x0007);
+  EXPECT_EQ(raw->last[0].control_word, 0x0080);
   EXPECT_EQ(raw->last[6].target_position, 7000);
-  EXPECT_EQ(raw->last[6].control_word, 0x0007);
+  EXPECT_EQ(raw->last[6].control_word, 0x0080);
 
   std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
@@ -278,107 +285,50 @@ TEST(SoemEthercatTransport, target_tracks_actual_position_until_enabled)
   raw->cycle(feedback, &raw->last);
   EXPECT_EQ(raw->last[6].target_position, 5006);
   EXPECT_EQ(raw->last[12].target_position, 5012);
-  EXPECT_EQ(raw->last[0].control_word, 0x0007);
-  EXPECT_EQ(raw->last[6].control_word, 0x0007);
-  EXPECT_EQ(raw->last[14].control_word, 0x0007);
+  EXPECT_EQ(raw->last[0].control_word, 0x0080);
+  EXPECT_EQ(raw->last[6].control_word, 0x0080);
+  EXPECT_EQ(raw->last[14].control_word, 0x0080);
 }
 
-TEST(SoemEthercatTransport, stuck_ready_axis_does_not_restart_without_switch_on_disabled)
+void finishOfficialEnable(FakeLink * raw)
+{
+  for (int cycle = 0; cycle < 1000; ++cycle) {
+    raw->replay();
+  }
+}
+
+TEST(SoemEthercatTransport, official_csp_enable_uses_fixed_control_words)
 {
   auto link = std::make_unique<FakeLink>();
   FakeLink * raw = link.get();
   SoemEthercatTransport transport(std::move(link));
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
+  EXPECT_EQ(raw->last[0].control_word, 0x0080);
+  EXPECT_EQ(raw->last[0].target_position, 1000);
 
-  std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
-  for (auto & item : feedback) {
-    item.valid = true;
-    item.status_word = 0x1637;
-    item.actual_position = 1000;
-  }
-  feedback[2].status_word = 0x12b1;
-  std::vector<std::uint16_t> words;
-  // 1000 拍接通字 + 500 拍使能字 + 2001 拍关电压，再留在下一轮接通字里。
-  for (int cycle = 0; cycle < 4500; ++cycle) {
-    feedback[2].actual_position = 1000 + cycle % 3;
-    raw->cycle(feedback, &raw->last);
-    EXPECT_EQ(raw->last[0].control_word, 0x000F);
-    EXPECT_EQ(raw->last[2].target_position, feedback[2].actual_position);
-    words.push_back(raw->last[2].control_word);
-  }
-  // 停在准备接通：先接通字，再使能字，再关电压。看不到接通禁止就不发关机字。
-  // 替身不读邮箱。关电压超时后只再按状态字走一轮。
-  ASSERT_EQ(words.size(), 4500u);
-  std::size_t cursor = 0;
+  int reset = 1;
+  int shutdown = 0;
   int switch_on = 0;
-  while (cursor < words.size() && words[cursor] == 0x0007) {
-    ++switch_on;
-    ++cursor;
-  }
-  int enable_operation = 0;
-  while (cursor < words.size() && words[cursor] == 0x000F) {
-    ++enable_operation;
-    ++cursor;
-  }
-  int voltage_off = 0;
-  while (cursor < words.size() && words[cursor] == 0x0000) {
-    ++voltage_off;
-    ++cursor;
-  }
-  int restarted = 0;
-  while (cursor < words.size() && words[cursor] == 0x0007) {
-    ++restarted;
-    ++cursor;
-  }
-  EXPECT_EQ(switch_on, 1000);
-  EXPECT_EQ(enable_operation, 500);
-  // 进入关电压的那一拍不计入等待，所以比 2 秒阈值多 1 拍。
-  EXPECT_EQ(voltage_off, 2001);
-  EXPECT_GT(restarted, 0);
-  EXPECT_EQ(cursor, words.size());
-  EXPECT_EQ(std::count(words.begin(), words.end(), static_cast<std::uint16_t>(0x0006)), 0);
-}
-
-TEST(SoemEthercatTransport, voltage_off_restarts_only_after_switch_on_disabled)
-{
-  auto link = std::make_unique<FakeLink>();
-  FakeLink * raw = link.get();
-  SoemEthercatTransport transport(std::move(link));
-  ASSERT_TRUE(transport.configure(parameters(true)));
-  ASSERT_TRUE(transport.activate());
-
-  std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
-  for (auto & item : feedback) {
-    item.valid = true;
-    item.status_word = 0x1637;
-    item.actual_position = 1000;
-  }
-  feedback[2].status_word = 0x12b1;
-  for (int cycle = 0; cycle < 3001; ++cycle) {
-    raw->cycle(feedback, &raw->last);
-  }
-  ASSERT_EQ(raw->last[2].control_word, 0x0000);
-
-  feedback[2].status_word = 0x0040;
-  raw->cycle(feedback, &raw->last);
-  EXPECT_EQ(raw->last[2].control_word, 0x0000);
-
-  feedback[2].status_word = 0x12b1;
-  int shutdown_cycles = 0;
-  std::uint16_t word_after_gap = 0;
-  for (int cycle = 0; cycle < 700; ++cycle) {
-    raw->cycle(feedback, &raw->last);
-    if (raw->last[2].control_word == 0x0006) {
-      ++shutdown_cycles;
-    } else {
-      word_after_gap = raw->last[2].control_word;
-      break;
+  int enable = 0;
+  for (int cycle = 0; cycle < 999; ++cycle) {
+    raw->replay();
+    const std::uint16_t word = raw->last[0].control_word;
+    EXPECT_EQ(raw->last[0].target_position, 1000);
+    if (word == 0x0080) {
+      ++reset;
+    } else if (word == 0x0006) {
+      ++shutdown;
+    } else if (word == 0x0007) {
+      ++switch_on;
+    } else if (word == 0x000F) {
+      ++enable;
     }
   }
-  EXPECT_EQ(shutdown_cycles, 300);
-  EXPECT_EQ(word_after_gap, 0x0007);
-  EXPECT_EQ(raw->last[0].control_word, 0x000F);
+  EXPECT_EQ(reset, 400);
+  EXPECT_EQ(shutdown, 200);
+  EXPECT_EQ(switch_on, 200);
+  EXPECT_EQ(enable, 200);
 }
 
 TEST(SoemEthercatTransport, csp_target_slews_without_a_single_cycle_jump)
@@ -389,6 +339,7 @@ TEST(SoemEthercatTransport, csp_target_slews_without_a_single_cycle_jump)
   SoemEthercatTransport transport(std::move(link));
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
+  finishOfficialEnable(raw);
   EXPECT_EQ(raw->last[0].target_position, 1000);
   EXPECT_EQ(raw->last[0].control_word, 0x000F);
 
@@ -411,6 +362,7 @@ TEST(SoemEthercatTransport, coordinated_path_passes_the_middle_knot_before_the_e
   SoemEthercatTransport transport(std::move(link));
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
+  finishOfficialEnable(raw);
   std::vector<std::array<double, kCoffeeAxisCount>> waypoints(2);
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     const double held = static_cast<double>(index + 1);
@@ -452,6 +404,7 @@ TEST(SoemEthercatTransport, write_holds_until_motion_is_armed_then_slews)
   SoemEthercatTransport transport(std::move(link));
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
+  finishOfficialEnable(raw);
   PositionCommandFrame command;
   command.positions.fill(1.0);
   command.positions[0] = 2.0;
@@ -500,6 +453,7 @@ TEST(SoemEthercatTransport, a_stalled_axis_does_not_block_axes_that_are_already_
     SoemEthercatTransport transport(std::move(link));
     ASSERT_TRUE(transport.configure(parameters(true)));
     ASSERT_TRUE(transport.activate());
+    finishOfficialEnable(raw);
     std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
     for (auto & item : feedback) {
       item.valid = true;
@@ -530,6 +484,7 @@ TEST(SoemEthercatTransport, mit_hold_pulls_back_toward_the_latched_pose)
   SoemEthercatTransport transport(std::move(link));
   ASSERT_TRUE(transport.configure(parameters(true)));
   ASSERT_TRUE(transport.activate());
+  finishOfficialEnable(raw);
   const auto entered = transport.enterMitHold();
   ASSERT_TRUE(entered) << entered.detail;
   raw->replay();

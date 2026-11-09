@@ -409,9 +409,9 @@ public:
         position_out_[slave] = reinterpret_cast<ZeroErrOutput *>(context_.slavelist[slave].outputs);
         position_in_[slave] = reinterpret_cast<ZeroErrInput *>(context_.slavelist[slave].inputs);
         position_out_[slave]->control_word = 0;
-        position_out_[slave]->digital_output = 0;
         position_out_[slave]->target_position = 0;
-        position_out_[slave]->target_torque = 0;
+        position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
+        position_out_[slave]->reserved = 0;
       }
     }
 
@@ -792,30 +792,43 @@ private:
       say("! 轴 %u 读不到额定力矩 0x6076", slave);
     }
 
+    // eRob_CSP.cpp：控制字、目标位置、运行模式、8 位填充。
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
-    value32 = kZeroErrRxTargetPosition;
-    writePdoEntry(context, slave, 0x1600, 1, sizeof(value32), &value32);
-    value32 = kZeroErrRxDigitalOutput;
-    writePdoEntry(context, slave, 0x1600, 2, sizeof(value32), &value32);
     value32 = kZeroErrRxControlWord;
+    writePdoEntry(context, slave, 0x1600, 1, sizeof(value32), &value32);
+    value32 = kZeroErrRxTargetPosition;
+    writePdoEntry(context, slave, 0x1600, 2, sizeof(value32), &value32);
+    value32 = kZeroErrRxModeOfOperation;
     writePdoEntry(context, slave, 0x1600, 3, sizeof(value32), &value32);
-    value32 = kZeroErrRxTargetTorque;
+    value32 = kZeroErrRxPadding;
     writePdoEntry(context, slave, 0x1600, 4, sizeof(value32), &value32);
     value8 = 4;
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
+    value8 = 0;
+    writePdoEntry(context, slave, 0x1C12, 0, sizeof(value8), &value8);
+    std::uint16_t assign = 0x1600;
+    writePdoEntry(context, slave, 0x1C12, 1, sizeof(assign), &assign);
+    value8 = 1;
+    writePdoEntry(context, slave, 0x1C12, 0, sizeof(value8), &value8);
 
     value8 = 0;
     writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
-    value32 = kZeroErrTxActualPosition;
-    writePdoEntry(context, slave, 0x1A00, 1, sizeof(value32), &value32);
-    value32 = kZeroErrTxDigitalInput;
-    writePdoEntry(context, slave, 0x1A00, 2, sizeof(value32), &value32);
     value32 = kZeroErrTxStatusWord;
+    writePdoEntry(context, slave, 0x1A00, 1, sizeof(value32), &value32);
+    value32 = kZeroErrTxActualPosition;
+    writePdoEntry(context, slave, 0x1A00, 2, sizeof(value32), &value32);
+    value32 = kZeroErrTxActualVelocity;
     writePdoEntry(context, slave, 0x1A00, 3, sizeof(value32), &value32);
     value32 = kZeroErrTxActualTorque;
     writePdoEntry(context, slave, 0x1A00, 4, sizeof(value32), &value32);
     value8 = 4;
-    rc = writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
+    writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
+    value8 = 0;
+    writePdoEntry(context, slave, 0x1C13, 0, sizeof(value8), &value8);
+    assign = 0x1A00;
+    writePdoEntry(context, slave, 0x1C13, 1, sizeof(assign), &assign);
+    value8 = 1;
+    rc = writePdoEntry(context, slave, 0x1C13, 0, sizeof(value8), &value8);
     if (rc <= 0) {
       std::fprintf(stderr, "slave=%u pdo map rc=%d\n", slave, rc);
     }
@@ -834,6 +847,23 @@ private:
       std::atomic<bool> * flag;
       ~MarkDone() {flag->store(true);}
     } mark_done{&thread_done_};
+    // 普通线程从启动脚本继承 CPU 2；仅 EtherCAT 周期线程切到隔离的 CPU 3。
+    cpu_set_t cycle_cpus;
+    CPU_ZERO(&cycle_cpus);
+    CPU_SET(3, &cycle_cpus);
+    const int affinity_rc = pthread_setaffinity_np(
+      pthread_self(), sizeof(cycle_cpus), &cycle_cpus);
+    if (affinity_rc != 0) {
+      // 绑核失败不得继续上电，唤醒启动检查并返回明确原因。
+      std::lock_guard<std::mutex> lock(wait_mu_);
+      failed_ = true;
+      failure_detail_ = std::string("EtherCAT 周期线程绑定 CPU 3 失败：") +
+        std::strerror(affinity_rc);
+      say("✗ %s", failure_detail_.c_str());
+      wait_cv_.notify_all();
+      return;
+    }
+    say("✓ EtherCAT 周期线程已绑定 CPU 3");
     raiseCycleThreadPriority();
     DcCycleTimer timer;
     timer.start();
@@ -878,9 +908,9 @@ private:
           torque_out_[slave]->target_torque = item.target_torque;
         } else if (position_out_[slave] != nullptr) {
           position_out_[slave]->control_word = item.control_word;
-          position_out_[slave]->digital_output = 0;
           position_out_[slave]->target_position = item.target_position;
-          position_out_[slave]->target_torque = item.target_torque;
+          position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
+          position_out_[slave]->reserved = 0;
         }
       }
       const int send_rc = ecx_send_processdata(&context_);
@@ -1014,9 +1044,9 @@ private:
           torque_out_[slave]->target_torque = item.target_torque;
         } else if (position_out_[slave] != nullptr) {
           position_out_[slave]->control_word = item.control_word;
-          position_out_[slave]->digital_output = 0;
           position_out_[slave]->target_position = item.target_position;
-          position_out_[slave]->target_torque = item.target_torque;
+          position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
+          position_out_[slave]->reserved = 0;
         }
       }
       const int send_rc = ecx_send_processdata(&context_);
@@ -1224,6 +1254,28 @@ SoemLink * SoemLink::active_link_ = nullptr;
 constexpr double kEthercatCycleSec = 1.0e-3;
 // 手册：同一台关节下使能到再使能的间隔应大于 300 ms。1 ms 一个周期。
 constexpr int kEnableGapCycles = 300;
+// eRob_CSP.cpp 周期线程：1 ms 一拍。400 拍故障复位，随后关机、接通、使能各 200 拍。
+constexpr int kOfficialResetCycles = 400;
+constexpr int kOfficialShutdownCycles = 200;
+constexpr int kOfficialSwitchOnCycles = 200;
+constexpr int kOfficialEnableCycles = 200;
+constexpr int kOfficialEnableEnd =
+  kOfficialResetCycles + kOfficialShutdownCycles + kOfficialSwitchOnCycles + kOfficialEnableCycles;
+
+std::uint16_t officialCspEnableWord(int step)
+{
+  if (step <= kOfficialResetCycles) {
+    return 0x0080;
+  }
+  if (step <= kOfficialResetCycles + kOfficialShutdownCycles) {
+    return 0x0006;
+  }
+  if (step <= kOfficialResetCycles + kOfficialShutdownCycles + kOfficialSwitchOnCycles) {
+    return 0x0007;
+  }
+  return 0x000F;
+}
+
 // 准备接通先保持接通字 0x0007 约 1 秒，等掩码离开 0x0021。
 constexpr int kSwitchOnHoldCycles = 1000;
 // 1 秒后仍是准备接通，再给使能字 0x000F 约 0.5 秒。
@@ -1481,10 +1533,10 @@ Result SoemEthercatTransport::activate()
   debugf("activate begin");
   link_->bindBusOperationalFlag(&bus_operational_);
   link_->bindOperationalHook([this]() {
-      servo_ready_delay_ms_ = 5000;
-      servo_wait_begin_ = std::chrono::steady_clock::now();
+      // 官方 eRob_CSP 在进入运行后立刻按节拍接通，没有另外的 5 秒等待。
+      servo_ready_delay_ms_ = 0;
       servo_wait_logged_sec_ = -1;
-      servo_wait_done_logged_ = false;
+      servo_wait_done_logged_ = true;
     });
   shutdown_outputs_ = false;
   motion_armed_ = false;
@@ -1815,7 +1867,6 @@ void SoemEthercatTransport::onCycle(
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
-  samplePath();
   if (mit_active_ && gravity_ready_) {
     std::array<double, kCoffeeAxisCount> q{};
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
@@ -1858,6 +1909,21 @@ void SoemEthercatTransport::onCycle(
       std::fflush(stderr);
     }
   }
+  // eRob_CSP.cpp 的 ecatthread：400 拍 0x0080，200 拍 0x0006，200 拍 0x0007，200 拍 0x000F。
+  // 1 ms 一拍。目标位置不跟示例写成 0，避免多圈关节被拉向脉冲 0。
+  if (drives_enabled_ && !servo_waiting &&
+    bus_operational_.load(std::memory_order_acquire) &&
+    official_enable_step_ < 1000)
+  {
+    ++official_enable_step_;
+    if (official_enable_step_ == 1) {
+      say("● 按官方示例接通：400 ms 复位，200 ms 关机，200 ms 接通，200 ms 使能");
+      std::fflush(stderr);
+    }
+  }
+  if (!drives_enabled_ || official_enable_step_ >= 1000) {
+    samplePath();
+  }
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     const SlaveFeedback & item = feedback[index];
     const bool operation_enabled = item.valid && (item.status_word & 0x006F) == 0x0027;
@@ -1875,8 +1941,8 @@ void SoemEthercatTransport::onCycle(
     SlaveCommand & out = (*command)[index];
     out.target_position = held_[index] ? held_pulse_[index] : 0;
     out.target_torque = 0;
-    // 不完整帧不能推进使能状态机，也不能触发任何自动故障复位（含故障反应态）。
-    if (!item.valid || (item.status_word & 0x0008) != 0) {
+    // 不完整帧不推进使能。故障位在官方 1 秒节拍结束前仍按示例发 0x0080，之后才停在 0。
+    if (!item.valid) {
       out.control_word = 0x0000;
       continue;
     }
@@ -1898,68 +1964,14 @@ void SoemEthercatTransport::onCycle(
       out.control_word = 0x0006;
       continue;
     }
-    // 准备接通不前进时先关电压。必须看到接通禁止，才关机满 300 ms 再接通。
-    // 状态一直停在准备接通，说明驱动器没有接受关电压，不能把它当成新一轮。
-    const std::uint16_t masked_state = item.status_word & 0x006F;
-    const bool ready_to_switch_on = item.valid && masked_state == 0x0021;
-    if (!torque_axis_[index] && enable_phase_[index] == 1) {
+    // 官方接通节拍走完之前，位置轴不按状态字分支，也不关电压重试。
+    if (!torque_axis_[index] && official_enable_step_ > 0 && official_enable_step_ <= 1000) {
+      out.control_word = officialCspEnableWord(official_enable_step_);
+      continue;
+    }
+    if ((item.status_word & 0x0008) != 0) {
       out.control_word = 0x0000;
-      ++enable_backoff_cycles_[index];
-      const bool switch_on_disabled = item.valid && masked_state == 0x0040;
-      if (switch_on_disabled) {
-        enable_phase_[index] = 2;
-        enable_backoff_cycles_[index] = 0;
-        ++enable_retries_[index];
-        say("! 轴 %zu 已回到接通禁止，等待 300 ms 后再接通", index + 1);
-      } else if (enable_backoff_cycles_[index] == kVoltageOffWaitCycles && !enable_probe_sent_[index]) {
-        enable_probe_sent_[index] = true;
-        say(
-          "! 轴 %zu 没有接受关电压，状态 0x%04x，记录总线状态供排查",
-          index + 1, item.status_word);
-        if (link_ != nullptr) {
-          link_->requestStuckEnableProbe(static_cast<std::uint16_t>(1u << index));
-        }
-        enable_phase_[index] = 0;
-        enable_backoff_cycles_[index] = 0;
-        enable_ready_cycles_[index] = 0;
-      }
       continue;
-    }
-    if (!torque_axis_[index] && enable_phase_[index] == 2) {
-      out.control_word = 0x0006;
-      ++enable_backoff_cycles_[index];
-      if (enable_backoff_cycles_[index] >= kEnableGapCycles) {
-        enable_phase_[index] = 0;
-        enable_backoff_cycles_[index] = 0;
-        enable_ready_cycles_[index] = 0;
-        say("● 轴 %zu 第 %d 次重新接通", index + 1, enable_retries_[index]);
-      }
-      continue;
-    }
-    if (!torque_axis_[index] && ready_to_switch_on) {
-      ++enable_ready_cycles_[index];
-      // 先保持接通字。约 1 秒后掩码仍是 0x0021，才改发使能字，照顾不报告「已接通」的关节。
-      if (enable_ready_cycles_[index] > kSwitchOnHoldCycles &&
-        enable_ready_cycles_[index] <= kSwitchOnHoldCycles + kEnableStuckCycles)
-      {
-        if (enable_ready_cycles_[index] == kSwitchOnHoldCycles + 1) {
-          say("● 轴 %zu 接通字后仍是准备接通，改发使能字", index + 1);
-        }
-        out.control_word = 0x000F;
-        continue;
-      }
-      if (enable_ready_cycles_[index] > kSwitchOnHoldCycles + kEnableStuckCycles) {
-        enable_phase_[index] = 1;
-        enable_backoff_cycles_[index] = 0;
-        enable_ready_cycles_[index] = 0;
-        out.control_word = 0x0000;
-        say(
-          "! 轴 %zu 使能字后仍是准备接通，开始关电压，状态 0x%04x",
-          index + 1, item.status_word);
-        continue;
-      }
-    } else if (!torque_axis_[index]) {
-      enable_ready_cycles_[index] = 0;
     }
     if (!torque_axis_[index] && operation_enabled) {
       const int step = active_step_[index] > 0 ? active_step_[index] : 1;

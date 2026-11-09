@@ -23,6 +23,10 @@ X1 Coffee 是一台 15 轴双臂机器人。腰部 1 个旋转关节，左右臂
 bash environment/scripts/start_real_hold.sh enp3s0
 ```
 
+下位机需提供 CPU 2、3。此脚本将主线程及普通子线程绑定到 CPU 2，SDK 将 EtherCAT 周期线程单独绑定到 CPU 3，周期线程沿用 `SCHED_FIFO` 优先级 80。绑核失败会终止启动。直接调用其他 launch 不会继承脚本的 CPU 2 绑定。
+
+下位机内核启动参数使用 `isolcpus=domain,managed_irq,2-3 nohz_full=2-3 rcu_nocbs=2-3 irqaffinity=0-1,4-5`（当前机器共 6 核）。系统配置需重启后生效，可用 `cat /proc/cmdline` 和 `cat /sys/devices/system/cpu/isolated` 检查。隔离配置不随 Git 拉取部署；SDK 拉取后需重新编译硬件包才会应用周期线程绑核。
+
 上位机：
 
 ```bash

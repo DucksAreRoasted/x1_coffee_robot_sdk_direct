@@ -44,20 +44,20 @@ TEST(ZeroErrDrive, rated_torque_converts_newton_meters_without_a_stand_in)
   EXPECT_EQ(x1_coffee_hardware_core::torquePermilleFromNm(16.0, 0.0), 0.0);
 }
 
-TEST(ZeroErrDrive, pdo_image_is_ten_bytes_in_demo_order)
+TEST(ZeroErrDrive, pdo_image_matches_official_csp)
 {
-  EXPECT_EQ(sizeof(ZeroErrOutput), 12u);
+  EXPECT_EQ(sizeof(ZeroErrOutput), 8u);
   EXPECT_EQ(sizeof(ZeroErrInput), 12u);
   ZeroErrOutput output{};
-  output.target_position = 5566;
-  output.digital_output = 0;
   output.control_word = 0x000F;
+  output.target_position = 5566;
+  output.mode_of_operation = 0x08;
   const auto * bytes = reinterpret_cast<const std::uint8_t *>(&output);
-  EXPECT_EQ(bytes[0], 0xBE);
-  EXPECT_EQ(bytes[1], 0x15);
-  EXPECT_EQ(bytes[4], 0x00);
-  EXPECT_EQ(bytes[8], 0x0F);
-  EXPECT_EQ(bytes[9], 0x00);
+  EXPECT_EQ(bytes[0], 0x0F);
+  EXPECT_EQ(bytes[1], 0x00);
+  EXPECT_EQ(bytes[2], 0xBE);
+  EXPECT_EQ(bytes[3], 0x15);
+  EXPECT_EQ(bytes[6], 0x08);
 }
 
 }  // namespace

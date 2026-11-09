@@ -24,7 +24,7 @@ if [[ ! -t 0 || ! -t 1 ]]; then
 fi
 
 echo "● 网口 ${IFNAME}：上电并保持当前位置，不回零。"
-echo "● ROS 域 ${ROS_DOMAIN_ID}。进总线后先等 5 秒，终端会倒数，不要退出。"
+echo "● ROS 域 ${ROS_DOMAIN_ID}。15 轴进入运行后按官方节拍接通，约 1 秒，不要退出。"
 echo "✓ 看到「15 轴都已使能」后，再在上位机启动。"
 echo "● 下面输入登录密码。输入时不显示，输完按回车。"
 # 清掉几分钟内的 sudo 记录，否则不会再问密码。
@@ -39,7 +39,8 @@ exec sudo -E env -u SHELLOPTS bash --noprofile --norc -c "
   rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* /dev/shm/fast_datasharing_*
   source /opt/ros/humble/setup.bash
   source '${SDK_ROOT}/install/setup.bash'
-  exec ros2 launch x1_coffee_integration robot_startup.launch.py \
+  # 主线程及普通子线程继承 CPU 2，EtherCAT 周期线程在 SDK 中单独绑定 CPU 3。
+  exec taskset --cpu-list 2 ros2 launch x1_coffee_integration robot_startup.launch.py \
     use_fake_hardware:=false \
     motion_enabled:=false \
     drives_enabled:=true \

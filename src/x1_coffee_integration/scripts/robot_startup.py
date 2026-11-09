@@ -91,8 +91,8 @@ def cia402_state_name(status_bits: int) -> str:
     }.get(int(status_bits) & 0x006F, "未知")
 
 
-# 与传输层的 5 秒准备时间一致。这段时间里不把未使能当成故障来刷屏。
-SERVO_READY_SEC = 5.0
+# 官方接通节拍约 1 秒。这段时间里不把未使能当成故障来刷屏。
+SERVO_READY_SEC = 1.2
 
 
 def enable_wait_line(states: Sequence[object], elapsed_sec: float) -> Optional[str]:
@@ -305,7 +305,7 @@ def main() -> int:
             self.get_logger().info("✓ 硬件检查通过：15 轴反馈有效，无报警、跟随误差或急停")
             require_enabled = bool(self.get_parameter("drives_enabled").value)
             if require_enabled:
-                self.get_logger().info("● 进总线后先等 5 秒再接通。倒数结束前关节未使能是正常的")
+                self.get_logger().info("● 15 轴进入运行后按官方节拍接通，约 1 秒。结束前关节未使能是正常的")
                 wait_started = time.monotonic()
                 last_line = None
                 next_repeat = 0.0

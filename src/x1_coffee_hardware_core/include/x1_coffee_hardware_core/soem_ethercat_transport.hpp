@@ -166,7 +166,9 @@ private:
     const std::vector<std::array<double, kCoffeeAxisCount>> & waypoints,
     const std::vector<double> & segment_sec);
   void samplePath();
-  // 每台按自己的状态字走接通。准备接通先保持 0x0007，关电压要看到接通禁止才再试。
+  // 位置轴接通拍数。eRob_CSP.cpp：1 到 1000 用固定控制字，之后才按状态字保持。
+  int official_enable_step_{0};
+  // 力矩轴仍按状态字走接通。位置轴的关电压重试不再使用这些计数。
   std::array<int, kCoffeeAxisCount> enable_ready_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_backoff_cycles_{};
   std::array<int, kCoffeeAxisCount> enable_retries_{};
