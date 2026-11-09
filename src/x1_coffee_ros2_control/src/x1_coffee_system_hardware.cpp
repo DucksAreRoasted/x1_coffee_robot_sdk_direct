@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -551,28 +552,41 @@ CallbackReturn X1CoffeeSystemHardware::on_configure(const rclcpp_lifecycle::Stat
 CallbackReturn X1CoffeeSystemHardware::on_activate(const rclcpp_lifecycle::State &)
 {
   debugf("on_activate enter");
-  auto result = transport_->activate();
-  if (!result) {
-    logTransportError("activate", result);
-    return CallbackReturn::ERROR;
-  }
+  // 激活失败如果从这里返回，controller_manager 会抛异常，进程以退出码 -6 结束，
+  // 进程内的上电重试就没机会再跑。初始反馈无效时先断开，再整段上电。
   x1_coffee_hardware_core::HardwareSnapshot snapshot;
-  result = transport_->read(&snapshot);
-  if (!result) {
-    logTransportError("initial read", result);
-    transport_->stop(false);
-    transport_->deactivate();
-    return CallbackReturn::ERROR;
-  }
-  for (std::size_t i = 0; i < positions_.size(); ++i) {
-    if (!snapshot.axes[i].position_valid || !snapshot.axes[i].velocity_valid ||
-      !std::isfinite(snapshot.axes[i].position) || !std::isfinite(snapshot.axes[i].velocity))
-    {
-      RCLCPP_ERROR(rclcpp::get_logger("X1CoffeeSystemHardware"), "✗ 轴 %zu 的初始状态无效", i + 1);
-      transport_->stop(false);
-      transport_->deactivate();
+  for (;;) {
+    auto result = transport_->activate();
+    if (!result) {
+      logTransportError("activate", result);
       return CallbackReturn::ERROR;
     }
+    result = transport_->read(&snapshot);
+    bool sample_ok = static_cast<bool>(result);
+    if (sample_ok) {
+      for (std::size_t i = 0; i < positions_.size(); ++i) {
+        if (!snapshot.axes[i].position_valid || !snapshot.axes[i].velocity_valid ||
+          !std::isfinite(snapshot.axes[i].position) || !std::isfinite(snapshot.axes[i].velocity))
+        {
+          RCLCPP_ERROR(
+            rclcpp::get_logger("X1CoffeeSystemHardware"), "✗ 轴 %zu 的初始状态无效", i + 1);
+          sample_ok = false;
+          break;
+        }
+      }
+    } else {
+      logTransportError("initial read", result);
+    }
+    if (sample_ok) {
+      break;
+    }
+    transport_->stop(false);
+    transport_->deactivate();
+    RCLCPP_ERROR(
+      rclcpp::get_logger("X1CoffeeSystemHardware"), "初始反馈无效，断开后重新上电");
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  }
+  for (std::size_t i = 0; i < positions_.size(); ++i) {
     positions_[i] = snapshot.axes[i].position;
     velocities_[i] = snapshot.axes[i].velocity;
     commands_[i] = positions_[i];

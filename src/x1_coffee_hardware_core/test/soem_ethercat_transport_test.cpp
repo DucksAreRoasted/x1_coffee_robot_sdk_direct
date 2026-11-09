@@ -493,6 +493,18 @@ TEST(SoemEthercatTransport, retries_safeop_bringup_until_operational)
   EXPECT_EQ(raw->opens, 3);
 }
 
+TEST(SoemEthercatTransport, retries_when_the_failure_only_lists_slave_states)
+{
+  auto link = std::make_unique<RetryLink>();
+  link->failures_left = 1;
+  link->failure = "bus state=0x8 late_us=0 phase_us=508 sync0=1 slave13=0x4/0x0";
+  RetryLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(false)));
+  ASSERT_TRUE(transport.activate());
+  EXPECT_EQ(raw->opens, 2);
+}
+
 TEST(SoemEthercatTransport, does_not_retry_a_process_data_size_mismatch)
 {
   auto link = std::make_unique<RetryLink>();

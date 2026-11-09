@@ -1070,9 +1070,10 @@ private:
       {
         std::lock_guard<std::mutex> lock(wait_mu_);
         failed_ = true;
-        failure_detail_ = stream.str();
-        // 状态与 AL 码直接打到终端，不依赖上层是否转述。
-        say("✗ 从站未全部进入运行：%s", failure_detail_.c_str());
+        // 这句必须留在返回原因里。上层靠它决定断开重试；只打印在终端的话，
+        // ros2_control 会把激活失败当成致命错误，进程以 SIGABRT 退出。
+        failure_detail_ = "从站未全部进入运行：" + stream.str();
+        say("✗ %s", failure_detail_.c_str());
       }
       wait_cv_.notify_all();
       return;
@@ -1857,6 +1858,7 @@ bool bringupShouldRetry(const Result & opened)
     return false;
   }
   return detail.find("从站未全部进入运行") != std::string::npos ||
+    detail.find("bus state=") != std::string::npos ||
     detail.find("没有进入 OP") != std::string::npos ||
     detail.find("从站数不是 15") != std::string::npos ||
     detail.find("ecx_init 失败") != std::string::npos;
