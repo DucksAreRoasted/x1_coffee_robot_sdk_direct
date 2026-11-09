@@ -1919,8 +1919,14 @@ Result SoemEthercatTransport::activate()
     if (!bringupShouldRetry(opened)) {
       return opened;
     }
-    say("! 第 %d 次上电没有全部进入运行，断开后重试", attempt);
-    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    const bool no_slave = opened.detail.find("读到 -1") != std::string::npos ||
+      opened.detail.find("读到 0") != std::string::npos;
+    say(
+      no_slave ? "! 第 %d 次上电没有从站应答，断开后重试" :
+      "! 第 %d 次上电没有全部进入运行，断开后重试",
+      attempt);
+    // 没有载波时马上重开会一直读到 -1。等链路起来再扫。
+    std::this_thread::sleep_for(std::chrono::milliseconds(no_slave ? 2000 : 400));
   }
   debugf("activate reached OP");
   link_->copyRatedTorqueNm(&rated_axis_nm_);
