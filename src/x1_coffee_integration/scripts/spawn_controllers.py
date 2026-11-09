@@ -38,7 +38,8 @@ def label(name):
 
 
 def controller_states(node):
-    response = list_controllers(node, MANAGER, service_timeout=60.0, call_timeout=10.0)
+    # service_timeout=0 会一直等。上电重试期间控制节点还没有这个服务，60 秒就会先退出。
+    response = list_controllers(node, MANAGER, service_timeout=0.0, call_timeout=10.0)
     return {controller.name: controller.state for controller in response.controller}
 
 
