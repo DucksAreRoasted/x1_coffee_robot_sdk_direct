@@ -38,9 +38,12 @@ namespace
 
 // 零差官方 IgH 示例 eRob_IGH_EtherCAT：周期 1 ms，
 // ecrt_slave_config_dc(..., 0x0300, PERIOD_NS, 0, 0, 0)，偏移为 0。
-// 上次失败的是 1 ms 再加 100 µs 偏移。发帧仍锁在两个 SYNC0 脉冲的中间。
-// 周期收帧最多等 500 µs。EC_TIMEOUTRET 是 2 ms，叠在 1 ms 节拍上会让输出间隔超过看门狗。
-constexpr int kCycleFrameTimeoutUs = 500;
+// 发帧相位跟 eRob_CSP.cpp 的 ec_sync，锁到 SYNC0，不再错开半个周期。
+// 周期收帧最多等 200 µs。更长的等待会叠进 1 ms 节拍，从站报 0x001B。
+constexpr int kCycleFrameTimeoutUs = 200;
+// 状态广播单独限时，并且几拍才读一次，不跟每拍的过程数据抢网口。
+constexpr int kStatePollTimeoutUs = 200;
+constexpr int kStatePollCycles = 200;
 class DcCycleTimer
 {
 public:
@@ -60,8 +63,8 @@ public:
   {
     std::int64_t offset = 0;
     if (dc_time > 0) {
-      // 目标相位 = 周期一半，与 SYNC0（相位 0）错开。
-      std::int64_t delta = (dc_time - kCycleNs / 2) % kCycleNs;
+      // eRob_CSP.cpp ec_sync：把本拍唤醒对齐到分布时钟周期起点（SYNC0）。
+      std::int64_t delta = dc_time % kCycleNs;
       if (delta > kCycleNs / 2) {
         delta -= kCycleNs;
       }
@@ -71,6 +74,13 @@ public:
         --integral_;
       }
       offset = -(delta / 100) - (integral_ / 20);
+      // 相位修正最多 200 µs，避免一次异常时钟把睡眠拉长。
+      constexpr std::int64_t kMaxOffsetNs = 200000;
+      if (offset > kMaxOffsetNs) {
+        offset = kMaxOffsetNs;
+      } else if (offset < -kMaxOffsetNs) {
+        offset = -kMaxOffsetNs;
+      }
     }
     addNs(kCycleNs + offset);
     timespec now{};
@@ -887,13 +897,18 @@ private:
     bool op_requested = false;
     bool saw_op = false;
     int primed_cycles = 0;
+    std::int64_t last_dc = 0;
+    // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
+    ecx_send_processdata(&context_);
     // 用墙钟限时，并在外层 15 秒等待结束前留下逐轴失败原因。
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(14);
     for (int cycle = 0; !stopped() && std::chrono::steady_clock::now() < deadline; ++cycle) {
+      timer.wait(last_dc);
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
+      last_dc = context_.DCtime;
       // 先收回上一帧，再广播读状态。过程数据还在网上时插别的帧，回帧会被收丢。
-      if ((cycle % 50) == 0) {
-        pollUniformAlState();
+      if ((cycle % kStatePollCycles) == 0) {
+        pollUniformAlState(kStatePollTimeoutUs);
       }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
@@ -933,27 +948,26 @@ private:
           position_out_[slave]->reserved = 0;
         }
       }
+      if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount) &&
+        ++primed_cycles >= 100)
+      {
+        // ecx_writestate 会按 6 ms 重试。这里只发一次广播，避免把过程数据间隔拉长。
+        std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
+        context_.slavelist[0].state = EC_STATE_OPERATIONAL;
+        ecx_BWR(
+          &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
+        op_requested = true;
+        op_requested_ = true;
+        say("● 已连续发送有效输出，请求 15 台从站进入运行");
+      }
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, false, wkc, send_rc);
-      if (cycle == 0 || (cycle % 1000) == 0) {
-        say("● 等待从站进入运行，已有反馈 %d/15", ready);
-      }
       if (!safeop_seen && slavesAtLeast(EC_STATE_SAFE_OP)) {
         safeop_seen = true;
         say("● 从站进入安全运行，%d/15 台有反馈", ready);
       }
       if (ready != static_cast<int>(kCoffeeAxisCount)) {
         primed_cycles = 0;
-      }
-      if (safeop_seen && !op_requested && ready == static_cast<int>(kCoffeeAxisCount)) {
-        // 先连发有效输出，再广播一次进入运行。之后不再成批改状态。
-        if (++primed_cycles >= 100) {
-          context_.slavelist[0].state = EC_STATE_OPERATIONAL;
-          ecx_writestate(&context_, 0);
-          op_requested = true;
-          op_requested_ = true;
-          say("● 已连续发送有效输出，请求 15 台从站进入运行");
-        }
       }
       if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL) &&
         detail::completeProcessData(wkc, expected_wkc_))
@@ -967,7 +981,6 @@ private:
         wait_cv_.notify_all();
         break;
       }
-      timer.wait(context_.DCtime);
     }
     if (stopped() || !saw_op) {
       if (stopped()) {
@@ -978,7 +991,8 @@ private:
         refreshOneSlaveState(slave);
       }
       std::ostringstream stream;
-      stream << "bus state=0x" << std::hex << context_.slavelist[0].state;
+      stream << "bus state=0x" << std::hex << context_.slavelist[0].state
+             << std::dec << " late_us=" << (timer.maxLateNs() / 1000);
       for (int slave = 1; slave <= context_.slavecount; ++slave) {
         stream << " slave" << std::dec << slave << "=0x" << std::hex
                << context_.slavelist[slave].state << "/0x"
@@ -1015,7 +1029,7 @@ private:
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
       // 每秒广播一次。进入运行后的第一拍不读，避免刚进运行就被判成掉线。
       if (steady_cycle > 0 && (steady_cycle % 1000) == 0 &&
-        pollUniformAlState() == AlBroadcast::kMixed &&
+        pollUniformAlState(kStatePollTimeoutUs) == AlBroadcast::kMixed &&
         bus_operational_flag_ != nullptr &&
         bus_operational_flag_->exchange(false, std::memory_order_acq_rel))
       {
@@ -1119,11 +1133,11 @@ private:
   // 一帧广播读 15 台 AL 状态。状态一致才写入缓存。逐台读会把过程数据帧间隔拉过看门狗。
   enum class AlBroadcast { kNoFrame, kUniform, kMixed };
 
-  AlBroadcast pollUniformAlState()
+  AlBroadcast pollUniformAlState(int timeout_us)
   {
     std::uint16_t raw = 0;
     const int wkc = ecx_BRD(
-      &context_.port, 0, ECT_REG_ALSTAT, sizeof(raw), &raw, kCycleFrameTimeoutUs);
+      &context_.port, 0, ECT_REG_ALSTAT, sizeof(raw), &raw, timeout_us);
     if (wkc < context_.slavecount) {
       return AlBroadcast::kNoFrame;
     }
