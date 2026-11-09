@@ -904,7 +904,6 @@ private:
     bool saw_op = false;
     int pre_safeop_cycles = 0;
     int primed_cycles = 0;
-    int op_wkc_streak = 0;
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
     ecx_send_processdata(&context_);
@@ -915,6 +914,10 @@ private:
       timer.wait(last_dc);
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
       last_dc = context_.DCtime;
+      // 只在已经请求运行之后确认状态。上一帧已收回，这时读不会把过程数据回帧冲掉。
+      if (op_requested && (cycle % 50) == 0) {
+        pollUniformAlState(kStatePollTimeoutUs);
+      }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
       for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
@@ -989,20 +992,18 @@ private:
       }
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, false, wkc, send_rc);
-      // 请求运行之后，输出被 15 台同时收下时工作计数才满。连续 20 拍算进入运行。
-      if (op_requested && detail::completeProcessData(wkc, expected_wkc_)) {
-        if (++op_wkc_streak >= 20) {
-          say("✓ 15 台从站已在同一帧里进入运行");
-          saw_op = true;
-          {
-            std::lock_guard<std::mutex> lock(wait_mu_);
-            op_seen_ = true;
-          }
-          wait_cv_.notify_all();
-          break;
+      // 安全操作下工作计数也会满。必须 15 台状态都是运行，才算进入运行。
+      if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL) &&
+        detail::completeProcessData(wkc, expected_wkc_))
+      {
+        say("✓ 15 台从站状态已确认进入运行");
+        saw_op = true;
+        {
+          std::lock_guard<std::mutex> lock(wait_mu_);
+          op_seen_ = true;
         }
-      } else if (op_requested) {
-        op_wkc_streak = 0;
+        wait_cv_.notify_all();
+        break;
       }
     }
     if (stopped() || !saw_op) {
@@ -1048,16 +1049,22 @@ private:
     int wkc_window_cycles = 0;
     int wkc_bad_frames = 0;
     int wkc_window_min = expected_wkc_;
+    int mixed_polls = 0;
     timer.resetStats();
     while (!stopped()) {
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
-      // 每秒广播一次。进入运行后的第一拍不读，避免刚进运行就被判成掉线。
-      if (steady_cycle > 0 && (steady_cycle % 1000) == 0 &&
-        pollUniformAlState(kStatePollTimeoutUs) == AlBroadcast::kMixed &&
-        bus_operational_flag_ != nullptr &&
-        bus_operational_flag_->exchange(false, std::memory_order_acq_rel))
-      {
-        say("! 15 台不再同时处于运行，已锁住使能");
+      // 连续两次广播都不是 15 台同时运行，才锁住使能。一次读失败不算掉线。
+      if (steady_cycle > 0 && (steady_cycle % 1000) == 0) {
+        const AlBroadcast poll = pollUniformAlState(kStatePollTimeoutUs);
+        if (poll == AlBroadcast::kMixed) {
+          if (++mixed_polls >= 2 && bus_operational_flag_ != nullptr &&
+            bus_operational_flag_->exchange(false, std::memory_order_acq_rel))
+          {
+            say("! 15 台不再同时处于运行，已锁住使能");
+          }
+        } else {
+          mixed_polls = 0;
+        }
       }
       if (wkc != expected_wkc_) {
         ++wkc_bad_frames;
