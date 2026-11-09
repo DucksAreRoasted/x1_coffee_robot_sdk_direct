@@ -40,3 +40,22 @@ bash environment/scripts/start_upper_moveit.sh
 | `1` / `2` | 选择左臂或右臂 |
 | `w` `s` `a` `d` `q` `e` | 末端沿固定坐标系平移 5 mm |
 | `Esc` | 退出，并关闭这次打开的 RViz |
+
+## 下位机诊断 GUI
+
+零差官方 [eRob_SOEM_GUI](https://github.com/ZeroErrControl/eRob_SOEM_GUI) 的源码位于 `tools/eRob_SOEM_GUI`，独立于日常 ROS 控制栈，不随 `colcon` 编译或自动启动。源码只在上位机这份 SDK 维护，下位机同步代码后本地编译。
+
+首次在下位机安装依赖并编译（此步骤不连接总线）：
+
+```bash
+sudo apt install build-essential cmake pkg-config qtbase5-dev qt5-qmake
+bash environment/scripts/build_erob_gui.sh
+```
+
+退出 `start_real_hold.sh` 和其他 EtherCAT 主站后，在下位机图形桌面的终端调用：
+
+```bash
+bash environment/scripts/start_erob_gui.sh
+```
+
+在 GUI 中先选择一个诊断电机，再选择关节网口 `enp3s0` 并确认连接。轴号与 SDK 一致：1 为腰部，2–8 为左臂，9–15 为右臂。模式、参数、控制目标和反馈仅针对所选轴，其余轴保持 PRE-OP。连接后锁定选轴，换轴须退出重开，检测到的从站数量不是 15 时停止连接。工具不接入 SDK 的标定和限位，目标仍为上游原始编码器/速度/扭矩单位；现场实机操作须有人在场并备好硬件急停。详见 [诊断工具说明](tools/eRob_SOEM_GUI/README_X1.md)。

@@ -1,0 +1,27 @@
+{
+  "repository": "https://github.com/ZeroErrControl/eRob_SOEM_GUI.git",
+  "commit": "4c400dec7ae5ba67fb6d7ac0996885e3c75e426d",
+  "branch": "main",
+  "imported_on": "2026-11-09",
+  "method": "git clone --depth 1 --filter=blob:none; sparse checkout of build sources and licenses",
+  "omitted": [
+    ".git",
+    ".vscode",
+    "build",
+    "lib (prebuilt binaries)",
+    "doc",
+    "third_party/SOEM/test",
+    "third_party/SOEM/doc",
+    "third_party/qcustomplot/documentation",
+    "third_party/qcustomplot/examples",
+    "third_party/SOEM/osal non-Linux platforms",
+    "third_party/SOEM/oshw non-Linux platforms (including prebuilt WinPcap libraries)"
+  ],
+  "local_changes": [
+    "C++17; out-of-source build and install paths",
+    "single-axis selection for X1 coffee_15_no_slide; immutable selection per connection",
+    "PDO/SDO/DC/AL-state routing restricted to selected axis in nonzero SOEM group",
+    "remove automatic reset/recovery; checked PDO mapping and session cleanup",
+    "fake SOEM and offscreen Qt tests; see README_X1.md"
+  ]
+}

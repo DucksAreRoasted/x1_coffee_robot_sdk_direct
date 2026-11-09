@@ -39,6 +39,8 @@ namespace
 // 零差官方 IgH 示例 eRob_IGH_EtherCAT：周期 1 ms，
 // ecrt_slave_config_dc(..., 0x0300, PERIOD_NS, 0, 0, 0)，偏移为 0。
 // 上次失败的是 1 ms 再加 100 µs 偏移。发帧仍锁在两个 SYNC0 脉冲的中间。
+// 周期收帧最多等 500 µs。EC_TIMEOUTRET 是 2 ms，叠在 1 ms 节拍上会让输出间隔超过看门狗。
+constexpr int kCycleFrameTimeoutUs = 500;
 class DcCycleTimer
 {
 public:
@@ -376,6 +378,8 @@ public:
     say(
       "● 分布时钟 SYNC0 周期 %lld ns，偏移 %d ns",
       static_cast<long long>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+    std::int64_t shortest_watchdog_ns = -1;
+    int watchdog_unknown = 0;
     for (int slave = 1; slave <= count; ++slave) {
       if (!context_.slavelist[slave].hasdc) {
         say("! 轴 %d 不支持分布时钟，过程数据输出可能不会按 SYNC0 生效", slave);
@@ -384,7 +388,12 @@ public:
         &context_, static_cast<std::uint16_t>(slave), TRUE,
         static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
       // 过程数据看门狗短于约 100 ms 时，读一次状态就会让从站报 0x001B 并停在安全操作。
-      widenProcessDataWatchdog(slave);
+      const std::int64_t watchdog_ns = widenProcessDataWatchdog(slave);
+      if (watchdog_ns < 0) {
+        ++watchdog_unknown;
+      } else if (shortest_watchdog_ns < 0 || watchdog_ns < shortest_watchdog_ns) {
+        shortest_watchdog_ns = watchdog_ns;
+      }
       const bool torque = torque_axis_[static_cast<std::size_t>(slave - 1)];
       const int expect_out = torque ? static_cast<int>(sizeof(TorqueOutput)) :
         static_cast<int>(sizeof(ZeroErrOutput));
@@ -413,6 +422,13 @@ public:
         position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
         position_out_[slave]->reserved = 0;
       }
+    }
+    if (watchdog_unknown != 0) {
+      say("! %d 台读不到过程数据看门狗", watchdog_unknown);
+    } else {
+      say(
+        "● 过程数据看门狗最短 %lld ms",
+        static_cast<long long>(shortest_watchdog_ns / 1000000));
     }
 
     // 请求 OP 的全程都发过程数据，避免同步管理器看门狗。
@@ -874,7 +890,11 @@ private:
     // 用墙钟限时，并在外层 15 秒等待结束前留下逐轴失败原因。
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(14);
     for (int cycle = 0; !stopped() && std::chrono::steady_clock::now() < deadline; ++cycle) {
-      const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
+      const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
+      // 先收回上一帧，再广播读状态。过程数据还在网上时插别的帧，回帧会被收丢。
+      if ((cycle % 50) == 0) {
+        pollUniformAlState();
+      }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
       for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
@@ -918,10 +938,6 @@ private:
       if (cycle == 0 || (cycle % 1000) == 0) {
         say("● 等待从站进入运行，已有反馈 %d/15", ready);
       }
-      // 每 20 拍只读一台 AL 状态。一次读完全部 15 台会把帧间隔拉过同步管理器看门狗。
-      if ((cycle % 20) == 0) {
-        refreshOneSlaveState(1 + ((cycle / 20) % static_cast<int>(kCoffeeAxisCount)));
-      }
       if (!safeop_seen && slavesAtLeast(EC_STATE_SAFE_OP)) {
         safeop_seen = true;
         say("● 从站进入安全运行，%d/15 台有反馈", ready);
@@ -942,7 +958,7 @@ private:
       if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL) &&
         detail::completeProcessData(wkc, expected_wkc_))
       {
-        say("✓ 15 台从站逐台确认已进入运行");
+        say("✓ 15 台从站已在同一帧广播里进入运行");
         saw_op = true;
         {
           std::lock_guard<std::mutex> lock(wait_mu_);
@@ -957,7 +973,10 @@ private:
       if (stopped()) {
         return;
       }
-      // 使用分拍采集的状态，超时路径也不批量阻塞周期通信。
+      // 周期已经停发，这时才逐台读 AL 码，用来打印是哪几台没进运行。
+      for (int slave = 1; slave <= context_.slavecount; ++slave) {
+        refreshOneSlaveState(slave);
+      }
       std::ostringstream stream;
       stream << "bus state=0x" << std::hex << context_.slavelist[0].state;
       for (int slave = 1; slave <= context_.slavecount; ++slave) {
@@ -993,7 +1012,15 @@ private:
     int wkc_window_min = expected_wkc_;
     timer.resetStats();
     while (!stopped()) {
-      const int wkc = ecx_receive_processdata(&context_, EC_TIMEOUTRET);
+      const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
+      // 每秒广播一次。进入运行后的第一拍不读，避免刚进运行就被判成掉线。
+      if (steady_cycle > 0 && (steady_cycle % 1000) == 0 &&
+        pollUniformAlState() == AlBroadcast::kMixed &&
+        bus_operational_flag_ != nullptr &&
+        bus_operational_flag_->exchange(false, std::memory_order_acq_rel))
+      {
+        say("! 15 台不再同时处于运行，已锁住使能");
+      }
       if (wkc != expected_wkc_) {
         ++wkc_bad_frames;
       }
@@ -1053,20 +1080,13 @@ private:
       traceCycle(feedback, command, true, wkc, send_rc);
       applyPendingDriveMode();
       applyStuckEnableProbe();
-      // 巡检同样分拍进行，避免诊断阻塞 15 轴的过程数据发送。
-      if ((steady_cycle % 20) == 0) {
-        refreshOneSlaveState(1 + ((steady_cycle / 20 - 1) % static_cast<int>(kCoffeeAxisCount)));
-        if (!slavesAtLeast(EC_STATE_OPERATIONAL) && bus_operational_flag_ != nullptr) {
-          // 掉出 OP 后锁住使能，需重新启动；不自动写状态把故障掩盖掉。
-          bus_operational_flag_->store(false, std::memory_order_release);
-        }
-      }
       timer.wait(context_.DCtime);
     }
   }
 
   // 过程数据看门狗：单位是 (分频器+2)*40 ns。短于 100 ms 就拉长到约 100 ms。0 表示关闭，不动。
-  void widenProcessDataWatchdog(int slave)
+  // 返回拉长后的超时；读不到时返回 -1。
+  std::int64_t widenProcessDataWatchdog(int slave)
   {
     const auto address = context_.slavelist[slave].configadr;
     std::uint16_t divider = 0;
@@ -1079,13 +1099,13 @@ private:
       say(
         "! 轴 %d 读不到过程数据看门狗，分频 %u rc=%d 计数 %u rc=%d",
         slave, divider, rc_div, counts, rc_cnt);
-      return;
+      return -1;
     }
     const std::uint64_t unit_ns = (static_cast<std::uint64_t>(divider) + 2ull) * 40ull;
     const std::uint64_t timeout_ns = unit_ns * counts;
     constexpr std::uint64_t kWantNs = 100000000ull;
     if (timeout_ns >= kWantNs) {
-      return;
+      return static_cast<std::int64_t>(timeout_ns);
     }
     auto widened = static_cast<std::uint16_t>((kWantNs + unit_ns - 1ull) / unit_ns);
     const int rc_write = ecx_FPWR(
@@ -1093,6 +1113,39 @@ private:
     say(
       "● 轴 %d 过程数据看门狗由 %llu ms 改为约 100 ms，0x0420=%u rc=%d",
       slave, static_cast<unsigned long long>(timeout_ns / 1000000ull), widened, rc_write);
+    return static_cast<std::int64_t>(unit_ns * widened);
+  }
+
+  // 一帧广播读 15 台 AL 状态。状态一致才写入缓存。逐台读会把过程数据帧间隔拉过看门狗。
+  enum class AlBroadcast { kNoFrame, kUniform, kMixed };
+
+  AlBroadcast pollUniformAlState()
+  {
+    std::uint16_t raw = 0;
+    const int wkc = ecx_BRD(
+      &context_.port, 0, ECT_REG_ALSTAT, sizeof(raw), &raw, kCycleFrameTimeoutUs);
+    if (wkc < context_.slavecount) {
+      return AlBroadcast::kNoFrame;
+    }
+    const std::uint16_t state = etohs(raw);
+    if ((state & EC_STATE_ERROR) != 0) {
+      return AlBroadcast::kMixed;
+    }
+    const auto bare = static_cast<std::uint16_t>(state & 0x000F);
+    if (bare != EC_STATE_INIT && bare != EC_STATE_PRE_OP &&
+      bare != EC_STATE_SAFE_OP && bare != EC_STATE_OPERATIONAL)
+    {
+      return AlBroadcast::kMixed;
+    }
+    for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
+      last_al_state_[slave] = bare;
+      if (slave <= context_.slavecount) {
+        context_.slavelist[slave].state = bare;
+        context_.slavelist[slave].ALstatuscode = 0;
+      }
+    }
+    context_.slavelist[0].state = bare;
+    return AlBroadcast::kUniform;
   }
 
   // 只读一台的 AL 状态和 AL 码，不自动应答错误或改写状态。
@@ -1911,9 +1964,17 @@ void SoemEthercatTransport::onCycle(
   }
   // eRob_CSP.cpp 的 ecatthread：400 拍 0x0080，200 拍 0x0006，200 拍 0x0007，200 拍 0x000F。
   // 1 ms 一拍。目标位置不跟示例写成 0，避免多圈关节被拉向脉冲 0。
-  if (drives_enabled_ && !servo_waiting &&
+  // 不完整帧不计数。走完 1000 拍后再加一拍，节拍才能结束，后面的运动才进得去。
+  bool frame_complete = true;
+  for (const SlaveFeedback & item : feedback) {
+    if (!item.valid) {
+      frame_complete = false;
+      break;
+    }
+  }
+  if (frame_complete && drives_enabled_ && !servo_waiting &&
     bus_operational_.load(std::memory_order_acquire) &&
-    official_enable_step_ < 1000)
+    official_enable_step_ <= kOfficialEnableEnd)
   {
     ++official_enable_step_;
     if (official_enable_step_ == 1) {
@@ -1921,7 +1982,7 @@ void SoemEthercatTransport::onCycle(
       std::fflush(stderr);
     }
   }
-  if (!drives_enabled_ || official_enable_step_ >= 1000) {
+  if (!drives_enabled_ || official_enable_step_ > kOfficialEnableEnd) {
     samplePath();
   }
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
@@ -1965,7 +2026,9 @@ void SoemEthercatTransport::onCycle(
       continue;
     }
     // 官方接通节拍走完之前，位置轴不按状态字分支，也不关电压重试。
-    if (!torque_axis_[index] && official_enable_step_ > 0 && official_enable_step_ <= 1000) {
+    if (!torque_axis_[index] && official_enable_step_ > 0 &&
+      official_enable_step_ <= kOfficialEnableEnd)
+    {
       out.control_word = officialCspEnableWord(official_enable_step_);
       continue;
     }
