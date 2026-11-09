@@ -390,7 +390,7 @@ public:
     debugf("before ecx_configdc");
     ecx_configdc(&context_);
     say(
-      "● 分布时钟 SYNC0 周期 %lld ns，偏移 %d ns",
+      "● 分布时钟 SYNC0 计划周期 %lld ns，偏移 %d ns，等时钟锁定后再启动",
       static_cast<long long>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
     std::int64_t shortest_watchdog_ns = -1;
     int watchdog_unknown = 0;
@@ -398,9 +398,7 @@ public:
       if (!context_.slavelist[slave].hasdc) {
         say("! 轴 %d 不支持分布时钟，过程数据输出可能不会按 SYNC0 生效", slave);
       }
-      ecx_dcsync0(
-        &context_, static_cast<std::uint16_t>(slave), TRUE,
-        static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+      // SYNC0 要等周期帧把参考时钟发给各从站、0x092C 收进 1 µs 之后再开。
       // 过程数据看门狗短于约 100 ms 时，读一次状态就会让从站报 0x001B 并停在安全操作。
       const std::int64_t watchdog_ns = widenProcessDataWatchdog(slave);
       if (watchdog_ns < 0) {
@@ -455,7 +453,7 @@ public:
     bool saw_op = false;
     bool bringup_failed = false;
     std::string bringup_detail;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(18);
     while (std::chrono::steady_clock::now() < deadline && !stopped()) {
       std::unique_lock<std::mutex> lock(wait_mu_);
       wait_cv_.wait_for(
@@ -472,7 +470,7 @@ public:
       saw_op ? 1 : 0, bringup_failed ? 1 : 0, stopped() ? 1 : 0, bringup_detail.c_str());
     if (stopped() || bringup_failed || !saw_op) {
       const std::string detail = stopped() ? "收到中断，停止等待 OP" :
-        (bringup_detail.empty() ? "15 秒内没有进入 OP" : bringup_detail);
+        (bringup_detail.empty() ? "18 秒内没有进入 OP" : bringup_detail);
       shutdownToInit();
       return Result::fail(CoreError::kEthercatNotReady, detail);
     }
@@ -910,13 +908,20 @@ private:
     } else {
       say("✓ 周期线程内存已锁定");
     }
+    // TwinCAT 在开 SYNC0 前会快速分发约一万次参考时钟。1 ms 节拍太慢，先紧凑发一串。
+    distributeReferenceClock();
     DcCycleTimer timer;
     timer.start();
+    bool sync0_armed = false;
     bool safeop_requested = false;
     bool op_requested = false;
     bool saw_op = false;
     int pre_safeop_cycles = 0;
     int primed_cycles = 0;
+    int dc_cursor = 1;
+    int dc_stable = 0;
+    std::array<std::int32_t, kCoffeeAxisCount + 1> dc_diff{};
+    std::array<bool, kCoffeeAxisCount + 1> dc_seen{};
     std::array<int, kCoffeeAxisCount + 1> watchdog_acks{};
     int op_broadcasts = 0;
     std::int64_t last_dc = 0;
@@ -978,8 +983,12 @@ private:
           position_out_[slave]->reserved = 0;
         }
       }
+      // SOEM 维护者：参考时钟先随周期帧分发，0x092C 小于 1 µs 再开 SYNC0。
+      if (!sync0_armed) {
+        sync0_armed = armSync0WhenClocksLocked(cycle, dc_cursor, dc_diff, dc_seen, dc_stable);
+      }
       // 先按 1 ms 收发 200 拍，再请求安全操作。15 台都有反馈就说明这一步已经完成。
-      if (!safeop_requested && ++pre_safeop_cycles >= 200) {
+      if (sync0_armed && !safeop_requested && ++pre_safeop_cycles >= 200) {
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP));
         context_.slavelist[0].state = EC_STATE_SAFE_OP;
         ecx_BWR(
@@ -1002,7 +1011,7 @@ private:
       }
       if (before_sync && safeop_requested && !op_requested &&
         ready == static_cast<int>(kCoffeeAxisCount) &&
-        ++primed_cycles >= 100)
+        ++primed_cycles >= 1000)
       {
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
         context_.slavelist[0].state = EC_STATE_OPERATIONAL;
@@ -1043,7 +1052,8 @@ private:
       std::ostringstream stream;
       stream << "bus state=0x" << std::hex << context_.slavelist[0].state
              << std::dec << " late_us=" << (timer.maxLateNs() / 1000)
-             << " phase_us=" << (detail::dcPhaseNs(last_dc, DcCycleTimer::kCycleNs) / 1000);
+             << " phase_us=" << (detail::dcPhaseNs(last_dc, DcCycleTimer::kCycleNs) / 1000)
+             << " sync0=" << (sync0_armed ? 1 : 0);
       for (int slave = 1; slave <= context_.slavecount; ++slave) {
         stream << " slave" << std::dec << slave << "=0x" << std::hex
                << context_.slavelist[slave].state << "/0x"
@@ -1185,6 +1195,117 @@ private:
       "● 轴 %d 过程数据看门狗由 %llu ms 改为约 100 ms，0x0420=%u rc=%d",
       slave, static_cast<unsigned long long>(timeout_ns / 1000000ull), widened, rc_write);
     return static_cast<std::int64_t>(unit_ns * widened);
+  }
+
+  // 紧凑发送过程数据，帧尾的参考时钟读会刷新各从站 0x092C。
+  void distributeReferenceClock()
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+    int frames = 0;
+    while (frames < 10000 && std::chrono::steady_clock::now() < deadline && !stopped()) {
+      ecx_send_processdata(&context_);
+      ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
+      ++frames;
+    }
+    const int n = std::min(context_.slavecount, static_cast<int>(kCoffeeAxisCount));
+    int worst = 0;
+    std::ostringstream diffs;
+    for (int slave = 1; slave <= n; ++slave) {
+      std::int32_t raw = 0;
+      const int rc = ecx_FPRD(
+        &context_.port, context_.slavelist[slave].configadr, ECT_REG_DCSYSDIFF,
+        sizeof(raw), &raw, kStatePollTimeoutUs);
+      const std::int32_t diff = rc > 0 ?
+        static_cast<std::int32_t>(etohl(static_cast<std::uint32_t>(raw))) : 0;
+      if (slave > 1) {
+        diffs << ',';
+      }
+      diffs << diff;
+      const int magnitude = diff < 0 ? -diff : diff;
+      if (magnitude > worst) {
+        worst = magnitude;
+      }
+    }
+    say(
+      "● 参考时钟已分发 %d 帧，时钟差最大 %d ns [%s]",
+      frames, worst, diffs.str().c_str());
+  }
+
+  // 周期帧里的参考时钟读会让各从站更新 0x092C。差小于 1 µs 再开 SYNC0。
+  bool armSync0WhenClocksLocked(
+    int cycle, int & cursor,
+    std::array<std::int32_t, kCoffeeAxisCount + 1> & diff,
+    std::array<bool, kCoffeeAxisCount + 1> & seen,
+    int & stable)
+  {
+    if ((cycle % 20) != 0) {
+      return false;
+    }
+    const int n = std::min(context_.slavecount, static_cast<int>(kCoffeeAxisCount));
+    if (n <= 0) {
+      return false;
+    }
+    int slave = cursor;
+    if (slave < 1 || slave > n) {
+      slave = 1;
+    }
+    for (int guard = 0; guard < n && !context_.slavelist[slave].hasdc; ++guard) {
+      slave = slave % n + 1;
+    }
+    if (!context_.slavelist[slave].hasdc) {
+      return false;
+    }
+    std::int32_t raw = 0;
+    const int rc = ecx_FPRD(
+      &context_.port, context_.slavelist[slave].configadr, ECT_REG_DCSYSDIFF,
+      sizeof(raw), &raw, kStatePollTimeoutUs);
+    if (rc > 0) {
+      diff[slave] = static_cast<std::int32_t>(etohl(static_cast<std::uint32_t>(raw)));
+      seen[slave] = true;
+    }
+    cursor = slave % n + 1;
+    int worst = 0;
+    int missing = 0;
+    for (int index = 1; index <= n; ++index) {
+      if (!context_.slavelist[index].hasdc) {
+        continue;
+      }
+      if (!seen[index]) {
+        ++missing;
+        continue;
+      }
+      const int magnitude = diff[index] < 0 ? -diff[index] : diff[index];
+      if (magnitude > worst) {
+        worst = magnitude;
+      }
+    }
+    // 某一台读失败就继续采。2.5 s 仍不齐也启动，避免卡在预操作。
+    if (missing > 0 && cycle < 2500) {
+      return false;
+    }
+    if (missing == 0) {
+      for (int index = 1; index <= n; ++index) {
+        seen[index] = false;
+      }
+      if (worst <= 1000 && cycle >= 800) {
+        ++stable;
+      } else {
+        stable = 0;
+      }
+      if (stable < 2 && cycle < 2500) {
+        return false;
+      }
+    }
+    for (int index = 1; index <= n; ++index) {
+      if (!context_.slavelist[index].hasdc) {
+        continue;
+      }
+      ecx_dcsync0(
+        &context_, static_cast<std::uint16_t>(index), TRUE,
+        static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+    }
+    say("● 从站时钟差最大 %d ns，启动 SYNC0", worst);
+    return true;
   }
 
   // 一帧读回各台状态。0x001B 只应答该台并再次请求运行，不写控制字 0x6040，也不改已经在运行的轴。
