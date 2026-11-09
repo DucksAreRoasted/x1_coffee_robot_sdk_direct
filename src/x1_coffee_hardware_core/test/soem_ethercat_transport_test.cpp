@@ -108,17 +108,19 @@ TEST(EthercatStartup, error_and_unknown_states_cannot_confirm_operational)
   EXPECT_FALSE(alStateReady(0x04, 0x08));
 }
 
-TEST(EthercatStartup, send_phase_is_before_midpoint_sync0)
+TEST(EthercatStartup, send_phase_stays_ahead_of_sync0)
 {
-  using x1_coffee_hardware_core::detail::frameBeforeHalfCycleSync;
-  using x1_coffee_hardware_core::detail::syncToCycleStartErrorNs;
+  using x1_coffee_hardware_core::detail::outputReadyBeforeSync;
+  using x1_coffee_hardware_core::detail::syncLeadErrorNs;
   constexpr std::int64_t cycle = 1000000;
-  EXPECT_EQ(syncToCycleStartErrorNs(1000000, cycle), 0);
-  EXPECT_EQ(syncToCycleStartErrorNs(1500000, cycle), 500000);
-  EXPECT_EQ(syncToCycleStartErrorNs(1900000, cycle), -100000);
-  EXPECT_TRUE(frameBeforeHalfCycleSync(100000, cycle));
-  EXPECT_FALSE(frameBeforeHalfCycleSync(500000, cycle));
-  EXPECT_FALSE(frameBeforeHalfCycleSync(0, cycle));
+  constexpr std::int64_t lead = 500000;
+  EXPECT_EQ(syncLeadErrorNs(500000, cycle, lead), 0);
+  EXPECT_EQ(syncLeadErrorNs(1500000, cycle, lead), 0);
+  EXPECT_EQ(syncLeadErrorNs(1000000, cycle, lead), 500000);
+  EXPECT_TRUE(outputReadyBeforeSync(500000, cycle, lead));
+  EXPECT_TRUE(outputReadyBeforeSync(900000, cycle, lead));
+  EXPECT_FALSE(outputReadyBeforeSync(100000, cycle, lead));
+  EXPECT_FALSE(outputReadyBeforeSync(0, cycle, lead));
 }
 
 TEST(EthercatStartup, partial_or_missing_process_data_is_invalid)

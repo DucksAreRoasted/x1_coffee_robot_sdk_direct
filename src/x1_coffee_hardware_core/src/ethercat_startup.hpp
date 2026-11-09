@@ -44,24 +44,35 @@ inline std::int64_t dcPhaseNs(std::int64_t dc_time, std::int64_t cycle_ns)
   return phase;
 }
 
-// SOEM issue 725 的 ec_sync：把收帧拉到周期起点。正数表示偏晚，靠近周期中点的 SYNC0。
-inline std::int64_t syncToCycleStartErrorNs(std::int64_t dc_time, std::int64_t cycle_ns)
+// 相对“脉冲前 lead”的误差，单位 ns。正数表示这一拍偏晚，靠近或越过了 SYNC0。
+// eRob 的 SYNC0 偏移是 0，脉冲在周期起点。
+inline std::int64_t syncLeadErrorNs(
+  std::int64_t dc_time, std::int64_t cycle_ns, std::int64_t lead_ns)
 {
   const std::int64_t phase = dcPhaseNs(dc_time, cycle_ns);
-  if (phase < 0) {
+  if (phase < 0 || lead_ns <= 0 || lead_ns >= cycle_ns) {
     return 0;
   }
-  if (phase > cycle_ns / 2) {
-    return phase - cycle_ns;
+  std::int64_t delta = phase - (cycle_ns - lead_ns);
+  if (delta > cycle_ns / 2) {
+    delta -= cycle_ns;
+  } else if (delta <= -cycle_ns / 2) {
+    delta += cycle_ns;
   }
-  return phase;
+  return delta;
 }
 
-// SYNC0 在周期中点。收帧落在前 400 µs，发帧才赶在脉冲之前。
-inline bool frameBeforeHalfCycleSync(std::int64_t dc_time, std::int64_t cycle_ns)
+// 收帧落在脉冲前的窗口里，随后发出的输出才会赶在 SYNC0 之前写入从站。
+inline bool outputReadyBeforeSync(
+  std::int64_t dc_time, std::int64_t cycle_ns, std::int64_t lead_ns)
 {
   const std::int64_t phase = dcPhaseNs(dc_time, cycle_ns);
-  return phase >= 0 && phase <= 400000 && cycle_ns > 400000;
+  if (phase < 0 || lead_ns <= 0) {
+    return false;
+  }
+  const std::int64_t earliest = cycle_ns - lead_ns - 150000;
+  const std::int64_t latest = cycle_ns - 80000;
+  return phase >= earliest && phase <= latest;
 }
 
 }  // namespace x1_coffee_hardware_core::detail
