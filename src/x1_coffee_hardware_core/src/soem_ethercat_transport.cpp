@@ -499,6 +499,14 @@ public:
     bus_operational_flag_ = flag;
   }
 
+  void bindCyclicEnableFlag(std::atomic<bool> * flag) override
+  {
+    cyclic_enable_flag_ = flag;
+    if (cyclic_enable_flag_ != nullptr) {
+      cyclic_enable_flag_->store(false, std::memory_order_release);
+    }
+  }
+
   void bindOperationalHook(std::function<void()> hook) override
   {
     operational_hook_ = std::move(hook);
@@ -1001,6 +1009,10 @@ private:
           &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
         op_requested = true;
         op_requested_ = true;
+        if (cyclic_enable_flag_ != nullptr) {
+          // 官方示例在等待进入运行时，过程数据里已经是 0x0080，不是一直发 0x0006。
+          cyclic_enable_flag_->store(true, std::memory_order_release);
+        }
         say("● 已连续发送有效输出，请求 15 台从站进入运行");
       }
       const int send_rc = ecx_send_processdata(&context_);
@@ -1375,6 +1387,7 @@ private:
   std::array<bool, kCoffeeAxisCount> torque_axis_{};
   Cycle on_cycle_;
   std::atomic<bool> * bus_operational_flag_{nullptr};
+  std::atomic<bool> * cyclic_enable_flag_{nullptr};
   std::function<void()> operational_hook_{};
   std::thread thread_;
   std::unique_ptr<detail::EnableTrace> enable_trace_;
@@ -1688,6 +1701,8 @@ Result SoemEthercatTransport::activate()
   }
   debugf("activate begin");
   link_->bindBusOperationalFlag(&bus_operational_);
+  link_->bindCyclicEnableFlag(&cyclic_enable_);
+  cyclic_enable_.store(false, std::memory_order_release);
   link_->bindOperationalHook([this]() {
       // 官方 eRob_CSP 在进入运行后立刻按节拍接通，没有另外的 5 秒等待。
       servo_ready_delay_ms_ = 0;
@@ -2075,8 +2090,10 @@ void SoemEthercatTransport::onCycle(
       break;
     }
   }
+  const bool cyclic_enable = bus_operational_.load(std::memory_order_acquire) ||
+    cyclic_enable_.load(std::memory_order_acquire);
   if (frame_complete && drives_enabled_ && !servo_waiting &&
-    bus_operational_.load(std::memory_order_acquire) &&
+    cyclic_enable &&
     official_enable_step_ <= kOfficialEnableEnd)
   {
     ++official_enable_step_;
@@ -2118,8 +2135,10 @@ void SoemEthercatTransport::onCycle(
       out.control_word = 0x0000;
       continue;
     }
-    // 15 台都进入运行之前，输出只保留关机字和当前位置。使能字要等这一步之后。
-    if (!bus_operational_.load(std::memory_order_acquire)) {
+    // 还没请求运行时只发关机字。请求之后按官方节拍发 0x0080，不等 15 台都进去。
+    if (!bus_operational_.load(std::memory_order_acquire) &&
+      !cyclic_enable_.load(std::memory_order_acquire))
+    {
       out.control_word = 0x0006;
       continue;
     }

@@ -63,6 +63,11 @@ public:
   {
     (void)flag;
   }
+  // 已经广播请求运行、但还没全部进入时置位。过程数据从这时起按官方节拍发控制字。
+  virtual void bindCyclicEnableFlag(std::atomic<bool> * flag)
+  {
+    (void)flag;
+  }
   // 全部进入运行、稳态周期开始之前调用一次。用来起 5 秒伺服准备计时。
   virtual void bindOperationalHook(std::function<void()> hook)
   {
@@ -146,6 +151,8 @@ private:
   bool drives_enabled_{false};
   // 真机在逐台确认运行之前为 false，这段只允许关机字。默认 true，单测替身不改它。
   std::atomic<bool> bus_operational_{true};
+  // 运行请求已经发出、尚未全部进入。真机从这时起在过程数据里发官方控制字。
+  std::atomic<bool> cyclic_enable_{false};
   bool motion_armed_{false};
   bool shutdown_outputs_{false};
   // 周期同步位置的绝对目标。过程数据里的 0x607A 每个周期只向它走近一个速度上限。
