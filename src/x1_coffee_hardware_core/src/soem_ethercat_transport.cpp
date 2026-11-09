@@ -900,6 +900,7 @@ private:
       wait_cv_.notify_all();
       return;
     }
+    op_after_ack_.fill(false);
     say("✓ EtherCAT 周期线程已绑定 CPU 3");
     raiseCycleThreadPriority();
     // 锁住已映射内存，避免上电这一段缺页把 1 ms 拍打断。
@@ -1220,11 +1221,13 @@ private:
           &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
           EC_TIMEOUTRET);
         ++ack_count[slave];
+        // 应答之后才允许再广播运行。之前连续广播 rc=15 也留在 0x04。
+        op_after_ack_[slave] = true;
         say("! 轴 %d 同步管理器看门狗，应答 rc=%d", slave, rc);
-        return true;
+        return false;
       }
-      if (state == EC_STATE_SAFE_OP) {
-        // 单台写运行请求即使返回成功，这台也会留在 0x04。交给调用方再广播一次。
+      if (state == EC_STATE_SAFE_OP && op_after_ack_[slave]) {
+        op_after_ack_[slave] = false;
         still_safe = true;
       }
     }
@@ -1388,6 +1391,7 @@ private:
   Cycle on_cycle_;
   std::atomic<bool> * bus_operational_flag_{nullptr};
   std::atomic<bool> * cyclic_enable_flag_{nullptr};
+  std::array<bool, kCoffeeAxisCount + 1> op_after_ack_{};
   std::function<void()> operational_hook_{};
   std::thread thread_;
   std::unique_ptr<detail::EnableTrace> enable_trace_;
