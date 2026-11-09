@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdarg>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -22,6 +23,7 @@
 #include <pthread.h>
 #include <dlfcn.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <time.h>
 
@@ -888,27 +890,31 @@ private:
     }
     say("✓ EtherCAT 周期线程已绑定 CPU 3");
     raiseCycleThreadPriority();
+    // 锁住已映射内存，避免上电这一段缺页把 1 ms 拍打断。
+    // 用户态关不了网卡中断；中断留在 CPU 0/1，本线程只占隔离的 CPU 3。
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+      say("! 周期线程内存锁定失败：%s", std::strerror(errno));
+    } else {
+      say("✓ 周期线程内存已锁定");
+    }
     DcCycleTimer timer;
     timer.start();
     bool safeop_requested = false;
-    bool safeop_seen = false;
     bool op_requested = false;
     bool saw_op = false;
     int pre_safeop_cycles = 0;
     int primed_cycles = 0;
+    int op_wkc_streak = 0;
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
     ecx_send_processdata(&context_);
     // 用墙钟限时，并在外层 15 秒等待结束前留下逐轴失败原因。
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(14);
     for (int cycle = 0; !stopped() && std::chrono::steady_clock::now() < deadline; ++cycle) {
+      // 上电这一段只做定时、收、填、发。不在拍内广播读状态，避免运行请求被一次读失败挡住。
       timer.wait(last_dc);
       const int wkc = ecx_receive_processdata(&context_, kCycleFrameTimeoutUs);
       last_dc = context_.DCtime;
-      // 先收回上一帧，再广播读状态。过程数据还在网上时插别的帧，回帧会被收丢。
-      if ((cycle % kStatePollCycles) == 0) {
-        pollUniformAlState(kStatePollTimeoutUs);
-      }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
       for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
@@ -947,7 +953,7 @@ private:
           position_out_[slave]->reserved = 0;
         }
       }
-      // 先按 1 ms 收发 200 拍，再请求安全操作。看门狗从这一步才开始计。
+      // 先按 1 ms 收发 200 拍，再请求安全操作。15 台都有反馈就说明这一步已经完成。
       if (!safeop_requested && ++pre_safeop_cycles >= 200) {
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP));
         context_.slavelist[0].state = EC_STATE_SAFE_OP;
@@ -955,24 +961,24 @@ private:
           &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
         safeop_requested = true;
         say("● 周期帧已按 DC 节拍发送，请求进入安全操作");
-      } else if (safeop_requested && !safeop_seen && (cycle % 500) == 0) {
-        // 200 µs 内没写上时再试一次。已经在安全操作或运行的不重复写。
+      } else if (safeop_requested && !op_requested &&
+        ready < static_cast<int>(kCoffeeAxisCount) && (cycle % 1000) == 0)
+      {
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP));
         context_.slavelist[0].state = EC_STATE_SAFE_OP;
         ecx_BWR(
           &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
       }
-      // 收帧还没到脉冲前时不请求运行。
+      // 有反馈且相位在脉冲前，就请求运行。不再等一次可能失败的状态广播。
       const bool before_sync = detail::outputReadyBeforeSync(
         last_dc, DcCycleTimer::kCycleNs, kSendLeadNs);
-      if (!before_sync) {
+      if (!before_sync || ready != static_cast<int>(kCoffeeAxisCount)) {
         primed_cycles = 0;
       }
-      if (before_sync && safeop_seen && !op_requested &&
+      if (before_sync && safeop_requested && !op_requested &&
         ready == static_cast<int>(kCoffeeAxisCount) &&
         ++primed_cycles >= 100)
       {
-        // ecx_writestate 会按 6 ms 重试。这里只发一次广播，避免把过程数据间隔拉长。
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
         context_.slavelist[0].state = EC_STATE_OPERATIONAL;
         ecx_BWR(
@@ -983,24 +989,20 @@ private:
       }
       const int send_rc = ecx_send_processdata(&context_);
       traceCycle(feedback, command, false, wkc, send_rc);
-      if (!safeop_seen && slavesAtLeast(EC_STATE_SAFE_OP)) {
-        safeop_seen = true;
-        say("● 从站进入安全运行，%d/15 台有反馈", ready);
-      }
-      if (ready != static_cast<int>(kCoffeeAxisCount)) {
-        primed_cycles = 0;
-      }
-      if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL) &&
-        detail::completeProcessData(wkc, expected_wkc_))
-      {
-        say("✓ 15 台从站已在同一帧广播里进入运行");
-        saw_op = true;
-        {
-          std::lock_guard<std::mutex> lock(wait_mu_);
-          op_seen_ = true;
+      // 请求运行之后，输出被 15 台同时收下时工作计数才满。连续 20 拍算进入运行。
+      if (op_requested && detail::completeProcessData(wkc, expected_wkc_)) {
+        if (++op_wkc_streak >= 20) {
+          say("✓ 15 台从站已在同一帧里进入运行");
+          saw_op = true;
+          {
+            std::lock_guard<std::mutex> lock(wait_mu_);
+            op_seen_ = true;
+          }
+          wait_cv_.notify_all();
+          break;
         }
-        wait_cv_.notify_all();
-        break;
+      } else if (op_requested) {
+        op_wkc_streak = 0;
       }
     }
     if (stopped() || !saw_op) {
