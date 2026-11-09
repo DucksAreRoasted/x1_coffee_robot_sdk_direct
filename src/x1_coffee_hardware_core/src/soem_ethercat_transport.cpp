@@ -36,11 +36,10 @@ namespace x1_coffee_hardware_core
 namespace
 {
 
-// 零差官方 IgH 示例：SYNC0 周期 1 ms，偏移 0。从站在脉冲上升沿取走输出。
-// 收帧锁在脉冲前 500 µs，发帧就赶在 SYNC0 之前。锁在脉冲上时，数据是脉冲之后才到的。
+// SOEM issue 725：周期 1 ms，ec_dcsync0 的偏移是周期的一半。主站用 ec_sync 对齐周期起点，
+// 从站在周期中点取输出，帧比脉冲早大约 500 µs。
 // 周期收帧最多等 200 µs。更长的等待会把这一帧推过脉冲，从站报 0x001B。
 constexpr int kCycleFrameTimeoutUs = 200;
-constexpr std::int64_t kSendLeadNs = 500000;
 // 状态广播单独限时，并且几拍才读一次，不跟每拍的过程数据抢网口。
 constexpr int kStatePollTimeoutUs = 200;
 constexpr int kStatePollCycles = 200;
@@ -48,7 +47,8 @@ class DcCycleTimer
 {
 public:
   static constexpr std::int64_t kCycleNs = 1000000;
-  static constexpr std::int32_t kSync0ShiftNs = 0;
+  // issue 725：ec_dcsync0(..., ctime * 1000, ctime * 500)，偏移为半个周期。
+  static constexpr std::int32_t kSync0ShiftNs = static_cast<std::int32_t>(kCycleNs / 2);
 
   void start()
   {
@@ -63,8 +63,8 @@ public:
   {
     std::int64_t offset = 0;
     if (dc_time > 0) {
-      // 正误差表示收帧偏晚。把它拉回脉冲前 kSendLeadNs，而不是拉到脉冲上。
-      const std::int64_t delta = detail::syncLeadErrorNs(dc_time, kCycleNs, kSendLeadNs);
+      // 正误差表示收帧偏晚。拉回周期起点，使发帧落在中点 SYNC0 之前。
+      const std::int64_t delta = detail::syncToCycleStartErrorNs(dc_time, kCycleNs);
       if (delta > 0) {
         ++integral_;
       } else if (delta < 0) {
@@ -376,17 +376,13 @@ public:
     for (int slave = 1; slave <= count; ++slave) {
       context_.slavelist[slave].PO2SOconfig = &SoemLink::pdoThunk;
     }
-    debugf("before ecx_config_map_group");
-    ecx_config_map_group(&context_, iomap_, 0);
-    active_link_ = nullptr;
-    say("✓ 15 轴过程数据已映射");
+    // SOEM issue 725：先 configdc、再把 SYNC0 放在周期中点，然后才映射 PDO。
+    // 映射会调用 PO2SOconfig。周期收发开始之后才请求安全操作。
     debugf("before ecx_configdc");
     ecx_configdc(&context_);
     say(
       "● 分布时钟 SYNC0 周期 %lld ns，偏移 %d ns",
       static_cast<long long>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
-    std::int64_t shortest_watchdog_ns = -1;
-    int watchdog_unknown = 0;
     for (int slave = 1; slave <= count; ++slave) {
       if (!context_.slavelist[slave].hasdc) {
         say("! 轴 %d 不支持分布时钟，过程数据输出可能不会按 SYNC0 生效", slave);
@@ -394,6 +390,14 @@ public:
       ecx_dcsync0(
         &context_, static_cast<std::uint16_t>(slave), TRUE,
         static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+    }
+    debugf("before ecx_config_map_group");
+    ecx_config_map_group(&context_, iomap_, 0);
+    active_link_ = nullptr;
+    say("✓ 15 轴过程数据已映射");
+    std::int64_t shortest_watchdog_ns = -1;
+    int watchdog_unknown = 0;
+    for (int slave = 1; slave <= count; ++slave) {
       // 过程数据看门狗短于约 100 ms 时，读一次状态就会让从站报 0x001B 并停在安全操作。
       const std::int64_t watchdog_ns = widenProcessDataWatchdog(slave);
       if (watchdog_ns < 0) {
@@ -438,11 +442,9 @@ public:
         static_cast<long long>(shortest_watchdog_ns / 1000000));
     }
 
-    // 请求 OP 的全程都发过程数据，避免同步管理器看门狗。
+    // 725：周期线程先按 DC 节拍收发，线程里再请求安全操作，然后才请求运行。
     startEnableTrace();
-    debugf("request SAFE_OP and start cycle thread");
-    context_.slavelist[0].state = EC_STATE_SAFE_OP;
-    ecx_writestate(&context_, 0);
+    debugf("start cycle thread before SAFE_OP");
     thread_done_.store(false);
     thread_ = std::thread([this]() {cycleLoop();});
     debugf("cycle thread started");
@@ -890,9 +892,11 @@ private:
     raiseCycleThreadPriority();
     DcCycleTimer timer;
     timer.start();
+    bool safeop_requested = false;
     bool safeop_seen = false;
     bool op_requested = false;
     bool saw_op = false;
+    int pre_safeop_cycles = 0;
     int primed_cycles = 0;
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
@@ -945,9 +949,18 @@ private:
           position_out_[slave]->reserved = 0;
         }
       }
-      // 相位还在脉冲之后时不请求运行，避免从站在切换中报 0x001B。
-      const bool before_sync = detail::outputReadyBeforeSync(
-        last_dc, DcCycleTimer::kCycleNs, kSendLeadNs);
+      // 725：先按 DC 节拍发满 200 拍，再请求安全操作。此前从站还在预操作，看门狗未武装。
+      if (!safeop_requested && ++pre_safeop_cycles >= 200) {
+        std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP));
+        context_.slavelist[0].state = EC_STATE_SAFE_OP;
+        ecx_BWR(
+          &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
+        safeop_requested = true;
+        say("● 周期帧已按 DC 节拍发送，请求进入安全操作");
+      }
+      // 收帧还没到周期前段时不请求运行。中点 SYNC0 之前输出必须已经在从站里。
+      const bool before_sync = detail::frameBeforeHalfCycleSync(
+        last_dc, DcCycleTimer::kCycleNs);
       if (!before_sync) {
         primed_cycles = 0;
       }
