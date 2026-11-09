@@ -33,6 +33,10 @@
 #include "enable_trace.hpp"
 #include "ethercat_startup.hpp"
 
+// SOEM 把 15 台 AL 状态放进同一帧读回，头文件没有声明。
+extern "C" int ecx_FPRD_multi(
+  ecx_contextt * context, int n, uint16 * configlst, ec_alstatust * slstatlst, int timeout);
+
 namespace x1_coffee_hardware_core
 {
 namespace
@@ -904,6 +908,8 @@ private:
     bool saw_op = false;
     int pre_safeop_cycles = 0;
     int primed_cycles = 0;
+    std::array<int, kCoffeeAxisCount + 1> watchdog_acks{};
+    std::array<bool, kCoffeeAxisCount + 1> watchdog_reop{};
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
     ecx_send_processdata(&context_);
@@ -916,7 +922,7 @@ private:
       last_dc = context_.DCtime;
       // 只在已经请求运行之后确认状态。上一帧已收回，这时读不会把过程数据回帧冲掉。
       if (op_requested && (cycle % 50) == 0) {
-        pollUniformAlState(kStatePollTimeoutUs);
+        recoverWatchdogSlaves(watchdog_acks, watchdog_reop);
       }
       std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
       int ready = 0;
@@ -1159,6 +1165,51 @@ private:
       "● 轴 %d 过程数据看门狗由 %llu ms 改为约 100 ms，0x0420=%u rc=%d",
       slave, static_cast<unsigned long long>(timeout_ns / 1000000ull), widened, rc_write);
     return static_cast<std::int64_t>(unit_ns * widened);
+  }
+
+  // 一帧读回各台状态。0x001B 只应答该台并再次请求运行，不写控制字 0x6040，也不改已经在运行的轴。
+  void recoverWatchdogSlaves(
+    std::array<int, kCoffeeAxisCount + 1> & ack_count,
+    std::array<bool, kCoffeeAxisCount + 1> & op_again)
+  {
+    constexpr int kMaxAck = 3;
+    const int n = std::min(context_.slavecount, static_cast<int>(kCoffeeAxisCount));
+    if (n <= 0) {
+      return;
+    }
+    std::array<std::uint16_t, kCoffeeAxisCount> address{};
+    std::array<ec_alstatust, kCoffeeAxisCount> status{};
+    for (int index = 0; index < n; ++index) {
+      address[static_cast<std::size_t>(index)] = context_.slavelist[index + 1].configadr;
+    }
+    if (ecx_FPRD_multi(
+          &context_, n, address.data(), status.data(), kStatePollTimeoutUs) < 0)
+    {
+      return;
+    }
+    for (int index = 0; index < n; ++index) {
+      const int slave = index + 1;
+      const auto state = etohs(status[static_cast<std::size_t>(index)].alstatus);
+      const auto code = etohs(status[static_cast<std::size_t>(index)].alstatuscode);
+      last_al_state_[slave] = state;
+      context_.slavelist[slave].state = state;
+      context_.slavelist[slave].ALstatuscode = code;
+      if ((state & EC_STATE_ERROR) != 0 && code == 0x001B && ack_count[slave] < kMaxAck) {
+        const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_SAFE_OP | EC_STATE_ACK));
+        ecx_FPWRw(
+          &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
+          kStatePollTimeoutUs);
+        ++ack_count[slave];
+        op_again[slave] = false;
+        say("! 轴 %d 同步管理器看门狗，应答后再次请求运行", slave);
+      } else if (state == EC_STATE_SAFE_OP && ack_count[slave] > 0 && !op_again[slave]) {
+        const auto command = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
+        ecx_FPWRw(
+          &context_.port, address[static_cast<std::size_t>(index)], ECT_REG_ALCTL, command,
+          kStatePollTimeoutUs);
+        op_again[slave] = true;
+      }
+    }
   }
 
   // 一帧广播读 15 台 AL 状态。状态一致才写入缓存。逐台读会把过程数据帧间隔拉过看门狗。
