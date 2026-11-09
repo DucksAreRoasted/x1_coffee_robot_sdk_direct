@@ -456,6 +456,56 @@ TEST(SoemEthercatTransport, start_motion_requires_enabled_drives)
   EXPECT_EQ(motion.error, CoreError::kWriteFailed);
 }
 
+class RetryLink final : public EthercatLink
+{
+public:
+  int opens{0};
+  int failures_left{0};
+  std::string failure{"从站未全部进入运行"};
+
+  x1_coffee_hardware_core::Result openAndReachOp(
+    const std::string &,
+    const std::array<bool, kCoffeeAxisCount> &,
+    const Cycle &) override
+  {
+    ++opens;
+    if (failures_left > 0) {
+      --failures_left;
+      return x1_coffee_hardware_core::Result::fail(CoreError::kEthercatNotReady, failure);
+    }
+    return x1_coffee_hardware_core::Result::ok();
+  }
+
+  x1_coffee_hardware_core::Result shutdownToInit() override
+  {
+    return x1_coffee_hardware_core::Result::ok();
+  }
+};
+
+TEST(SoemEthercatTransport, retries_safeop_bringup_until_operational)
+{
+  auto link = std::make_unique<RetryLink>();
+  link->failures_left = 2;
+  RetryLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(false)));
+  ASSERT_TRUE(transport.activate());
+  EXPECT_EQ(raw->opens, 3);
+}
+
+TEST(SoemEthercatTransport, does_not_retry_a_process_data_size_mismatch)
+{
+  auto link = std::make_unique<RetryLink>();
+  link->failures_left = 3;
+  link->failure = "从站 2 的过程数据长度不符";
+  RetryLink * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(false)));
+  const auto opened = transport.activate();
+  EXPECT_FALSE(opened);
+  EXPECT_EQ(raw->opens, 1);
+}
+
 TEST(SoemEthercatTransport, deactivate_returns_the_link_to_init)
 {
   auto link = std::make_unique<FakeLink>();

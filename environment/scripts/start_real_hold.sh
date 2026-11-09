@@ -25,6 +25,7 @@ fi
 
 echo "● 网口 ${IFNAME}：上电并保持当前位置，不回零。"
 echo "● ROS 域 ${ROS_DOMAIN_ID}。15 轴进入运行后按官方节拍接通，约 1 秒，不要退出。"
+echo "● 有轴没进运行时会断开总线再上电，直到 15 轴使能。Ctrl-C 停止。"
 echo "✓ 看到「15 轴都已使能」后，再在上位机启动。"
 echo "● 下面输入登录密码。输入时不显示，输完按回车。"
 # 清掉几分钟内的 sudo 记录，否则不会再问密码。
@@ -44,5 +45,6 @@ exec sudo -E env -u SHELLOPTS bash --noprofile --norc -c "
     use_fake_hardware:=false \
     motion_enabled:=false \
     drives_enabled:=true \
-    ethercat_ifname:='${IFNAME}'
+    ethercat_ifname:='${IFNAME}' \
+    check_timeout_sec:=600
 "

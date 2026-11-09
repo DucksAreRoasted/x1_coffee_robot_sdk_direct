@@ -356,6 +356,9 @@ public:
       std::getenv("RMW_IMPLEMENTATION") != nullptr ? std::getenv("RMW_IMPLEMENTATION") : "unset",
       std::getenv("ROS_DOMAIN_ID") != nullptr ? std::getenv("ROS_DOMAIN_ID") : "unset");
     say("● 打开网口 %s", ifname.c_str());
+    if (g_force_stop.load()) {
+      return Result::fail(CoreError::kEthercatNotReady, "收到中断，停止等待 OP");
+    }
     g_force_stop.store(false);
     shutdown_started_.store(false);
     debugf("before ecx_init");
@@ -471,7 +474,10 @@ public:
     if (stopped() || bringup_failed || !saw_op) {
       const std::string detail = stopped() ? "收到中断，停止等待 OP" :
         (bringup_detail.empty() ? "18 秒内没有进入 OP" : bringup_detail);
-      shutdownToInit();
+      const Result closed = shutdownToInit();
+      if (!closed) {
+        return closed;
+      }
       return Result::fail(CoreError::kEthercatNotReady, detail);
     }
     return Result::ok();
@@ -544,7 +550,8 @@ public:
         thread_.detach();
         opened_ = false;
         g_wake_socket.store(-1);
-        return Result::ok();
+        return Result::fail(
+          CoreError::kTransportUnavailable, "周期线程未退出，不能再次打开网口");
       }
     }
     if (!opened_) {
@@ -1836,6 +1843,25 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
   return Result::ok();
 }
 
+// 随机有轴停在安全操作时，整段回到 INIT 再开。映射错误和中断不重试。
+bool bringupShouldRetry(const Result & opened)
+{
+  if (g_force_stop.load()) {
+    return false;
+  }
+  const std::string & detail = opened.detail;
+  if (detail.find("收到中断") != std::string::npos ||
+    detail.find("过程数据长度不符") != std::string::npos ||
+    detail.find("周期线程未退出") != std::string::npos)
+  {
+    return false;
+  }
+  return detail.find("从站未全部进入运行") != std::string::npos ||
+    detail.find("没有进入 OP") != std::string::npos ||
+    detail.find("从站数不是 15") != std::string::npos ||
+    detail.find("ecx_init 失败") != std::string::npos;
+}
+
 Result SoemEthercatTransport::activate()
 {
   if (!configured_ || link_ == nullptr) {
@@ -1844,33 +1870,57 @@ Result SoemEthercatTransport::activate()
   debugf("activate begin");
   link_->bindBusOperationalFlag(&bus_operational_);
   link_->bindCyclicEnableFlag(&cyclic_enable_);
-  cyclic_enable_.store(false, std::memory_order_release);
   link_->bindOperationalHook([this]() {
       // 官方 eRob_CSP 在进入运行后立刻按节拍接通，没有另外的 5 秒等待。
       servo_ready_delay_ms_ = 0;
       servo_wait_logged_sec_ = -1;
       servo_wait_done_logged_ = true;
     });
-  shutdown_outputs_ = false;
-  motion_armed_ = false;
-  path_active_ = false;
-  path_.clear();
-  path_cycle_ = 0;
-  enable_ready_cycles_.fill(0);
-  enable_backoff_cycles_.fill(0);
-  enable_retries_.fill(0);
-  enable_phase_.fill(0);
-  enable_probe_sent_.fill(false);
-  held_.fill(false);
-  const Result opened = link_->openAndReachOp(
-    ifname_, torque_axis_,
-    [this](const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback,
-      std::array<SlaveCommand, kCoffeeAxisCount> * command) {
-      onCycle(feedback, command);
-    });
-  if (!opened) {
+  for (int attempt = 1;; ++attempt) {
+    if (g_force_stop.load()) {
+      return Result::fail(CoreError::kEthercatNotReady, "收到中断，停止重试上电");
+    }
+    // 上一轮可能已经锁过位置、走过接通节拍。重开前清掉，避免沿用失败那次的状态。
+    cyclic_enable_.store(false, std::memory_order_release);
+    shutdown_outputs_ = false;
+    motion_armed_ = false;
+    path_active_ = false;
+    path_.clear();
+    path_cycle_ = 0;
+    official_enable_step_ = 0;
+    enable_debug_cycles_ = 0;
+    enabled_mask_seen_ = 0;
+    all_enabled_logged_ = false;
+    servo_ready_delay_ms_ = 0;
+    servo_wait_logged_sec_ = -1;
+    servo_wait_done_logged_ = false;
+    enable_ready_cycles_.fill(0);
+    enable_backoff_cycles_.fill(0);
+    enable_retries_.fill(0);
+    enable_phase_.fill(0);
+    enable_probe_sent_.fill(false);
+    held_.fill(false);
+    held_pulse_.fill(0);
+    goal_pulse_.fill(0);
+    has_previous_position_ = false;
+    const Result opened = link_->openAndReachOp(
+      ifname_, torque_axis_,
+      [this](const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback,
+        std::array<SlaveCommand, kCoffeeAxisCount> * command) {
+        onCycle(feedback, command);
+      });
+    if (opened) {
+      if (attempt > 1) {
+        say("✓ 第 %d 次上电进入运行", attempt);
+      }
+      break;
+    }
     debugf("activate failed: %s", opened.detail.c_str());
-    return opened;
+    if (!bringupShouldRetry(opened)) {
+      return opened;
+    }
+    say("! 第 %d 次上电没有全部进入运行，断开后重试", attempt);
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
   }
   debugf("activate reached OP");
   link_->copyRatedTorqueNm(&rated_axis_nm_);
