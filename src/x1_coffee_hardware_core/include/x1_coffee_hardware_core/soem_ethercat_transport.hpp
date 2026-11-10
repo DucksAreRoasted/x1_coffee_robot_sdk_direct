@@ -15,6 +15,7 @@
 #include "x1_coffee_hardware_core/urdf_gravity.hpp"
 #include "x1_coffee_hardware_core/current_gravity_file.hpp"
 #include "x1_coffee_hardware_core/tcp_speed_guard.hpp"
+#include "x1_coffee_hardware_core/mit_handfeel.hpp"
 
 namespace x1_coffee_hardware_core
 {
@@ -111,6 +112,7 @@ public:
   Result currentGravityStatus();
   Result currentGravityHoldStatus();
   Result enterMitHold();
+  Result enterMitHandfeel();
   Result exitMitHold();
   // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。
   Result enterZeroGravity();
@@ -225,6 +227,8 @@ private:
   double mit_kd_{24.0};
   double mit_limit_{1000.0};
   // URDF 静重力，单位 N·m。换成 0x6071 时只除以该轴读到的 0x6076。
+  MitHandfeel handfeel_;
+  bool current_handfeel_{false};
   TcpSpeedGuard tcp_speed_guard_;
   bool tcp_speed_fault_{false};
   UrdfGravity gravity_;

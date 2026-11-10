@@ -2729,6 +2729,41 @@ Result SoemEthercatTransport::loadCurrentGravity(const std::string & path)
   return Result{CoreError::kOk, detail};
 }
 
+Result SoemEthercatTransport::enterMitHandfeel()
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ || tcp_speed_fault_ ||
+    !bus_operational_.load() || official_enable_step_ <= kOfficialEnableEnd ||
+    mit_active_ || path_active_ || motion_armed_ || gravity_calib_running_.load() ||
+    std::chrono::steady_clock::now()-last_cycle_at_ > std::chrono::milliseconds(100))
+  {return Result::fail(CoreError::kWriteFailed, "MIT手感试验需要新鲜CSP保持且无其他运动占用");}
+  for (int side=0;side<2;++side) {
+    if (tcp_speed_guard_.linear[side]>.02 || tcp_speed_guard_.angular[side]>.1) {
+      return Result::fail(CoreError::kWriteFailed, "末端仍在移动，拒绝进入MIT手感");
+    }
+  }
+  CurrentGravity::Pose q{};CurrentGravity::Arm bias{};
+  for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
+    if (torque_axis_[i] || !latest_[i].valid || (latest_[i].status_word & 0x006F)!=0x0027 ||
+      latest_[i].mode_of_operation!=kZeroErrCyclicPositionMode)
+    {return Result::fail(CoreError::kReadFailed, "进入前需要15轴有效CSP使能反馈");}
+    q[i]=pulseToPosition(i,latest_[i].actual_position);
+    if (i>=8) {bias[i-8]=latest_[i].actual_current;}
+  }
+  if (!handfeel_.configure(q,bias)) {
+    return Result::fail(CoreError::kWriteFailed, "保持电流超过手感试验预算，拒绝进入");
+  }
+  current_previous_[1]=bias;current_previous_q_=q;current_velocity_.fill(0.0);
+  current_mode_wait_=0;current_modes_confirmed_=false;current_fault_=0;
+  current_handfeel_=true;current_active_=true;mit_active_=true;mit_zero_g_=false;
+  mit_mask_=0x7F00;motion_armed_=false;
+  for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
+    held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
+  }
+  link_->requestDriveMode(kZeroErrCyclicTorqueMode,mit_mask_);
+  return Result{CoreError::kOk, "已请求右臂MIT阻抗手感，等待实际模式；进入姿态弹簧回正，范围±0.15rad，腰和左臂CSP"};
+}
+
 Result SoemEthercatTransport::enterCurrentGravity()
 {
   std::lock_guard<std::mutex> lock(sample_mu_);
@@ -2764,6 +2799,7 @@ Result SoemEthercatTransport::enterCurrentGravity()
     }
     mask |= side == 1 ? 0x7F00 : 0x00FE;
   }
+  current_handfeel_ = false;
   current_previous_q_ = q;
   current_velocity_.fill(0.0);
   current_mode_wait_ = 0;
@@ -2787,7 +2823,7 @@ Result SoemEthercatTransport::currentGravityStatus()
   if (current_fault_ != 0) {
     // 状态服务提供退出类别；不能把模型保护退出统称为模式丢失。
     const char * reason = current_fault_ == 1 ? "反馈/使能失效或收到关断请求" :
-      current_fault_ == 2 ? "超出辨识姿态邻域、电流预算或模型计算无效" :
+      current_fault_ == 2 ? (current_handfeel_ ? "超出MIT试验姿态范围或电流预算" : "超出辨识姿态邻域、电流预算或模型计算无效") :
       current_fault_ == 3 ? "实际模式丢失或切换确认超时" : "未知故障";
     return Result::fail(CoreError::kWriteFailed,
       std::string("电流补偿保护退出：") + reason + "，故障码=" + std::to_string(current_fault_));
@@ -2838,7 +2874,9 @@ void SoemEthercatTransport::updateCurrentGravity(
   if (!modes_ready && (current_modes_confirmed_ || ++current_mode_wait_ > 1000)) {fault = 3;}
   if (modes_ready) {current_mode_wait_ = 0; current_modes_confirmed_ = true;}
   auto next = current_previous_;
-  for (int side = 0; side < 2 && fault == 0; ++side) {
+  if (current_handfeel_ && fault == 0 &&
+    !handfeel_.command(q,current_velocity_,current_previous_[1],kEthercatCycleSec,&next[1])) {fault=2;}
+  for (int side = 0; side < 2 && fault == 0 && !current_handfeel_; ++side) {
     if (current_bundle_.present[side] && !current_models_[side].command(gravity_, q,
       current_velocity_, current_previous_[side], kEthercatCycleSec, &next[side])) {fault = 2;}
   }
@@ -3018,6 +3056,7 @@ Result SoemEthercatTransport::exitMitHold()
     return Result::fail(CoreError::kWriteFailed, "已请求关断，不能把退出请求当成位置保持成功");
   }
   current_active_ = false;
+  current_handfeel_ = false;
   mit_active_ = false;
   mit_zero_g_ = false;
   mit_track_qdes_ = false;

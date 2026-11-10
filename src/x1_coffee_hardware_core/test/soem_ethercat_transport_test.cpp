@@ -941,3 +941,24 @@ TEST(SoemEthercatTransport, tcp_overspeed_shuts_down_all_axes_in_csp_and_cst)
     for (const auto & command : link->last) {EXPECT_EQ(command.control_word, 0x0006);}
   }
 }
+
+TEST(SoemEthercatTransport, handfeel_needs_no_candidate_and_confirms_actual_mode_and_exit)
+{
+  auto owned=std::make_unique<FakeLink>();auto * link=owned.get();
+  link->status=0x1237;link->actual_current=20;
+  SoemEthercatTransport transport(std::move(owned));
+  auto config=parameters(true);config["gravity_urdf"]=X1_GRAVITY_URDF;
+  ASSERT_TRUE(transport.configure(config));ASSERT_TRUE(transport.activate());
+  for (int i=0;i<1002;++i) {link->replay();}
+  ASSERT_TRUE(transport.enterMitHandfeel());EXPECT_FALSE(transport.currentGravityStatus());
+  EXPECT_FALSE(transport.enterMitHandfeel());
+  link->replay();link->replay();ASSERT_TRUE(transport.currentGravityStatus());
+  for (int i=0;i<15;++i) {
+    EXPECT_EQ(link->last[i].mode_of_operation,i>=8 ? 0x0A : 0x08);
+    EXPECT_EQ(link->last[i].target_torque,i>=8 ? 20 : 0);
+  }
+  ASSERT_TRUE(transport.exitMitHold());EXPECT_FALSE(transport.currentGravityHoldStatus());
+  link->replay();link->replay();EXPECT_TRUE(transport.currentGravityHoldStatus());
+  for (const auto & cmd:link->last) {EXPECT_EQ(cmd.mode_of_operation,0x08);}
+  link->actual_current=300;link->replay();EXPECT_FALSE(transport.enterMitHandfeel());
+}

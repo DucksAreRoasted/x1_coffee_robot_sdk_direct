@@ -806,13 +806,13 @@ HELP = """
 class KeyboardMenu:
     """菜单数字只解释为菜单动作，不穿透到选臂和点动。"""
     ITEMS = {
-        "gravity": {"1": "f", "2": "x", "3": "c", "4": "t"},
+        "gravity": {"1": "f", "2": "x", "3": "c", "4": "t", "5": "H"},
         "home": {"1": "h", "2": "0"},
         "advanced": {"1": "m", "2": "v", "3": "g", "4": "r", "5": "p", "6": "z"},
     }
     TEXT = {
         "main": HELP,
-        "gravity": "重力菜单：1 路径预览  2 自动采样并辨识  3 加载参数  4 进入补偿\n2/4需连续选择两次；n取消/退出，Esc返回。选臂在主界面1/2完成。",
+        "gravity": "重力菜单：1 路径预览  2 自动采样并辨识  3 加载参数  4 进入补偿  5 右臂MIT手感\n2/4/5需连续选择两次；n取消/退出，Esc返回。选臂在主界面1/2完成。",
         "home": "回零菜单：1 机械零位  2 URDF零位\n需连续选择两次；Esc返回。会移动15轴。",
         "advanced": "高级调试（旧流程，未经新PDO实机验证）：\n1 旧MIT  2 旧零重力  3 旧重力标定  4 重置旧参数  5 保存旧参数  6 零力矩\n需连续选择两次；n退出模式，Esc返回。",
     }
@@ -872,6 +872,7 @@ def run_teleop() -> int:
             self.current_check_at = 0.0
             self.current_enter_future = None
             self.current_query_detail = ""
+            self.handfeel_confirm_until = 0.0
             self.quiet_since = None
             self.joint_received_at = None
             self.joint_stamp_ns = 0
@@ -909,7 +910,7 @@ def run_teleop() -> int:
             self.zero_gravity_client = self.create_client(Trigger, "/x1/zero_gravity")
             self.current_clients = {
                 name: self.create_client(Trigger, "/x1/current_gravity_" + name)
-                for name in ("load", "enter", "status", "exit", "hold_status")
+                for name in ("load", "enter", "status", "exit", "hold_status", "handfeel")
             }
             self.trajectory_clients = {}
 
@@ -1065,12 +1066,12 @@ def run_teleop() -> int:
                 self.current_query_detail = f"{name} 服务不可用"
                 return False
             future = client.call_async(Trigger.Request())
-            if name == "enter":
+            if name in ("enter", "handfeel"):
                 self.current_enter_future = future
             rclpy.spin_until_future_complete(self, future, timeout_sec=0.3)
             try:
                 reply = future.result() if future.done() else None
-                if not future.done() and name != "enter":
+                if not future.done() and name not in ("enter", "handfeel"):
                     client.remove_pending_request(future)
                 self.current_query_detail = reply.message if reply is not None else f"{name} 服务响应超时"
                 return reply is not None and reply.success
@@ -1291,7 +1292,7 @@ def run_teleop() -> int:
             # 换菜单、其他选择及帮助都会撤销上一次二次确认，不能跨菜单复用。
             for action, field in {
                 "h": "home_confirm_until", "0": "urdf_confirm_until",
-                "x": "sample_confirm_until", "t": "current_confirm_until",
+                "x": "sample_confirm_until", "t": "current_confirm_until", "H": "handfeel_confirm_until",
                 "z": "zero_confirm_until", "m": "mit_confirm_until",
                 "v": "zero_g_confirm_until", "g": "gravity_confirm_until",
                 "r": "gravity_reset_until", "p": "gravity_save_until",
@@ -1332,20 +1333,29 @@ def run_teleop() -> int:
             if key == "c":
                 node.call_trigger(node.current_clients["load"], "/x1/current_gravity_load")
                 continue
-            if key == "t":
+            if key in ("t", "H"):
+                if key == "H" and node.side != "right":
+                    print("\n本版MIT手感仅支持右臂，请返回主界面按2选择右臂。")
+                    continue
                 if node.mit_hold or node.zero_torque or pending_since is not None:
                     print("\n请先退出旧模式并等待位置运动结束。")
                     continue
                 now = time.monotonic()
-                if now > node.current_confirm_until:
-                    node.current_confirm_until = now + 3.0
-                    print("\n再次选择 4：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
+                field = "handfeel_confirm_until" if key == "H" else "current_confirm_until"
+                if now > getattr(node, field):
+                    setattr(node, field, now + 3.0)
+                    print("\n再次选择 5：右臂MIT弹簧阻尼手感试验，松手有回正趋势；每轴范围±8.6°，腰和左臂保持。请准备急停。" if key == "H" else
+                          "\n再次选择 4：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
                     continue
-                node.current_confirm_until = 0.0
+                setattr(node, field, 0.0)
                 node.motion_requested = False
-                if node.current_session.enter(lambda: node.current_query("enter"),
+                service = "handfeel" if key == "H" else "enter"
+                if key == "H" and not node.current_confirm(holding=True):
+                    print("\n未确认全轴CSP和测量停稳，未发送MIT进入请求。")
+                    continue
+                if node.current_session.enter(lambda: node.current_query(service),
                                               lambda: node.current_confirm()):
-                    print("\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
+                    print("\n右臂MIT手感实际模式已确认：弹簧回正+阻尼+进入时保持电流，按n退出。" if key == "H" else "\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
                 else:
                     print(f"\n进入未确认：{node.current_query_detail}。正在请求退出并验证保持。")
                     node.leave_current()

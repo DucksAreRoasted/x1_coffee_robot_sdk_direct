@@ -224,9 +224,9 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->message = result.detail;
     });
   // 独立入口，不复用旧的Nm标定/保存服务；加载不会启用扭矩控制。
-  const std::array<std::string, 5> current_services{
+  const std::array<std::string, 6> current_services{
     "/x1/current_gravity_load", "/x1/current_gravity_enter", "/x1/current_gravity_status",
-    "/x1/current_gravity_exit", "/x1/current_gravity_hold_status"};
+    "/x1/current_gravity_exit", "/x1/current_gravity_hold_status", "/x1/current_gravity_handfeel"};
   for (std::size_t i = 0; i < current_services.size(); ++i) {
     current_gravity_services_[i] = motion_node_->create_service<std_srvs::srv::Trigger>(
       current_services[i], [this, i](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -249,7 +249,8 @@ bool X1CoffeeSystemHardware::startMotionService()
         } else if (i == 1) {result = direct->enterCurrentGravity();
         } else if (i == 2) {result = direct->currentGravityStatus();
         } else if (i == 3) {result = direct->exitMitHold();
-        } else {result = direct->currentGravityHoldStatus();}
+        } else if (i == 4) {result = direct->currentGravityHoldStatus();
+        } else {result = direct->enterMitHandfeel();}
         response->success = static_cast<bool>(result);
         response->message = result.detail;
       });

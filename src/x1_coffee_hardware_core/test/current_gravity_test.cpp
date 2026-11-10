@@ -118,3 +118,28 @@ TEST(CurrentGravity, fileLoaderRejectsTruncationTrailingDataAndDuplicateArm)
   }
   unlink(path);
 }
+
+#include "x1_coffee_hardware_core/mit_handfeel.hpp"
+TEST(MitHandfeel, startsAtMeasuredCurrentAndRestoresPositionWithDamping)
+{
+  using x1_coffee_hardware_core::MitHandfeel;
+  MitHandfeel model;MitHandfeel::Pose q{},dq{};MitHandfeel::Arm bias{},out{};
+  bias.fill(20);ASSERT_TRUE(model.configure(q,bias));
+  ASSERT_TRUE(model.command(q,dq,bias,.001,&out));EXPECT_EQ(out,bias);
+  q[13]=.01;
+  ASSERT_TRUE(model.command(q,dq,bias,.01,&out));EXPECT_LT(out[5],bias[5]);
+  q[13]=0;dq[13]=.02;
+  ASSERT_TRUE(model.command(q,dq,bias,.01,&out));EXPECT_LT(out[5],bias[5]);
+  q[13]=.151;EXPECT_FALSE(model.command(q,dq,bias,.001,&out));
+  q[13]=0;q[0]=.021;EXPECT_FALSE(model.command(q,dq,bias,.001,&out));
+  q.fill(0);bias[5]=251;EXPECT_FALSE(model.configure(q,bias));
+}
+TEST(MitHandfeel, rejectsNonfiniteAndBudgetExhaustion)
+{
+  using x1_coffee_hardware_core::MitHandfeel;
+  MitHandfeel model;MitHandfeel::Pose q{},dq{};MitHandfeel::Arm bias{},out{};
+  bias.fill(0);ASSERT_TRUE(model.configure(q,bias));
+  dq[13]=100;EXPECT_FALSE(model.command(q,dq,bias,.001,&out));
+  dq.fill(0);q[10]=std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(model.command(q,dq,bias,.001,&out));
+}

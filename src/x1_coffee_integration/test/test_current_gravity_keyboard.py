@@ -158,5 +158,14 @@ class SamplingProgressTest(unittest.TestCase):
         self.assertFalse(reader.closed)
         self.assertIsNotNone(node.sample_process)
 
+class HandfeelMenuTest(unittest.TestCase):
+    def test_handfeel_is_menu_only_and_blocked_during_active_session(self):
+        menu=NS['KeyboardMenu']()
+        self.assertIsNone(menu.route('H'))
+        self.assertIsNone(menu.route('g'))
+        self.assertEqual(menu.route('5'),'H')
+        self.assertIsNone(menu.route('5',busy=True))
+        self.assertEqual(menu.route('n',busy=True),'n')
+
 if __name__ == '__main__':
     unittest.main()

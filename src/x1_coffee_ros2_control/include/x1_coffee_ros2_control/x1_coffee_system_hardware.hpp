@@ -64,7 +64,7 @@ private:
   rclcpp::Node::SharedPtr motion_node_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_motion_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_pvt_service_;
-  std::array<rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr, 5> current_gravity_services_;
+  std::array<rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr, 6> current_gravity_services_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_tracked_service_;
   std::atomic<bool> snap_commands_to_measurement_{false};
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_torque_service_;
