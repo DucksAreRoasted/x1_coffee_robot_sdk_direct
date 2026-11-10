@@ -30,7 +30,7 @@ def main():
     from rclpy.qos import qos_profile_sensor_data
     from x1_coffee_interfaces.msg import MotorStateArray
     rclpy.init();node=rclpy.create_node('x1_identification_recorder')
-    columns=['conversion_sha256','time_ns','side','pose_id','approach','valid']+[k+j for k in ['q_','dq_','tau_'] for j in JOINTS]
+    columns=['conversion_sha256','time_ns','side','pose_id','approach','valid']+[k+j for k in ['q_','dq_','tau_','raw_torque_permille_','raw_current_permille_'] for j in JOINTS]
     count=0;last_stamp=None
     conversion_hash=hashlib.sha256(a.conversion.read_bytes()).hexdigest()
     with a.output.open('x',newline='') as f:
@@ -46,6 +46,9 @@ def main():
                 s=states[j];c=cfg['joints'][j]
                 if not (s.position_valid and s.velocity_valid and (j not in selected or s.torque_valid) and s.enabled and s.position_unit=='rad') or s.alarm or s.follow_error or s.emergency_input_active: row['valid']=0
                 row['q_'+j]=s.position;row['dq_'+j]=s.velocity
+                # 保留原始驱动反馈，输出侧力矩换算核实后可离线重算。
+                row['raw_torque_permille_'+j]=s.torque_permille
+                row['raw_current_permille_'+j]=s.current_permille
                 # 未辨识手臂只提供几何姿态，扭矩填零且不参与该臂拟合。
                 row['tau_'+j]=s.torque_permille*.001*c['rated_nm']*c['sign'] if j in selected else 0.
             w.writerow(row);count+=1

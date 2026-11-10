@@ -19,7 +19,8 @@ def paired(rows, side, speed_max=.02, pose_tolerance=.02):
         dq = np.array([float(row['dq_'+j]) for j in JOINTS])
         tau = np.array([float(row['tau_'+j]) for j in JOINTS])
         if not np.isfinite(np.r_[q,dq,tau]).all(): raise ValueError('样本含 NaN/Inf')
-        if row['valid'] != '1' or np.max(np.abs(dq)) > speed_max: continue
+        # 自动采样内存记录使用整数，CSV 读回使用字符串，两种入口保持一致。
+        if str(row['valid']) != '1' or np.max(np.abs(dq)) > speed_max: continue
         direction = int(row['approach'])
         if direction not in (-1,1): raise ValueError('approach 必须为 ±1')
         groups.setdefault(row['pose_id'], {}).setdefault(direction, []).append((q,tau,float(row['time_ns'])))

@@ -46,6 +46,20 @@ class IdentificationTest(unittest.TestCase):
         y,k,p,_=self.model.regressor(q,'l')
         np.testing.assert_allclose((y@p+k)[[1,2,5]],[17.11,-9.78,4.31],atol=.08)
 
+    def test_pairing_accepts_in_memory_integer_valid(self):
+        rows=[]
+        for pose in range(15):
+            for direction in (-1,1):
+                for sample in range(20):
+                    row=dict(side='r',pose_id=str(pose),approach=direction,
+                             conversion_sha256='fixture',valid=1,time_ns=sample*30000000)
+                    for j in JOINTS:
+                        row['q_'+j]=0.;row['dq_'+j]=0.;row['tau_'+j]=0.
+                    rows.append(row)
+        self.assertEqual(len(paired(rows,'r')),15)
+        for row in rows: row['valid']=0
+        with self.assertRaises(ValueError):paired(rows,'r')
+
     def test_pairing_cancels_opposite_static_friction_and_rejects_duplicates(self):
         rows=[]
         for pose in range(15):

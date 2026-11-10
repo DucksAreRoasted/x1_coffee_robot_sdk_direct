@@ -1,0 +1,82 @@
+{
+  "schema": "x1_motor_inventory_v1",
+  "source": "用户于 2026-11-10 提供的型号清单",
+  "manual_reference": "manual/eRob最新手册/eRob机器人关节模组用户手册_V3.45.pdf，第25.2节，印刷页104–106",
+  "runtime_applied": false,
+  "note": "型号和名义减速比不改变输出编码器角度换算。结构版本、电机参数及驱动器额定电流仍待核实；左臂型号不推定。",
+  "joints": {
+    "Joint_Body": {
+      "model": "erob110h120i-bs-18en",
+      "nominal_gear_ratio": 120,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r1": {
+      "model": "erob90h100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r2": {
+      "model": "erob90h100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r3": {
+      "model": "erob80h50i-bs-18en",
+      "nominal_gear_ratio": 50,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r4": {
+      "model": "erob80h50i-bs-18en",
+      "nominal_gear_ratio": 50,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r5": {
+      "model": "erob70h100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r6": {
+      "model": "erob70f100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    },
+    "Joint_r7": {
+      "model": "erob70f100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": null,
+      "output_torque_conversion_verified": false
+    }
+  },
+  "unconfirmed_joints": [
+    "Joint_l1",
+    "Joint_l2",
+    "Joint_l3",
+    "Joint_l4",
+    "Joint_l5",
+    "Joint_l6",
+    "Joint_l7"
+  ]
+}

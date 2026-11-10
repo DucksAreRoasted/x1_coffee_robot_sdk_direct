@@ -862,6 +862,39 @@ private:
     if (rc <= 0 || display != mode) {
       std::fprintf(stderr, "slave=%u sdo 0x6061=0x%02x rc=%d\n", slave, display, rc);
     }
+    // 仅显式开启时在启动配置阶段读取诊断对象，不在周期线程中插入邮箱访问。
+    // 版本字符串只作原始证据，不能当成电机结构版本或据此自动选择力矩常数。
+    const char * motor_diagnostics = std::getenv("X1_MOTOR_DIAGNOSTICS");
+    if (motor_diagnostics != nullptr && std::string(motor_diagnostics) == "1") {
+      std::uint32_t rated_ma = 0;
+      int current_size = sizeof(rated_ma);
+      const int current_rc = ecx_SDOread(
+        context, slave, 0x6075, 0, FALSE, &current_size, &rated_ma, EC_TIMEOUTRXM);
+      // 通信手册 8.2.95：UDINT、mA；不接受截断值或零值作为有效额定电流。
+      if (current_rc > 0 && current_size == sizeof(rated_ma) && rated_ma > 0) {
+        say("[电机诊断] axis=%u index=0x6075 rated_current_ma=%u", slave, rated_ma);
+      } else {
+        say("[电机诊断] axis=%u index=0x6075 unavailable rc=%d size=%d",
+          slave, current_rc, current_size);
+      }
+      for (const std::uint16_t object : {0x1008, 0x1009, 0x100A}) {
+        char value[128]{};
+        int size = sizeof(value) - 1;
+        const int read_rc = ecx_SDOread(
+          context, slave, object, 0, FALSE, &size, value, EC_TIMEOUTRXM);
+        if (read_rc > 0 && size > 0 && size < static_cast<int>(sizeof(value))) {
+          // 清除换行及控制字符，避免设备字符串伪造多行日志。
+          for (int i = 0; i < size; ++i) {
+            if (static_cast<unsigned char>(value[i]) < 32) {value[i] = ' ';}
+          }
+          value[size] = '\0';
+          say("[电机诊断] axis=%u index=0x%04X value=%s", slave, object, value);
+        } else {
+          say("[电机诊断] axis=%u index=0x%04X unavailable rc=%d size=%d",
+            slave, object, read_rc, size);
+        }
+      }
+    }
     std::uint32_t rated_mnm = 0;
     int rated_size = static_cast<int>(sizeof(rated_mnm));
     rc = ecx_SDOread(

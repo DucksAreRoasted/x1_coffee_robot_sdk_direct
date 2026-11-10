@@ -165,6 +165,9 @@ def main():
                 row=dict(conversion_sha256=cfg_hash,time_ns=last_stamp,side='r',pose_id=step['pose_id'],approach=step['approach'],valid=1)
                 for j in JOINTS:
                     s=latest[j];row['q_'+j]=s.position;row['dq_'+j]=s.velocity
+                    # 同时保留未经 Nm 换算的电流和扭矩反馈。
+                    row['raw_torque_permille_'+j]=s.torque_permille
+                    row['raw_current_permille_'+j]=s.current_permille
                     row['tau_'+j]=s.torque_permille*.001*cfg['joints'][j]['rated_nm']*cfg['joints'][j]['sign'] if j in selected else 0.
                 batch.append(row)
             if len(batch)<20:raise RuntimeError('采样数量不足')
