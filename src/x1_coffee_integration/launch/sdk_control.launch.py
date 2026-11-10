@@ -84,7 +84,8 @@ def _launch_setup(context):
             arguments=["--ros-args", "--log-level", "warn"]),
         Node(
             package="controller_manager", executable="ros2_control_node",
-            output="screen", parameters=[robot_description, controller_file],
+            # SOEM 直接写 stderr；同时落盘，保留自动重试前的逐轴失败原因和时间戳。
+            output="both", parameters=[robot_description, controller_file],
             arguments=[
                 "--ros-args", "--log-level", "warn",
                 "--log-level", "X1CoffeeSystemHardware:=info",

@@ -1900,6 +1900,9 @@ Result SoemEthercatTransport::activate()
     if (g_force_stop.load()) {
       return Result::fail(CoreError::kEthercatNotReady, "收到中断，停止重试上电");
     }
+    // 用墙钟记录整轮初始化耗时，避免将有效周期数误当成实际等待时间。
+    const auto attempt_started = std::chrono::steady_clock::now();
+    say("● 第 %d 次总线初始化开始", attempt);
     // 上一轮可能已经锁过位置、走过接通节拍。重开前清掉，避免沿用失败那次的状态。
     cyclic_enable_.store(false, std::memory_order_release);
     shutdown_outputs_ = false;
@@ -1929,15 +1932,17 @@ Result SoemEthercatTransport::activate()
         std::array<SlaveCommand, kCoffeeAxisCount> * command) {
         onCycle(feedback, command);
       });
+    const auto attempt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - attempt_started).count();
     if (opened) {
-      if (attempt > 1) {
-        say("✓ 第 %d 次上电进入运行", attempt);
-      }
+      say("✓ 第 %d 次总线初始化进入 OP，耗时 %lld ms", attempt,
+        static_cast<long long>(attempt_ms));
       break;
     }
     debugf("activate failed: %s", opened.detail.c_str());
     // 重试成功也不能丢掉前面失败的原因，不经过 512 字节调试缓冲区截断。
-    std::fprintf(stderr, "! 第 %d 次上电失败：%s\n", attempt, opened.detail.c_str());
+    std::fprintf(stderr, "! 第 %d 次上电失败，耗时 %lld ms：%s\n", attempt,
+      static_cast<long long>(attempt_ms), opened.detail.c_str());
     if (!bringupShouldRetry(opened)) {
       return opened;
     }
@@ -2318,7 +2323,7 @@ void SoemEthercatTransport::onCycle(
   {
     ++official_enable_step_;
     if (official_enable_step_ == 1) {
-      say("● 按官方示例接通：400 ms 复位，200 ms 关机，200 ms 接通，200 ms 使能");
+      say("● 开始官方接通序列：400/200/200/200 个有效周期（标称 1 ms/周期）；尚不代表全部进入 OP 或使能完成");
       std::fflush(stderr);
     }
   }
