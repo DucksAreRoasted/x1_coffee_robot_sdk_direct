@@ -27,7 +27,7 @@ public:
         for (int k = 0; k < 9; ++k) {trace += poses[side].rotation[k]*previous_[side].rotation[k];}
         linear[side] = std::sqrt(square)/dt;
         angular[side] = std::acos(std::clamp((trace-1.0)*0.5, -1.0, 1.0))/dt;
-        if (linear[side] > 0.20 || angular[side] > 0.5) {fault_ = true;}
+        if (linear[side] > 0.50 || angular[side] > 0.5) {fault_ = true;}
       }
     }
     initialized_ = true; previous_ = poses; previous_time_ = now;

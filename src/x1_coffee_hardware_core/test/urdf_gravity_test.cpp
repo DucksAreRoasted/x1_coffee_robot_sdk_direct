@@ -149,10 +149,10 @@ TEST(TcpSpeedGuard, eitherArmTranslationTripsAndLatches)
     std::array<UrdfGravity::TcpPose, 2> poses{};
     for (auto & p : poses) {p.rotation = {1,0,0,0,1,0,0,0,1};}
     ASSERT_TRUE(guard.update(poses, 1.0));
-    // 0.18m/s已放行；随后0.21m/s仍应关断并锁存。
-    poses[side].position[0] = 0.0018;
+    // 0.49m/s已放行；随后0.51m/s仍应关断并锁存。
+    poses[side].position[0] = 0.0049;
     EXPECT_TRUE(guard.update(poses, 1.01));
-    poses[side].position[0] += 0.0021;
+    poses[side].position[0] += 0.0051;
     EXPECT_FALSE(guard.update(poses, 1.02));
     EXPECT_FALSE(guard.update(poses, 1.03));
   }
