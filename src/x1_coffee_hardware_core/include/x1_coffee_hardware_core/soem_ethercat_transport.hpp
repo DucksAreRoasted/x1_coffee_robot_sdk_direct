@@ -95,6 +95,7 @@ public:
   Result read(HardwareSnapshot * snapshot) override;
   Result write(const PositionCommandFrame & command) override;
   Result stop(bool emergency) override;
+  Result cancelPvtHold();  // 取消位置轨迹并锁存当前有效反馈，不切换扭矩模式。
   Result startMotion() override;
   Result enterZeroTorque() override;
   Result requestZeroTorque() override;

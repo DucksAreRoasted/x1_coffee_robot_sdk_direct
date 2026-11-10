@@ -2151,6 +2151,29 @@ Result SoemEthercatTransport::write(const PositionCommandFrame & command)
   return Result{CoreError::kOk, "已更新周期同步位置目标"};
 }
 
+Result SoemEthercatTransport::cancelPvtHold()
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  path_active_ = false;
+  path_.clear();
+  motion_armed_ = false;
+  if (!active_ || mit_active_) {
+    return Result::fail(CoreError::kWriteFailed, "未激活或处于 MIT，不能位置保持");
+  }
+  for (const auto & feedback : latest_) {
+    if (!feedback.valid || (feedback.status_word & 0x006F) != 0x0027) {
+      // 无有效使能反馈时不可猜测当前位置，沿用故障关断策略。
+      shutdown_outputs_ = true;
+      return Result::fail(CoreError::kWriteFailed, "反馈无效，已撤销轨迹并请求关断");
+    }
+  }
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    held_pulse_[i] = latest_[i].actual_position;
+    goal_pulse_[i] = held_pulse_[i];
+  }
+  return Result{CoreError::kOk, "PVT 已取消，锁存当前反馈位置"};
+}
+
 Result SoemEthercatTransport::stop(bool)
 {
   std::lock_guard<std::mutex> lock(sample_mu_);

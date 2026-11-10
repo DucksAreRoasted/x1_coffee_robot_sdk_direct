@@ -771,3 +771,27 @@ TEST(EnableTrace, reports_each_slave_al_transition_without_repeating_cached_samp
     EXPECT_EQ(frame.al_changed, 1u << i);
   }
 }
+
+TEST(SoemEthercatTransport, cancel_pvt_holds_feedback_and_invalid_feedback_fails_closed)
+{
+  auto link = std::make_unique<FakeLink>();
+  auto * raw = link.get();
+  SoemEthercatTransport transport(std::move(link));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  raw->status = 0x0027;
+  for (int i = 0; i < 1100; ++i) {raw->replay();}
+  std::vector<std::array<double, kCoffeeAxisCount>> waypoints(1);
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {waypoints[0][i] = i + 1.2;}
+  ASSERT_TRUE(transport.requestMovePvt(waypoints, 1.0));
+  for (int i = 0; i < 100; ++i) {raw->replay();}
+  ASSERT_TRUE(transport.cancelPvtHold());
+  for (int i = 0; i < 1500; ++i) {raw->replay();}
+  raw->replay();
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    EXPECT_EQ(raw->last[i].target_position, 1000 * static_cast<int>(i + 1));
+  }
+  raw->feedback_valid = false;
+  raw->replay();
+  EXPECT_FALSE(transport.cancelPvtHold());
+}

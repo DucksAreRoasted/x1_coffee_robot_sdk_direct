@@ -208,6 +208,21 @@ bool X1CoffeeSystemHardware::startMotionService()
   motion_node_ = std::make_shared<rclcpp::Node>(
     "x1_coffee_system_hardware", rclcpp::NodeOptions().use_global_arguments(false));
   debugf("startMotionService node created");
+  // 自动采样的异常出口，服务成功仍须由调用方检查实际运动是否停止。
+  cancel_pvt_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/cancel_pvt",
+    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      auto * direct = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(transport_.get());
+      if (direct == nullptr) {
+        response->success = false;
+        response->message = "没有直连 PVT 后端";
+        return;
+      }
+      const auto result = direct->cancelPvtHold();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
   start_motion_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/start_motion",
     [this](

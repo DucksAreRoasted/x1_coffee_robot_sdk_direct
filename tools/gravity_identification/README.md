@@ -103,3 +103,32 @@ python3 tools/gravity_identification/identify.py /tmp/x1_right_samples/*.csv \
 ```
 
 0.3 N·m 是首次离线筛查阈值，不是每个关节已确认的实机安全误差。此命令只生成报告，不加载参数。现场运动仍需操作者在场、确认空间及硬件急停可用；记录器本身不发送目标或切换模式。
+
+## 自动右臂采样
+
+`auto_sample.py` 通过现有 `/x1/pvt_move` 下发单目标段，在当前姿态周围 ±0.15 rad 生成 15 组目标，并以 ±0.04 rad 的双向接近点得到 30 段静态记录。腰和左臂保持起始角度。起点应位于关节限位内部、具有足够空间，接近点也要满足 0.05 rad 限位余量；越界不会自动裁剪。局部姿态未必有足够辨识激励，最终报告仍可能拒绝候选。
+
+先在下位机按日常命令启动保持，上位机启动 MoveIt，使 `/check_state_validity` 可用。不要同时发键盘或 MoveIt 执行命令。默认只读取状态、检查计划，不发送 PVT：
+
+```bash
+cd ~/x1_coffee_robot_sdk
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+source environment/scripts/ros_lan_env.sh
+python3 tools/gravity_identification/auto_sample.py \
+  --urdf src/arm_describle/urdf/HRB3Q-LC.urdf --output-dir /tmp/x1_auto_preview
+```
+
+检查输出的 `plan.json`，确认工作空间、手臂附近无人员或未建模障碍，且现场操作者与硬件急停就绪后，使用另一个全新目录执行（会重新从当前姿态生成并检查计划）：
+
+```bash
+python3 tools/gravity_identification/auto_sample.py \
+  --urdf src/arm_describle/urdf/HRB3Q-LC.urdf --output-dir /tmp/x1_auto_run \
+  --execute --operator-ready
+```
+
+每段路径按 ≤0.01 rad 的关节步距调用 MoveIt 状态有效性服务；这是离散检查，不是连续碰撞保证。上位机必须提供准确的机器人及环境场景。通过服务只说明模型中有效，不能替代现场检查。
+
+每段收到 PVT 接受反馈后，还要测量全轴位置误差 <0.01 rad、速度 <0.02 rad/s 并连续稳定 1 秒，才采样 3 秒。反馈过期、报警、腰/左臂漂移、其他 PVT 命令、到位超时、采样移动或 Ctrl-C 会终止本次任务，并请求 `/x1/cancel_pvt` 撤销轨迹、保持有效反馈位置；反馈无效时后端请求关断。脚本继续检查是否实际停稳，失败须使用硬件急停。不得将该接口当成安全认证急停。
+
+成功后保留在最后姿态，不自动回起点。输出每次静态采样 CSV、计划和 `candidate.json`；候选不自动加载。失败保留已完成的文件和 `failure.txt`，不自动续跑或重新使能。全流程约数分钟到十几分钟，取决于姿态段长度和碰撞检查延迟。

@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""右臂自动双向采样；默认只检查路径和保存计划，--execute 才发送 PVT。"""
+import argparse,csv,json,time,hashlib
+from pathlib import Path
+import numpy as np
+from model import Model,JOINTS
+from record import validated_joints
+from identify import paired,fit
+
+
+def make_plan(seed,model):
+    seed=np.asarray(seed,float)
+    if seed.shape!=(15,) or not np.isfinite(seed).all(): raise ValueError('初始角无效')
+    rng=np.random.default_rng(17); plan=[]
+    # 从现场起点周围生成有限幅度的多关节姿态，不复用旧自动标定的固定大范围姿态。
+    for i in range(15):
+        q=seed.copy();q[8:]+=rng.uniform(-.15,.15,7)
+        for direction in (1,-1):
+            approach=q.copy();approach[8:]-=direction*.04
+            plan.extend([dict(pose_id=f'pose{i+1:02}',approach=direction,record=False,q=approach.tolist()),
+                         dict(pose_id=f'pose{i+1:02}',approach=direction,record=True,q=q.tolist())])
+    for step in plan:
+        for j,name in enumerate(JOINTS):
+            limit=model.by_name[name].find('limit')
+            if limit is None: raise ValueError('缺少 URDF 限位 '+name)
+            if not float(limit.get('lower'))+.05 <= step['q'][j] <= float(limit.get('upper'))-.05:
+                raise ValueError('采样姿态接近或超过限位 '+name)
+    return plan
+
+
+def path_points(start,end):
+    # 单目标 PVT 在关节空间的直线段上插值；以不超过 0.01 rad 的步距检查整段。
+    count=max(1,int(np.ceil(np.max(np.abs(np.array(end)-start))/.01)))
+    return [np.array(start)+(np.array(end)-start)*i/count for i in range(count+1)]
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--urdf',type=Path,required=True)
+    p.add_argument('--conversion',type=Path,default=Path(__file__).with_name('right_arm_session.json'))
+    p.add_argument('--output-dir',type=Path,required=True)
+    p.add_argument('--execute',action='store_true');p.add_argument('--operator-ready',action='store_true')
+    a=p.parse_args()
+    if a.execute and not a.operator_ready:p.error('执行需要现场操作者确认 --operator-ready')
+    cfg=json.loads(a.conversion.read_text());selected=validated_joints(cfg,'r')
+    model=Model(a.urdf,[1,1]);a.output_dir.mkdir(parents=True,exist_ok=False)
+    import rclpy
+    from rclpy.qos import qos_profile_sensor_data
+    from std_msgs.msg import Float64MultiArray,String
+    from std_srvs.srv import Trigger
+    from moveit_msgs.srv import GetStateValidity
+    from x1_coffee_interfaces.msg import MotorStateArray
+    rclpy.init();node=rclpy.create_node('x1_right_auto_sample')
+    latest={};results={};fault=[];sent_sequences=set();last_stamp=0;received=0.;motion_started=False
+    def receive(msg):
+        nonlocal last_stamp,received,latest
+        stamp=msg.header.stamp.sec*10**9+msg.header.stamp.nanosec
+        states={s.joint_name:s for s in msg.states}
+        if len(msg.states)!=15 or set(states)!=set(JOINTS):fault.append('反馈轴集合错误');return
+        if stamp<=last_stamp:return
+        last_stamp=stamp;received=time.monotonic();latest=states
+        for j,s in states.items():
+            if not (s.enabled and s.position_valid and s.velocity_valid and s.position_unit=='rad' and (j not in selected or s.torque_valid)) or s.alarm or s.follow_error or s.emergency_input_active or not np.isfinite([s.position,s.velocity]).all():fault.append('无效反馈/故障 '+j)
+    def result(msg):
+        parts=msg.data.split(' ',2)
+        try: results[int(float(parts[0]))]=parts[1]
+        except (ValueError,IndexError):fault.append('PVT 结果格式错误')
+    node.create_subscription(MotorStateArray,'/x1/motor_states',receive,qos_profile_sensor_data)
+    node.create_subscription(String,'/x1/pvt_result',result,10)
+    pub=node.create_publisher(Float64MultiArray,'/x1/pvt_move',10)
+    def competing_command(msg):
+        if motion_started and (not msg.data or not np.isfinite(msg.data[0]) or msg.data[0] not in sent_sequences):
+            fault.append('检测到其他 PVT 命令，取消采样')
+    node.create_subscription(Float64MultiArray,'/x1/pvt_move',competing_command,10)
+    validity=node.create_client(GetStateValidity,'/check_state_validity')
+    stop=node.create_client(Trigger,'/x1/cancel_pvt')
+    def spin():rclpy.spin_once(node,timeout_sec=.02)
+    def health():
+        if fault:raise RuntimeError(fault[0])
+        if time.monotonic()-received>.5:raise RuntimeError('电机反馈过期')
+    def call(client,request):
+        future=client.call_async(request);end=time.monotonic()+3
+        while not future.done() and time.monotonic()<end:spin();health()
+        if not future.done():raise RuntimeError('服务超时 '+client.srv_name)
+        return future.result()
+    def qnow():return np.array([latest[j].position for j in JOINTS])
+    def collision(start,end):
+        for q in path_points(start,end):
+            req=GetStateValidity.Request();req.robot_state.joint_state.name=JOINTS
+            req.robot_state.joint_state.position=q.tolist()
+            if not call(validity,req).valid:raise RuntimeError('MoveIt 路径采样点无效/碰撞')
+    try:
+        end=time.monotonic()+10
+        while not latest and time.monotonic()<end:spin()
+        health();seed=qnow();plan=make_plan(seed,model)
+        if not validity.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
+        previous=seed
+        for step in plan:collision(previous,step['q']);previous=np.array(step['q'])
+        (a.output_dir/'plan.json').write_text(json.dumps({'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
+        print('计划已检查并保存：',a.output_dir/'plan.json',flush=True)
+        if not a.execute:return
+        if not stop.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 PVT 取消服务')
+        if pub.get_subscription_count()<2:
+            raise RuntimeError('没有硬件 PVT 订阅者')
+        if np.max(np.abs(qnow()-seed))>.02:raise RuntimeError('检查期间机器人位置改变')
+        rows=[];cfg_hash=hashlib.sha256(a.conversion.read_bytes()).hexdigest();seq=int(time.time()*1000)
+        for step in plan:
+            health();target=np.array(step['q'])
+            if np.max(np.abs(qnow()[:8]-seed[:8]))>.02:raise RuntimeError('腰或左臂漂移')
+            collision(qnow(),target)
+            duration=max(1.,float(np.max(np.abs(target-qnow())))*2/.08)
+            seq+=1;msg=Float64MultiArray();msg.data=[float(seq),duration,1.,*target.tolist()]
+            sent_sequences.add(seq);motion_started=True;pub.publish(msg)
+            deadline=time.monotonic()+duration+8;stable_since=None
+            while time.monotonic()<deadline:
+                spin();health()
+                if np.max(np.abs(qnow()[:8]-seed[:8]))>.02:raise RuntimeError('腰或左臂漂移')
+                if seq in results and results[seq]!='ok':raise RuntimeError('PVT 拒绝 '+str(results[seq]))
+                stable=np.max(np.abs(qnow()-target))<.01 and max(abs(s.velocity) for s in latest.values())<.02
+                stable_since=(stable_since or time.monotonic()) if stable else None
+                if seq in results and stable_since and time.monotonic()-stable_since>=1:break
+            else:raise RuntimeError('未测量确认到位/停稳')
+            if not step['record']:continue
+            batch=[];end=time.monotonic()+3;stamp_seen=0
+            while time.monotonic()<end:
+                spin();health()
+                if np.max(np.abs(qnow()-target))>.01 or max(abs(s.velocity) for s in latest.values())>.02:raise RuntimeError('采样期间移动')
+                if last_stamp==stamp_seen:continue
+                stamp_seen=last_stamp
+                row=dict(conversion_sha256=cfg_hash,time_ns=last_stamp,side='r',pose_id=step['pose_id'],approach=step['approach'],valid=1)
+                for j in JOINTS:
+                    s=latest[j];row['q_'+j]=s.position;row['dq_'+j]=s.velocity
+                    row['tau_'+j]=s.torque_permille*.001*cfg['joints'][j]['rated_nm']*cfg['joints'][j]['sign'] if j in selected else 0.
+                batch.append(row)
+            if len(batch)<20:raise RuntimeError('采样数量不足')
+            with (a.output_dir/f"{step['pose_id']}_{step['approach']}.csv").open('x',newline='') as f:
+                writer=csv.DictWriter(f,fieldnames=list(batch[0]));writer.writeheader();writer.writerows(batch)
+            rows.extend(batch);print('完成',step['pose_id'],step['approach'],flush=True)
+        report=fit(model,paired(rows,'r'),'r',.3)
+        report.update(conversion_sha256=cfg_hash,urdf_sha256=hashlib.sha256(a.urdf.read_bytes()).hexdigest(),runtime_applied=False,gripper_kg=[1,1],waist_mode='position_hold')
+        (a.output_dir/'candidate.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False))
+        print('完成，候选未应用：',a.output_dir/'candidate.json')
+    except BaseException as exc:
+        if motion_started:
+            # 异常后请求取消保持，不在故障中发送新的位置目标；软件停止无法替代硬件急停。
+            future=stop.call_async(Trigger.Request());end=time.monotonic()+2
+            while not future.done() and time.monotonic()<end:spin()
+            accepted=future.done() and future.exception() is None and future.result().success
+            stopped=False;stable=None;end=time.monotonic()+2
+            while accepted and time.monotonic()<end:
+                spin()
+                quiet=time.monotonic()-received<.5 and latest and max(abs(s.velocity) for s in latest.values())<.02
+                stable=(stable or time.monotonic()) if quiet else None
+                if stable and time.monotonic()-stable>.3:stopped=True;break
+            print('取消后测量停稳：',bool(stopped),'；未确认时请使用硬件急停',flush=True)
+        (a.output_dir/'failure.txt').write_text(str(exc));raise
+    finally:node.destroy_node();rclpy.shutdown()
+
+if __name__=='__main__':main()
