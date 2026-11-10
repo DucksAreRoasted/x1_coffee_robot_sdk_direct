@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """单臂自动双向采样（可选左/右）；默认只检查路径和保存计划，--execute 才发送 PVT。"""
-import argparse,csv,json,time,hashlib
+import argparse,csv,json,time,hashlib,signal
 from pathlib import Path
 import numpy as np
 from model import Model,JOINTS
 from record import validated_joints
 from current_identify import current_pairs,fit_current
-from settling import stable_window
+from physical_current_identify import build_report,nominal_gains
+from settling import stable_window,stability_reason,StableConfirmation
 
 
 # 自动采样只在启动角附近移动，不做整圈等价角搜索。
@@ -32,7 +33,9 @@ def check_local_pose(seed,q,side='r'):
             raise ValueError(f'{name} 偏离启动角 {delta[j]:.4f} rad，超过局部范围 {limit:.2f} rad')
 
 
-def make_plan(seed,model,side='r'):
+def make_plan(seed,model,side='r',pose_count=15):
+    if not isinstance(pose_count,int) or not 15<=pose_count<=100:
+        raise ValueError('采样姿态数须为15到100')
     moving=arm_indices(side)
     seed=np.asarray(seed,float)
     if seed.shape!=(15,) or not np.isfinite(seed).all(): raise ValueError('初始角无效')
@@ -56,7 +59,7 @@ def make_plan(seed,model,side='r'):
             raise ValueError(f'{JOINTS[j]} 可用辨识区间仅 {hi-lo:.4f} rad，请先人工移到更居中的安全姿态')
         low.append(lo);high.append(hi)
     rng=np.random.default_rng(17); plan=[]
-    for i in range(15):
+    for i in range(pose_count):
         q=seed.copy();q[moving]=rng.uniform(low,high)
         for direction in (1,-1):
             approach=q.copy();approach[moving]-=direction*.04
@@ -77,28 +80,57 @@ def path_points(start,end):
     return [np.array(start)+(np.array(end)-start)*i/count for i in range(count+1)]
 
 
+def angle_text(values, side):
+    """终端用角度辅助观察；采样与控制内部仍使用弧度。"""
+    return '  '.join(f'{side}{j+1}={v:+.1f}°' for j,v in enumerate(np.degrees(values)))
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--urdf',type=Path,required=True)
     p.add_argument('--conversion',type=Path)
     p.add_argument('--side',choices=('l','r'),default='r')
+    p.add_argument('--inventory',type=Path,default=Path(__file__).with_name('motor_inventory.json'))
+    p.add_argument('--efficiency',type=float,default=.7,help='电流换算效率先验假设，并非实测值')
+    p.add_argument('--additional-gripper-kg',type=float,nargs=2,default=[0.,0.],help='URDF之外额外负载；当前CAD已包含夹爪')
+    p.add_argument('--poses',type=int,default=30,help='双向配对姿态数，默认30，范围15到100')
     p.add_argument('--output-dir',type=Path,required=True)
     p.add_argument('--execute',action='store_true');p.add_argument('--operator-ready',action='store_true')
     a=p.parse_args()
+    if not 15<=a.poses<=100:p.error('--poses须在15到100之间')
     if a.execute and not a.operator_ready:p.error('执行需要现场操作者确认 --operator-ready')
     if a.conversion is None:
         if a.side=='l':p.error('左臂须显式指定已验证方向的 --conversion 配置')
         a.conversion=Path(__file__).with_name('right_arm_session.json')
-    cfg=json.loads(a.conversion.read_text());selected=validated_joints(cfg,a.side)
+    # 在启用ROS和发送运动前保存输入快照；本轮后续计算只使用快照。
+    source_paths={name:getattr(a,name) for name in ('urdf','conversion','inventory')}
+    source_bytes={name:path.read_bytes() for name,path in source_paths.items()}
+    cfg=json.loads(source_bytes['conversion']);selected=validated_joints(cfg,a.side)
+    # 先核实模型输入，避免采完后才发现该臂缺少电机参数。
+    nominal_gains(json.loads(source_bytes['inventory']),a.side,a.efficiency)
+    if not np.isfinite(a.additional_gripper_kg).all() or min(a.additional_gripper_kg)<0:
+        p.error('额外负载必须为有限非负质量')
+    print(f'[辨识模型] URDF物理先验；额外负载 {a.additional_gripper_kg}kg；效率假设 {a.efficiency}，尚未经动态验证。',flush=True)
     fixed=[j for j in range(15) if j not in arm_indices(a.side)]
-    model=Model(a.urdf,[1,1]);a.output_dir.mkdir(parents=True,exist_ok=False)
+    a.output_dir.mkdir(parents=True,exist_ok=False)
+    inputs=a.output_dir/'inputs';inputs.mkdir()
+    manifest={}
+    for name,content in source_bytes.items():
+        target=inputs/(name+('.urdf' if name=='urdf' else '.json'))
+        target.write_bytes(content);setattr(a,name,target)
+        manifest[name]=dict(source=str(source_paths[name].resolve()),sha256=hashlib.sha256(content).hexdigest())
+    (inputs/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
+    model=Model(a.urdf,[1,1])
     import rclpy
     from rclpy.qos import qos_profile_sensor_data
     from std_msgs.msg import Float64MultiArray,String
     from std_srvs.srv import Trigger
     from moveit_msgs.srv import GetStateValidity
     from x1_coffee_interfaces.msg import MotorStateArray
-    rclpy.init();node=rclpy.create_node('x1_'+a.side+'_auto_sample')
+    from rclpy.signals import SignalHandlerOptions
+    # Ctrl-C先进入取消PVT流程，保留ROS上下文用于发送停止请求。
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO);node=rclpy.create_node('x1_'+a.side+'_auto_sample')
     latest={};results={};fault=[];sent_sequences=set();last_stamp=0;received=0.;motion_started=False;seed=None
     def receive(msg):
         nonlocal last_stamp,received,latest
@@ -139,13 +171,21 @@ def main():
             req.robot_state.joint_state.position=q.tolist()
             if not call(validity,req).valid:raise RuntimeError('MoveIt 路径采样点无效/碰撞')
     try:
+        print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
         end=time.monotonic()+10
         while not latest and time.monotonic()<end:spin()
-        health();seed=qnow();plan=make_plan(seed,model,a.side)
+        health();seed=qnow();plan=make_plan(seed,model,a.side,a.poses)
         if not validity.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
+        moving=arm_indices(a.side)
+        print(f'[计划] {a.side}臂，{a.poses}个姿态 × 正反2次采样，共{len(plan)}段运动。',flush=True)
+        planned=np.array([step['q'] for step in plan])
+        print('[计划角度跨度] '+angle_text(np.ptp(planned[:,moving],axis=0),a.side),flush=True)
         previous=seed
-        for step in plan:collision(previous,step['q']);previous=np.array(step['q'])
-        (a.output_dir/'plan.json').write_text(json.dumps({'side':a.side,'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'local_radius_rad':LOCAL_RADIUS_RAD,'fixed_drift_rad':FIXED_DRIFT_RAD,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
+        for index,step in enumerate(plan,1):
+            if index==1 or index%4==0:
+                print(f'[路径检查] {index}/{len(plan)}段',flush=True)
+            collision(previous,step['q']);previous=np.array(step['q'])
+        (a.output_dir/'plan.json').write_text(json.dumps({'side':a.side,'pose_count':a.poses,'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'local_radius_rad':LOCAL_RADIUS_RAD,'fixed_drift_rad':FIXED_DRIFT_RAD,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
         print('计划已检查并保存：',a.output_dir/'plan.json',flush=True)
         if not a.execute:return
         if not stop.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 PVT 取消服务')
@@ -153,24 +193,39 @@ def main():
             raise RuntimeError('没有硬件 PVT 订阅者')
         if np.max(np.abs(qnow()-seed))>.02:raise RuntimeError('检查期间机器人位置改变')
         rows=[];cfg_hash=hashlib.sha256(a.conversion.read_bytes()).hexdigest();seq=int(time.time()*1000)
-        for step in plan:
+        completed=0;started=time.monotonic()
+        observed_low=qnow()[moving].copy();observed_high=observed_low.copy()
+        for index,step in enumerate(plan,1):
             health();target=np.array(step['q'])
+            label=f"{step['pose_id']} {'正向' if step['approach']==1 else '反向'} {'采样点' if step['record'] else '接近点'}"
+            print(f'[运动 {index}/{len(plan)}] {label}；正在检查当前路径',flush=True)
             if np.max(np.abs(qnow()[fixed]-seed[fixed]))>.02:raise RuntimeError('腰或未选手臂漂移')
             collision(qnow(),target)
             duration=max(1.,float(np.max(np.abs(target-qnow())))*2/.08)
+            print(f'[下发] 计划运动时间 {duration:.1f}s；目标角度 '+angle_text(target[moving],a.side),flush=True)
+            print('[本段目标变化] '+angle_text((target-qnow())[moving],a.side),flush=True)
             seq+=1;msg=Float64MultiArray();msg.data=[float(seq),duration,1.,*target.tolist()]
             sent_sequences.add(seq);motion_started=True;pub.publish(msg)
-            deadline=time.monotonic()+duration+8;stable_since=None
+            deadline=time.monotonic()+duration+8;stable_since=None;next_notice=0.
             while time.monotonic()<deadline:
                 spin();health()
                 if np.max(np.abs(qnow()[fixed]-seed[fixed]))>.02:raise RuntimeError('腰或未选手臂漂移')
                 if seq in results and results[seq]!='ok':raise RuntimeError('PVT 拒绝 '+str(results[seq]))
+                measured=qnow()[moving]
+                observed_low=np.minimum(observed_low,measured);observed_high=np.maximum(observed_high,measured)
+                if time.monotonic()>=next_notice:
+                    worst=int(np.argmax(np.abs(qnow()-target)))
+                    print(f'[等待到位] 最大误差 {JOINTS[worst]}={np.degrees(abs(qnow()[worst]-target[worst])):.2f}°；'
+                          f"PVT={'已接受' if seq in results else '等待响应'}；实际角度 "+angle_text(measured,a.side),flush=True)
+                    next_notice=time.monotonic()+2
                 stable=np.max(np.abs(qnow()-target))<.01 and max(abs(s.velocity) for s in latest.values())<.02
                 stable_since=(stable_since or time.monotonic()) if stable else None
                 if seq in results and stable_since and time.monotonic()-stable_since>=1:break
             else:raise RuntimeError('未测量确认到位/停稳')
             if not step['record']:continue
-            batch=[];end=time.monotonic()+15;stamp_seen=0
+            print('[保持采样] 已到位，等待3秒电流/扭矩窗口连续达标3秒，最多30秒。',flush=True)
+            batch=[];hold_started=time.monotonic();end=hold_started+30;stamp_seen=0;next_notice=hold_started+2
+            confirmation=StableConfirmation(3.)
             while time.monotonic()<end:
                 spin();health()
                 if np.max(np.abs(qnow()-target))>.01 or max(abs(s.velocity) for s in latest.values())>.02:raise RuntimeError('采样期间移动')
@@ -189,27 +244,46 @@ def main():
                 # 滚动保留至少3秒反馈；超时不把尚未稳定的保持力矩作为重力样本。
                 while len(batch)>1 and int(batch[-1]['time_ns'])-int(batch[1]['time_ns'])>=3000000000:
                     batch.pop(0)
-                if stable_window(batch, selected):break
+                reason=stability_reason(batch,selected)
+                if confirmation.update(time.monotonic(),not reason):break
+                if time.monotonic()>=next_notice:
+                    span=(int(batch[-1]['time_ns'])-int(batch[0]['time_ns']))/1e9
+                    detail=reason or f'窗口已达标，连续确认 {time.monotonic()-confirmation.since:.1f}/3.0秒'
+                    print(f'[等待稳定] 已等 {time.monotonic()-hold_started:.1f}/30s；窗口 {span:.1f}s、{len(batch)}条；{detail}。',flush=True)
+                    next_notice=time.monotonic()+2
             else:
                 if batch:
                     with (a.output_dir/f"{step['pose_id']}_{step['approach']}.unsettled.csv").open('x',newline='') as f:
                         writer=csv.DictWriter(f,fieldnames=list(batch[0]));writer.writeheader()
                         # 失败窗口可用于诊断，但不能被通配符误纳入有效辨识样本。
                         writer.writerows(dict(r,valid=0) for r in batch)
-                raise RuntimeError('15秒内电流/力矩反馈未稳定，已保存无效诊断窗口')
+                raise RuntimeError('30秒内电流/力矩反馈未连续稳定，已保存无效诊断窗口')
             if len(batch)<20:raise RuntimeError('采样数量不足')
             with (a.output_dir/f"{step['pose_id']}_{step['approach']}.csv").open('x',newline='') as f:
                 writer=csv.DictWriter(f,fieldnames=list(batch[0]));writer.writeheader();writer.writerows(batch)
-            rows.extend(batch);print('完成',step['pose_id'],step['approach'],flush=True)
+            rows.extend(batch);completed+=1
+            print(f'[采样进度] {completed}/{a.poses*2} ({100*completed/(a.poses*2):.0f}%)；'
+                  f'{label} 已保存{len(batch)}条，累计用时 {(time.monotonic()-started)/60:.1f}分钟。',flush=True)
+            print('[累计实测角度跨度] '+angle_text(observed_high-observed_low,a.side),flush=True)
+        print('[辨识] 采样完成，正在进行整姿态五折验证；候选不会自动加载。',flush=True)
         poses,quality_reasons=current_pairs(rows,cfg,a.side)
         report=fit_current(model,poses,a.side,10.)
         report['rejection_reasons'].extend(quality_reasons)
         report['accepted_offline']=not report['rejection_reasons']
         report.update(conversion_sha256=cfg_hash,urdf_sha256=hashlib.sha256(a.urdf.read_bytes()).hexdigest(),runtime_applied=False,gripper_kg=[1,1],waist_mode='position_hold')
+        # 旧自由电流拟合仅保留作对照，键盘默认候选改为物理先验模型。
+        (a.output_dir/'legacy_current_candidate.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False))
+        report=build_report(rows,sorted(a.output_dir.glob('pose*.csv')),a.urdf,a.conversion,
+                            a.inventory,a.side,a.efficiency,a.additional_gripper_kg)
+        report['waist_mode']='position_hold'
         (a.output_dir/'candidate.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False))
         print('完成，候选未应用：',a.output_dir/'candidate.json')
         print('电流模型离线验证：',report['accepted_offline'],report['rejection_reasons'],flush=True)
+        print('[各轴验证RMS] '+'  '.join(f'{a.side}{j+1}={v:.2f}‰'+(' 超标' if v>10 else '')
+              for j,v in enumerate(report['cross_validation_rms_permille'])),flush=True)
     except BaseException as exc:
+        # 取消过程中第二次Ctrl-C不能先销毁ROS上下文。
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if motion_started:
             # 异常后请求取消保持，不在故障中发送新的位置目标；软件停止无法替代硬件急停。
             future=stop.call_async(Trigger.Request());end=time.monotonic()+2
@@ -223,6 +297,6 @@ def main():
                 if stable and time.monotonic()-stable>.3:stopped=True;break
             print('取消后测量停稳：',bool(stopped),'；未确认时请使用硬件急停',flush=True)
         (a.output_dir/'failure.txt').write_text(str(exc));raise
-    finally:node.destroy_node();rclpy.shutdown()
+    finally:node.destroy_node();rclpy.try_shutdown()
 
 if __name__=='__main__':main()

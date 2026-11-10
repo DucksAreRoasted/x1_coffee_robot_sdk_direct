@@ -838,7 +838,10 @@ TEST(SoemEthercatTransport, current_gravity_modes_limits_exit_and_feedback_failu
   ASSERT_TRUE(transport.configure(config));
   ASSERT_TRUE(transport.activate());
   for (int i = 0; i < 1002; ++i) {link->replay();}
-  ASSERT_TRUE(transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE));
+  const auto loaded = transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE);
+  ASSERT_TRUE(loaded);
+  EXPECT_NE(loaded.detail.find("candidate_l="), std::string::npos);
+  EXPECT_NE(loaded.detail.find("candidate_r="), std::string::npos);
   ASSERT_TRUE(transport.enterCurrentGravity());
   EXPECT_FALSE(transport.currentGravityStatus());
   EXPECT_FALSE(transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE));
@@ -863,7 +866,9 @@ TEST(SoemEthercatTransport, current_gravity_modes_limits_exit_and_feedback_failu
   // 邻域外返回当前位置保持，不继续外推补偿电流。
   link->position_shift = 40;
   link->replay();
-  EXPECT_FALSE(transport.currentGravityStatus());
+  const auto domain_status = transport.currentGravityStatus();
+  EXPECT_FALSE(domain_status);
+  EXPECT_NE(domain_status.detail.find("辨识姿态邻域"), std::string::npos);
   EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
   EXPECT_EQ(link->last[8].target_position, 9040);
   link->position_shift = 0;

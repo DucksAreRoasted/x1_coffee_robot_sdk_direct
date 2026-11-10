@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """导出通过离线验证的电流候选供现场验证；不自动启动或批准实机运行。"""
+import io
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import numpy as np
 from record import validated_joints
+from model import Model
+from physical_current_compile import compile_coefficients
 
 
 def fingerprint(raw):
@@ -15,16 +18,18 @@ def fingerprint(raw):
 
 
 def arm_record(candidate, cfg, urdf_raw, conversion_raw, *, kd, limits, slew, radius):
-    if candidate.get('schema')!='x1_current_gravity_v1' or candidate.get('accepted_offline') is not True or candidate.get('rejection_reasons')!=[]:
+    if candidate.get('schema') not in ('x1_current_gravity_v1','x1_physical_current_candidate_v1') or candidate.get('accepted_offline') is not True or candidate.get('rejection_reasons')!=[]:
         raise ValueError('候选未通过离线验证')
-    if candidate.get('unit')!='joint_signed_current_permille' or candidate.get('basis')!='urdf_mass_first_moment_28_plus_known_gravity' or candidate.get('gripper_kg')!=[1,1]:
+    physical=candidate['schema']=='x1_physical_current_candidate_v1'
+    if not physical and (candidate.get('unit')!='joint_signed_current_permille' or candidate.get('basis')!='urdf_mass_first_moment_28_plus_known_gravity' or candidate.get('gripper_kg')!=[1,1]):
         raise ValueError('单位、几何基函数或夹爪配置不符')
     if candidate.get('urdf_sha256')!=hashlib.sha256(urdf_raw).hexdigest() or candidate.get('conversion_sha256')!=hashlib.sha256(conversion_raw).hexdigest():
         raise ValueError('URDF或方向换算配置与候选来源不同')
     side=candidate['side']
     if side not in ('l','r'):raise ValueError('无效臂名称')
     joints=validated_joints(cfg,side)
-    beta=np.array(candidate['coefficients'],float);poses=np.array(candidate['sample_poses'],float)
+    beta=compile_coefficients(candidate,Model(io.BytesIO(urdf_raw),[1,1])) if physical else np.array(candidate['coefficients'],float)
+    poses=np.array(candidate['sample_poses'],float)
     if beta.shape!=(7,29) or poses.ndim!=2 or poses.shape[1]!=15 or not 15<=len(poses)<=4096 or not np.isfinite(beta).all() or not np.isfinite(poses).all():
         raise ValueError('系数或采样姿态无效')
     rms=np.array(candidate['cross_validation_rms_permille'],float)

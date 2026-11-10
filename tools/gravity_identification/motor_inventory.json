@@ -3,7 +3,7 @@
   "source": "用户于 2026-11-10 提供的型号清单",
   "manual_reference": "manual/eRob最新手册/eRob机器人关节模组用户手册_V3.45.pdf，第25.2节，印刷页104–106",
   "runtime_applied": false,
-  "note": "产品版本按用户指定的最新版本假设分析，不改变输出编码器角度换算；Kt 与产品版本对应关系及输出侧换算未验证；左臂型号不推定。",
+  "note": "型号由用户确认双臂逐轴一致；额定电流依据两臂启动日志。Kt和版本仍为离线假设，不证明方向或动态增益已验证。",
   "joints": {
     "Joint_Body": {
       "model": "erob110h120i-bs-18en",
@@ -132,17 +132,128 @@
         "basis": "手册该系列最新已列电机参数，仅供离线假设",
         "product_version_mapping_verified": false
       }
+    },
+    "Joint_l1": {
+      "model": "erob90h100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 12.5,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.14,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=2 的0x6075实测值"
+    },
+    "Joint_l2": {
+      "model": "erob90h100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 12.5,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.14,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=3 的0x6075实测值"
+    },
+    "Joint_l3": {
+      "model": "erob80h50i-bs-18en",
+      "nominal_gear_ratio": 50,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 9.6,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V4_MC2/V5_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=4 的0x6075实测值"
+    },
+    "Joint_l4": {
+      "model": "erob80h50i-bs-18en",
+      "nominal_gear_ratio": 50,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 9.6,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V4_MC2/V5_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=5 的0x6075实测值"
+    },
+    "Joint_l5": {
+      "model": "erob70h100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 5.4,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V5",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.132,
+        "manual_structure_row": "V4_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=6 的0x6075实测值"
+    },
+    "Joint_l6": {
+      "model": "erob70f100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 5.4,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V3",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=7 的0x6075实测值"
+    },
+    "Joint_l7": {
+      "model": "erob70f100i-bs-18en",
+      "nominal_gear_ratio": 100,
+      "structure_version": null,
+      "motor_kt_nm_per_a": null,
+      "drive_rated_current_a_0x6075": 5.4,
+      "output_torque_conversion_verified": false,
+      "assumed_product_version": "V3",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      },
+      "model_source": "用户确认左臂与右臂逐轴型号一致",
+      "rated_current_source": "current_source启动日志 axis=8 的0x6075实测值"
     }
   },
-  "unconfirmed_joints": [
-    "Joint_l1",
-    "Joint_l2",
-    "Joint_l3",
-    "Joint_l4",
-    "Joint_l5",
-    "Joint_l6",
-    "Joint_l7"
-  ],
+  "unconfirmed_joints": [],
   "current_source": {
     "host": "192.168.2.230",
     "path": "/home/szxn/.ros/log/2026-11-10-12-32-19-580216-szxn-Default-string-12876/launch.log",

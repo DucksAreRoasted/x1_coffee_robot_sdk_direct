@@ -1,0 +1,42 @@
+{
+  "schema": "x1_payload_model_evidence_v1",
+  "runtime_applied": false,
+  "conclusion": "CAD mesh includes gripper geometry; inertial centroid closely matches mesh centroid. Treat gripper as included in URDF for new physical model; independent mass validation remains pending.",
+  "evidence": {
+    "mesh": "src/arm_describle/meshes0408/armr7.STL",
+    "mesh_sha256": "d61e6d4aa38aea9b29201ca8e16d7ae8e1c646b2d6d2923efc9f8245c9754cee",
+    "urdf": "src/arm_describle/urdf/HRB3Q-LC.urdf",
+    "urdf_sha256": "6dacfb78a1d6353e0a155657370af45caf5f076697c7fbe36d51f1c8a51cf7aa",
+    "cad_link_mass_kg": 1.53968802705119,
+    "cad_link_com_m": [
+      -0.00137872677447762,
+      2.10185572047106e-05,
+      0.0594139048805939
+    ],
+    "mesh_uniform_com_m": [
+      -0.00132824092,
+      2.98121087e-05,
+      0.0595299496
+    ],
+    "mesh_uniform_density_for_cad_mass_kg_m3": 2684.5255456209647,
+    "note": "Uniform-density mesh calculation supports association with the exported inertial entry; it does not establish actual component material densities or measured mass."
+  },
+  "new_model_additional_gripper_kg": [
+    0,
+    0
+  ],
+  "legacy_model_additional_gripper_kg": [
+    1,
+    1
+  ],
+  "user_reported_gripper_mass_kg": [
+    1,
+    1
+  ],
+  "user_reported_extra_tools": false,
+  "model_source": "SolidWorks-to-URDF exporter header and original matching URDF in 工控机文件/ros2_ws/src/arm_describle",
+  "physical_candidate": "parameters/physical_cad_payload_review.json",
+  "physical_fit_rank": 20,
+  "physical_parameter_count": 35,
+  "limits": "Local samples cannot uniquely identify all physical parameters. New candidate is offline only; old exported control parameters are unchanged."
+}

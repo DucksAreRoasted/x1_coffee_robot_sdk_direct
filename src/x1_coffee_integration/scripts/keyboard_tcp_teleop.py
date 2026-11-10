@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Keyboard jogging of the left or right gripper TCP.
 
-Each key adds 5 mm or 0.03 rad in the fixed root frame, starting from the
-current measured gripper pose, then sends one profile-position target on
+Translation keys add 5 mm in the fixed root frame; rotation keys add 0.03 rad
+about the current TCP local axes while holding its position, then send a target on
 /x1/pvt_move. The direct EtherCAT master writes 0x607A. This script does not
 enable drives and does not release brakes.
 """
@@ -215,7 +215,9 @@ class ArmChain:
         current_position = _origin_of(current)
         # 当前 TCP 在 URDF 根坐标系 dummy_root 里的位置，增量也加在这个全局坐标系上。
         target_position = [current_position[axis] + linear[axis] for axis in range(3)]
-        target_rotation = _mul(_rpy(*angular), current_rotation)
+        # 局部旋转右乘：按键绕这一步开始时TCP自身的轴旋转。
+        # IK姿态误差和雅可比仍在世界系表达，不能一起改成局部系。
+        target_rotation = _mul(current_rotation, _rpy(*angular))
         return self._reach(positions, target_position, target_rotation, ROTATION_TOLERANCE)
 
     def move_line(
@@ -761,6 +763,15 @@ class CurrentGravitySession:
         return False
 
 
+def sampling_directory(side):
+    """采样默认持久保存；每轮独立目录，绝不覆盖旧数据。"""
+    if side not in ('left', 'right'):
+        raise ValueError('无效手臂')
+    root = Path(os.environ.get('X1_GRAVITY_DATA_DIR', str(Path.home() / 'robot_data' / 'gravity'))).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=time.strftime('%Y%m%d_%H%M%S_') + side + '_', dir=root))
+
+
 def sampling_command(tool_dir, urdf, side, output, execute=False):
     """构造参数列表，不通过 shell；左臂方向配置必须显式提供。"""
     short = {"left": "l", "right": "r"}[side]
@@ -781,7 +792,7 @@ def sampling_command(tool_dir, urdf, side, output, execute=False):
 HELP = """
 日常点动
   1/2  选左/右臂       w/s a/d q/e  TCP沿全局XYZ平移
-  i/k j/l u/o  TCP绕全局XYZ旋转     [/]  腰小步转动
+  i/k j/l u/o  TCP绕自身XYZ旋转     [/]  腰小步转动
 功能菜单
   g  重力采样与补偿    h  回零    `  高级调试    ?  显示帮助
 通用操作
@@ -851,6 +862,7 @@ def run_teleop() -> int:
             self.menu = KeyboardMenu()
             self.sample_process = None
             self.sample_log = None
+            self.sample_reader = None
             self.sample_output = None
             self.sample_execute = False
             self.sample_cancelled = False
@@ -859,6 +871,7 @@ def run_teleop() -> int:
             self.current_confirm_until = 0.0
             self.current_check_at = 0.0
             self.current_enter_future = None
+            self.current_query_detail = ""
             self.quiet_since = None
             self.joint_received_at = None
             self.joint_stamp_ns = 0
@@ -985,16 +998,20 @@ def run_teleop() -> int:
         def start_sample(self, execute):
             from ament_index_python.packages import get_package_share_directory
             tool_dir = Path(get_package_share_directory("x1_coffee_integration")) / "gravity_identification"
-            parent = Path(tempfile.mkdtemp(prefix="x1_keyboard_gravity_"))
-            self.sample_output = parent / "samples"
             try:
+                parent = sampling_directory(self.side)
+                self.sample_output = parent / "samples"
                 command = sampling_command(tool_dir, urdf_path, self.side, self.sample_output, execute)
                 self.sample_log = (parent / "sampling.log").open("w")
+                self.sample_reader = (parent / "sampling.log").open("r")
                 self.sample_process = subprocess.Popen(command, stdout=self.sample_log,
                     stderr=subprocess.STDOUT, start_new_session=True)
             except Exception as error:
                 if self.sample_log:
                     self.sample_log.close()
+                if self.sample_reader:
+                    self.sample_reader.close()
+                    self.sample_reader = None
                 print(f"\n采样未启动：{error}")
                 return
             self.sample_execute = execute
@@ -1013,9 +1030,19 @@ def run_teleop() -> int:
                 print("\n已请求取消，等待采样器完成停止处理。")
 
         def poll_sample(self):
-            if self.sample_process is None or self.sample_process.poll() is None:
+            if self.sample_process is None:
                 return
-            code = self.sample_process.returncode
+            code = self.sample_process.poll()
+            # 子进程保留完整日志，同时增量显示进度；读取普通文件，不阻塞键盘取消。
+            if self.sample_reader is not None:
+                progress = self.sample_reader.read() if code is not None else self.sample_reader.read(16384)
+                if progress:
+                    print(progress, end="", flush=True)
+            if code is None:
+                return
+            if self.sample_reader is not None:
+                self.sample_reader.close()
+                self.sample_reader = None
             self.sample_process = None
             self.sample_log.close()
             print(f"\n采样进程结束，返回码 {code}；结果：{self.sample_output}")
@@ -1035,6 +1062,7 @@ def run_teleop() -> int:
         def current_query(self, name):
             client = self.current_clients[name]
             if not client.wait_for_service(timeout_sec=0.2):
+                self.current_query_detail = f"{name} 服务不可用"
                 return False
             future = client.call_async(Trigger.Request())
             if name == "enter":
@@ -1044,8 +1072,10 @@ def run_teleop() -> int:
                 reply = future.result() if future.done() else None
                 if not future.done() and name != "enter":
                     client.remove_pending_request(future)
+                self.current_query_detail = reply.message if reply is not None else f"{name} 服务响应超时"
                 return reply is not None and reply.success
             except Exception as error:
+                self.current_query_detail = f"{name} 服务异常: {error}"
                 print(f"\n补偿服务 {name} 异常: {error}")
                 return False
 
@@ -1238,7 +1268,7 @@ def run_teleop() -> int:
             if node.current_session.state == "active" and time.monotonic() >= node.current_check_at:
                 node.current_check_at = time.monotonic() + 0.5
                 if not node.current_query("status"):
-                    print("\n补偿实际模式确认丢失，正在请求退出。")
+                    print(f"\n补偿状态检查未通过：{node.current_query_detail}。正在请求退出并确认保持。")
                     node.leave_current()
             if pending_since is not None and (node.get_clock().now() - pending_since).nanoseconds > int(node.last_segment_sec * 1e9):
                 node.note_if_ignored()

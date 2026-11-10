@@ -2689,7 +2689,15 @@ Result SoemEthercatTransport::loadCurrentGravity(const std::string & path)
   current_models_ = std::move(models);
   current_loaded_ = true;
   current_fault_ = 0;
-  return Result{CoreError::kOk, "电流参数已加载，未切换模式；仅供现场受控验证"};
+  std::string detail = "电流参数已加载，未切换模式；仅供现场受控验证";
+  // 回传原候选摘要，自动验证工具据此避免测试到旧模型。
+  for (int side = 0; side < 2; ++side) {
+    if (current_bundle_.present[side]) {
+      detail += std::string(side == 0 ? " candidate_l=" : " candidate_r=") +
+        current_bundle_.candidate_sha256[side];
+    }
+  }
+  return Result{CoreError::kOk, detail};
 }
 
 Result SoemEthercatTransport::enterCurrentGravity()
@@ -2748,7 +2756,12 @@ Result SoemEthercatTransport::currentGravityStatus()
 {
   std::lock_guard<std::mutex> lock(sample_mu_);
   if (current_fault_ != 0) {
-    return Result::fail(CoreError::kWriteFailed, "电流补偿已退出，故障码=" + std::to_string(current_fault_));
+    // 状态服务提供退出类别；不能把模型保护退出统称为模式丢失。
+    const char * reason = current_fault_ == 1 ? "反馈/使能失效或收到关断请求" :
+      current_fault_ == 2 ? "超出辨识姿态邻域、电流预算或模型计算无效" :
+      current_fault_ == 3 ? "实际模式丢失或切换确认超时" : "未知故障";
+    return Result::fail(CoreError::kWriteFailed,
+      std::string("电流补偿保护退出：") + reason + "，故障码=" + std::to_string(current_fault_));
   }
   if (!current_active_ || shutdown_outputs_ ||
     std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))

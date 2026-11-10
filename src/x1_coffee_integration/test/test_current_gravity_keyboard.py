@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """键盘补偿会话离线回归，无 ROS 和实机依赖。"""
 import ast
+import io
+from contextlib import redirect_stdout
 import types
 import runpy
 from pathlib import Path
@@ -139,6 +141,22 @@ class MenuTest(unittest.TestCase):
         self.assertEqual(menu.route('3'),'g')
         for key in '123456w':self.assertIsNone(menu.route(key,busy=True))
         for key in ('n','b','\x1b'):self.assertEqual(menu.route(key,busy=True),key)
+
+class SamplingProgressTest(unittest.TestCase):
+    def test_running_child_streams_progress_without_waiting_for_exit(self):
+        method=next(n for n in ast.walk(ast.parse(Path(NS['__file__']).read_text()))
+                    if isinstance(n,ast.FunctionDef) and n.name=='poll_sample')
+        scope=dict(NS)
+        exec(compile(ast.Module(body=[method],type_ignores=[]),'<poll_sample>','exec'),scope)
+        reader=io.StringIO('[采样进度] 1/60\n')
+        node=types.SimpleNamespace(sample_process=types.SimpleNamespace(poll=lambda:None),sample_reader=reader)
+        output=io.StringIO()
+        with redirect_stdout(output):
+            scope['poll_sample'](node)
+            scope['poll_sample'](node)
+        self.assertEqual(output.getvalue(),'[采样进度] 1/60\n')
+        self.assertFalse(reader.closed)
+        self.assertIsNotNone(node.sample_process)
 
 if __name__ == '__main__':
     unittest.main()

@@ -83,4 +83,15 @@ class PlanTest(unittest.TestCase):
         check_local_pose(seed,q,'l')
         with self.assertRaises(ValueError):make_plan(seed,self.model,'both')
 
+    def test_more_poses_preserve_pairs_and_local_envelope(self):
+        seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+
+                        float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+        plan=make_plan(seed,self.model,'r',30)
+        self.assertEqual(len(plan),120)
+        records=[step for step in plan if step['record']]
+        self.assertEqual(len({step['pose_id'] for step in records}),30)
+        for step in plan:check_local_pose(seed,step['q'],'r')
+        for count in (0,14,101):
+            with self.assertRaises(ValueError):make_plan(seed,self.model,'r',count)
+
 if __name__=='__main__':unittest.main()

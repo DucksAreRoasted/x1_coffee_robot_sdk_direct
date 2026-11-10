@@ -1,5 +1,5 @@
 import unittest
-from settling import stable_window
+from settling import stable_window,stability_reason,StableConfirmation
 
 class SettlingTest(unittest.TestCase):
     def rows(self):
@@ -18,3 +18,21 @@ class SettlingTest(unittest.TestCase):
             self.assertFalse(stable_window(r,['j']))
             r=self.rows();r[5]['raw_'+kind+'_valid_j']=0
             self.assertFalse(stable_window(r,['j']))
+
+    def test_reason_distinguishes_accumulation_and_joint_drift(self):
+        self.assertIn('正常积累窗口',stability_reason(self.rows()[:-1],['j']))
+        rows=self.rows()
+        for i,row in enumerate(rows):row['raw_current_permille_j']=i*2
+        reason=stability_reason(rows,['j'])
+        self.assertIn('j 电流前后均值漂移',reason)
+        self.assertIn('> 10‰',reason)
+        self.assertEqual(stability_reason(self.rows(),['j']),'')
+
+    def test_confirmation_requires_uninterrupted_passes(self):
+        gate=StableConfirmation()
+        self.assertFalse(gate.update(10,True))
+        self.assertFalse(gate.update(12.9,True))
+        self.assertFalse(gate.update(13,False))
+        self.assertFalse(gate.update(14,True))
+        self.assertFalse(gate.update(16.9,True))
+        self.assertTrue(gate.update(17,True))

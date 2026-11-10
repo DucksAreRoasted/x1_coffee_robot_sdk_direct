@@ -8,6 +8,7 @@ import numpy as np
 from current_identify import features
 from model import Model
 from export_current import arm_record
+from physical_current_compile import compile_coefficients
 
 
 def design(candidate, model, limits, speeds, damping_fraction, ramp_seconds):
@@ -23,7 +24,7 @@ def design(candidate, model, limits, speeds, damping_fraction, ramp_seconds):
         raise ValueError('候选未通过离线验证')
     side=candidate['side']
     if side not in ('l','r'):raise ValueError('无效臂名称')
-    beta=np.asarray(candidate['coefficients'],float)
+    beta=compile_coefficients(candidate,model) if candidate.get('schema')=='x1_physical_current_candidate_v1' else np.asarray(candidate['coefficients'],float)
     poses=np.asarray(candidate['sample_poses'],float)
     observed=np.asarray(candidate['observed_current_permille'],float)
     error=np.asarray(candidate['max_abs_validation_error_permille'],float)
