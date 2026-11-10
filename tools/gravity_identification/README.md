@@ -295,3 +295,7 @@ python3 tools/gravity_identification/auto_sample.py \
 ### 少量姿态重复性复测
 
 `auto_sample.py --repeat-from-plan OLD/plan.json --repeat-pose pose14 pose24 pose30 --repeat-count 3` 复用历史计划，保留原URDF摘要、原始运动包络、完整正反接近及所有实时检查；其他必填参数与普通采样相同。默认仍为路径预览，执行仍需 `--execute --operator-ready`。重复轮次使用独立姿态编号，不相互混组；执行结束只保存CSV，不拟合、不加载候选。重复时保留指定顺序，以便比较跨轮重复性；不会为了缩短路径重新排列各轮。当前实际姿态必须仍在原计划范围内，路径从当前实测位置重新检查。
+
+### r6 残差审计
+
+`audit_current_residual.py --candidate CANDIDATE --repeat-report REPEATABILITY_REPORT --urdf URDF --output NEW.json` 对照纯重力、常量偏置、单轴角度、正余弦及腕部线性修正。每折独立归一化，另用内层四折选择假设、外层五折评价选择过程；复测已见姿态仅作为重复性检查，不能冒充独立工作区验证。输出始终禁止部署，不修改原候选、方向和零位。当前扩大范围数据的这些低阶修正均未解决r6超阈值，不能据此自动加入前馈。
