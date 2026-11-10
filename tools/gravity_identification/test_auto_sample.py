@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from model import Model,JOINTS
-from auto_sample import make_plan,path_points,check_local_pose,optimize_visit_order,movement_seconds
+from auto_sample import make_plan,path_points,check_local_pose,optimize_visit_order,movement_seconds,repeat_plan
 
 class PlanTest(unittest.TestCase):
     def setUp(self):
@@ -117,5 +117,17 @@ class PlanTest(unittest.TestCase):
         for step in plan:
             clearance(step['q']);check_local_pose(seed,step['q'],'r',.4)
         with self.assertRaises(ValueError):make_plan(seed,self.model,'r',30,.36)
+
+    def test_repeat_uses_original_envelope_and_keeps_trial_identity(self):
+        seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+
+                        float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+        source=dict(side='r',seed=seed.tolist(),local_radius_rad=.4,
+                    steps=make_plan(seed,self.model,'r',30,.35))
+        center,radius,plan=repeat_plan(source,['pose14','pose24','pose30'],3,self.model,'r',lambda q:None)
+        np.testing.assert_array_equal(center,seed);self.assertEqual(radius,.4)
+        self.assertEqual(len(plan),36);self.assertEqual(len({p['pose_id']for p in plan}),9)
+        for i in range(0,len(plan),4):np.testing.assert_array_equal(plan[i+1]['q'],plan[i+3]['q'])
+        with self.assertRaises(ValueError):repeat_plan(source,['missing'],3,self.model,'r',lambda q:None)
+        with self.assertRaises(ValueError):repeat_plan(source,['pose14'],3,self.model,'l',lambda q:None)
 
 if __name__=='__main__':unittest.main()

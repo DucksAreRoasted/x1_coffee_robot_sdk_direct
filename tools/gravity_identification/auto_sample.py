@@ -87,6 +87,29 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
     return plan
 
 
+def repeat_plan(source, names, count, model, side, clearance):
+    """只复用已保存计划的姿态；保持原采样包络，不用当前角重新扩展范围。"""
+    if source.get('side')!=side or not 1<=count<=5 or not names or len(set(names))!=len(names):
+        raise ValueError('复测手臂、姿态或次数无效')
+    seed=np.asarray(source['seed'],float);radius=float(source['local_radius_rad'])
+    if not .19<=radius<=.4000001:raise ValueError('原计划范围无效')
+    result=[]
+    for repeat in range(count):
+        for name in names:
+            block=[dict(v) for v in source['steps'] if v['pose_id']==name]
+            if len(block)!=4 or [v['record'] for v in block]!=[False,True,False,True] or [v['approach'] for v in block]!=[1,1,-1,-1]:
+                raise ValueError('原计划缺少完整双向姿态 '+name)
+            for step in block:
+                check_local_pose(seed,step['q'],side,radius);clearance(step['q'])
+                for j in arm_indices(side):
+                    limit=model.by_name[JOINTS[j]].find('limit')
+                    if not float(limit.get('lower'))+.05<=step['q'][j]<=float(limit.get('upper'))-.05:
+                        raise ValueError('复测姿态越过限位余量')
+                step['pose_id']=f'repeat{repeat+1:02}_{name}'
+                result.append(step)
+    return seed,radius,result
+
+
 def movement_seconds(start, end):
     return max(1.,float(np.max(np.abs(np.asarray(end)-start)))*2/.08)
 
@@ -128,6 +151,9 @@ def main():
     p.add_argument('--efficiency',type=float,default=.7,help='电流换算效率先验假设，并非实测值')
     p.add_argument('--additional-gripper-kg',type=float,nargs=2,default=[0.,0.],help='URDF之外额外负载；当前CAD已包含夹爪')
     p.add_argument('--target-radius',type=float,default=.35,help='采样目标相对起点最大角差，默认0.35rad')
+    p.add_argument('--repeat-from-plan',type=Path,help='只复测历史计划，不生成辨识候选')
+    p.add_argument('--repeat-pose',nargs='+',default=['pose14','pose24','pose30'])
+    p.add_argument('--repeat-count',type=int,default=3)
     p.add_argument('--poses',type=int,default=30,help='双向配对姿态数，默认30，范围15到100')
     p.add_argument('--output-dir',type=Path,required=True)
     p.add_argument('--execute',action='store_true');p.add_argument('--operator-ready',action='store_true')
@@ -215,10 +241,19 @@ def main():
         print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
         end=time.monotonic()+10
         while not latest and time.monotonic()<end:spin()
-        health();seed=qnow();plan=make_plan(seed,model,a.side,a.poses,a.target_radius,body_check)
-        ordered,saved=optimize_visit_order(seed,plan)
+        health();seed=qnow();start_pose=seed.copy()
+        if a.repeat_from_plan:
+            source=json.loads(a.repeat_from_plan.read_text())
+            if source['urdf_sha256']!=hashlib.sha256(a.urdf.read_bytes()).hexdigest():raise ValueError('复测URDF与原计划不一致')
+            seed,radius,plan=repeat_plan(source,a.repeat_pose,a.repeat_count,model,a.side,body_check)
+            a.target_radius=radius-.05;a.poses=len(plan)//4
+            (a.output_dir/'inputs'/'repeat_source.json').write_text(json.dumps(source,indent=2))
+            health();ordered=plan;saved=0.
+        else:
+            plan=make_plan(seed,model,a.side,a.poses,a.target_radius,body_check)
+            ordered,saved=optimize_visit_order(seed,plan)
         try:
-            previous=seed
+            previous=start_pose
             for step in ordered:
                 for point in path_points(previous,step['q']):body_check(point)
                 previous=step['q']
@@ -230,7 +265,7 @@ def main():
         print(f'[计划] {a.side}臂，{a.poses}个姿态 × 正反2次采样，共{len(plan)}段运动。',flush=True)
         planned=np.array([step['q'] for step in plan])
         print('[计划角度跨度] '+angle_text(np.ptp(planned[:,moving],axis=0),a.side),flush=True)
-        previous=seed
+        previous=start_pose
         for index,step in enumerate(plan,1):
             if index==1 or index%4==0:
                 print(f'[路径检查] {index}/{len(plan)}段',flush=True)
@@ -241,7 +276,7 @@ def main():
         if not stop.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 PVT 取消服务')
         if pub.get_subscription_count()<2:
             raise RuntimeError('没有硬件 PVT 订阅者')
-        if np.max(np.abs(qnow()-seed))>.02:raise RuntimeError('检查期间机器人位置改变')
+        if np.max(np.abs(qnow()-start_pose))>.02:raise RuntimeError('检查期间机器人位置改变')
         rows=[];cfg_hash=hashlib.sha256(a.conversion.read_bytes()).hexdigest();seq=int(time.time()*1000)
         completed=0;started=time.monotonic()
         observed_low=qnow()[moving].copy();observed_high=observed_low.copy()
@@ -318,6 +353,9 @@ def main():
             print(f'[采样进度] {completed}/{a.poses*2} ({100*completed/(a.poses*2):.0f}%)；'
                   f'{label} 已保存{len(batch)}条，累计用时 {(time.monotonic()-started)/60:.1f}分钟。',flush=True)
             print('[累计实测角度跨度] '+angle_text(observed_high-observed_low,a.side),flush=True)
+        if a.repeat_from_plan:
+            print('[复测完成] 原始数据已保存；不重新拟合，不加载参数。',flush=True)
+            return
         print('[辨识] 采样完成，正在进行整姿态五折验证；候选不会自动加载。',flush=True)
         poses,quality_reasons=current_pairs(rows,cfg,a.side)
         report=fit_current(model,poses,a.side,10.)
