@@ -371,6 +371,8 @@ public:
     debugf("ecx_init ok sock=%d", context_.port.sockhandle);
     std::call_once(g_signal_once, install_stop_signals);
     debugf("before ecx_config_init");
+    // 每轮重试恢复自动 INIT→PRE-OP，邮箱/PDO 配置需要 PRE-OP。
+    context_.manualstatechange = 0;
     const int count = ecx_config_init(&context_);
     debugf("ecx_config_init count=%d", count);
     say(count == static_cast<int>(kCoffeeAxisCount) ?
@@ -387,6 +389,9 @@ public:
       context_.slavelist[slave].PO2SOconfig = &SoemLink::pdoThunk;
     }
     debugf("before ecx_config_map_group");
+    // 映射默认会请求 SAFE-OP。此时尚无周期帧，必须禁止这次隐式切换；
+    // 后续由 cycleLoop 在连续收发后显式请求 SAFE-OP 和 OP。
+    context_.manualstatechange = 1;
     ecx_config_map_group(&context_, iomap_, 0);
     active_link_ = nullptr;
     say("✓ 15 轴过程数据已映射");
@@ -931,6 +936,9 @@ private:
     std::array<std::int32_t, kCoffeeAxisCount + 1> dc_diff{};
     std::array<bool, kCoffeeAxisCount + 1> dc_seen{};
     std::array<int, kCoffeeAxisCount + 1> watchdog_acks{};
+    // 保留周期仍在收发时的 AL 快照，避免停帧后再读制造新的看门狗故障。
+    std::array<ec_alstatust, kCoffeeAxisCount> startup_al{};
+    auto startup_al_time = std::chrono::steady_clock::time_point{};
     int op_broadcasts = 0;
     std::int64_t last_dc = 0;
     // 先发出一帧，再按 1 ms 节拍睡醒后收发。顺序和 eRob_CSP 的周期线程一致。
@@ -944,7 +952,7 @@ private:
       last_dc = context_.DCtime;
       // 只在已经请求运行之后确认状态。上一帧已收回，这时读不会把过程数据回帧冲掉。
       if (op_requested && (cycle % 200) == 0 &&
-        recoverWatchdogSlaves(watchdog_acks) && op_broadcasts < 6)
+        recoverWatchdogSlaves(watchdog_acks, startup_al, startup_al_time) && op_broadcasts < 6)
       {
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
         context_.slavelist[0].state = EC_STATE_OPERATIONAL;
@@ -1053,19 +1061,20 @@ private:
       if (stopped()) {
         return;
       }
-      // 周期已经停发，这时才逐台读 AL 码，用来打印是哪几台没进运行。
-      for (int slave = 1; slave <= context_.slavecount; ++slave) {
-        refreshOneSlaveState(slave);
-      }
+      // 快照可能较旧或尚未取得，明确标记，不能当作超时瞬间的实时状态。
+      const bool has_snapshot = startup_al_time != std::chrono::steady_clock::time_point{};
       std::ostringstream stream;
       stream << "bus state=0x" << std::hex << context_.slavelist[0].state
              << std::dec << " late_us=" << (timer.maxLateNs() / 1000)
              << " phase_us=" << (detail::dcPhaseNs(last_dc, DcCycleTimer::kCycleNs) / 1000)
-             << " sync0=" << (sync0_armed ? 1 : 0);
+             << " sync0=" << (sync0_armed ? 1 : 0)
+             << " al_snapshot_age_ms=" << (has_snapshot ?
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - startup_al_time).count() : -1);
       for (int slave = 1; slave <= context_.slavecount; ++slave) {
         stream << " slave" << std::dec << slave << "=0x" << std::hex
-               << context_.slavelist[slave].state << "/0x"
-               << context_.slavelist[slave].ALstatuscode;
+               << etohs(startup_al[slave - 1].alstatus) << "/0x"
+               << etohs(startup_al[slave - 1].alstatuscode);
       }
       {
         std::lock_guard<std::mutex> lock(wait_mu_);
@@ -1335,7 +1344,9 @@ private:
 
   // 一帧读回各台状态。0x001B 只应答该台并再次请求运行，不写控制字 0x6040，也不改已经在运行的轴。
   bool recoverWatchdogSlaves(
-    std::array<int, kCoffeeAxisCount + 1> & ack_count)
+    std::array<int, kCoffeeAxisCount + 1> & ack_count,
+    std::array<ec_alstatust, kCoffeeAxisCount> & snapshot,
+    std::chrono::steady_clock::time_point & snapshot_time)
   {
     constexpr int kMaxAck = 3;
     bool still_safe = false;
@@ -1349,10 +1360,13 @@ private:
       address[static_cast<std::size_t>(index)] = context_.slavelist[index + 1].configadr;
     }
     if (ecx_FPRD_multi(
-          &context_, n, address.data(), status.data(), EC_TIMEOUTRET) < 0)
+          &context_, n, address.data(), status.data(), kStatePollTimeoutUs) <= 0)
     {
       return false;
     }
+    // 在任何错误应答之前保存原始返回值；多报文返回值不保证每台都应答。
+    snapshot = status;
+    snapshot_time = std::chrono::steady_clock::now();
     for (int index = 0; index < n; ++index) {
       const int slave = index + 1;
       const auto state = etohs(status[static_cast<std::size_t>(index)].alstatus);
@@ -1922,6 +1936,8 @@ Result SoemEthercatTransport::activate()
       break;
     }
     debugf("activate failed: %s", opened.detail.c_str());
+    // 重试成功也不能丢掉前面失败的原因，不经过 512 字节调试缓冲区截断。
+    std::fprintf(stderr, "! 第 %d 次上电失败：%s\n", attempt, opened.detail.c_str());
     if (!bringupShouldRetry(opened)) {
       return opened;
     }
