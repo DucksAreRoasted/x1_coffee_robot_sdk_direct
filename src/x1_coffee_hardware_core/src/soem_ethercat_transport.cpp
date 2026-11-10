@@ -2820,6 +2820,18 @@ Result SoemEthercatTransport::enterCurrentGravity()
 Result SoemEthercatTransport::currentGravityStatus()
 {
   std::lock_guard<std::mutex> lock(sample_mu_);
+  if (tcp_speed_fault_) {
+    // 全局关断优先于补偿的二次反馈故障，保留触发时的测量值。
+    const bool overspeed = tcp_speed_guard_.linear[0] > .15 || tcp_speed_guard_.linear[1] > .15 ||
+      tcp_speed_guard_.angular[0] > .5 || tcp_speed_guard_.angular[1] > .5;
+    return Result::fail(CoreError::kWriteFailed,
+      std::string(overspeed ? "TCP超速保护" : "TCP反馈/采样时间保护") +
+      "已请求全轴关断并锁存；左臂=" + std::to_string(tcp_speed_guard_.linear[0]) +
+      "m/s " + std::to_string(tcp_speed_guard_.angular[0]) + "rad/s，右臂=" +
+      std::to_string(tcp_speed_guard_.linear[1]) + "m/s " +
+      std::to_string(tcp_speed_guard_.angular[1]) +
+      "rad/s；阈值0.15m/s、0.5rad/s。关断不等于CSP保持，检查原因后重新初始化");
+  }
   if (current_fault_ != 0) {
     // 状态服务提供退出类别；不能把模型保护退出统称为模式丢失。
     const char * reason = current_fault_ == 1 ? "反馈/使能失效或收到关断请求" :

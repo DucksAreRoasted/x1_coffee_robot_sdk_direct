@@ -933,6 +933,10 @@ TEST(SoemEthercatTransport, tcp_overspeed_shuts_down_all_axes_in_csp_and_cst)
       ASSERT_TRUE(transport.enterCurrentGravity());link->replay();link->replay();
     }
     link->position_shift = 40;link->replay();
+    const auto status = transport.currentGravityStatus();
+    EXPECT_FALSE(status);
+    EXPECT_NE(status.detail.find("TCP超速保护"), std::string::npos);
+    EXPECT_NE(status.detail.find("关断不等于CSP保持"), std::string::npos);
     for (const auto & command : link->last) {
       EXPECT_EQ(command.control_word, 0x0006);EXPECT_EQ(command.target_torque, 0);
     }
