@@ -1269,6 +1269,30 @@ private:
     return static_cast<std::int64_t>(unit_ns * widened);
   }
 
+  // ecx_dcsync0 不报告写入失败，必须区分“请求配置”和“实际读回”。
+  // 仅在启动 SYNC0、尚未请求 SAFE-OP 时调用；不在 OP 周期内读邮箱。
+  void logSync0Readback(int slave)
+  {
+    const auto address = context_.slavelist[slave].configadr;
+    std::uint8_t activation = 0;
+    std::uint32_t cycle = 0;
+    std::uint64_t start = 0;
+    const int active_rc = ecx_FPRD(&context_.port, address, ECT_REG_DCSYNCACT,
+      sizeof(activation), &activation, kStatePollTimeoutUs);
+    const int cycle_rc = ecx_FPRD(&context_.port, address, ECT_REG_DCCYCLE0,
+      sizeof(cycle), &cycle, kStatePollTimeoutUs);
+    const int start_rc = ecx_FPRD(&context_.port, address, ECT_REG_DCSTART0,
+      sizeof(start), &start, kStatePollTimeoutUs);
+    say("[x1-sync0] slave=%d activation=0x%02x rc=%d cycle_ns=%u rc=%d start_ns=%llu rc=%d",
+      slave, activation, active_rc, etohl(cycle), cycle_rc,
+      static_cast<unsigned long long>(etohll(start)), start_rc);
+    if (active_rc != 1 || cycle_rc != 1 || start_rc != 1 ||
+      activation != 3 || etohl(cycle) != static_cast<std::uint32_t>(DcCycleTimer::kCycleNs))
+    {
+      say("! 轴 %d SYNC0 读回未确认预期配置，保留返回码排查", slave);
+    }
+  }
+
   // 紧凑发送过程数据，帧尾的参考时钟读会刷新各从站 0x092C。
   // 差已经小于 1 µs 时顺手启动 SYNC0，并返回是否已经启动。
   bool distributeReferenceClock()
@@ -1313,6 +1337,7 @@ private:
       ecx_dcsync0(
         &context_, static_cast<std::uint16_t>(index), TRUE,
         static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+      logSync0Readback(index);
     }
     say("● 从站时钟差最大 %d ns，启动 SYNC0", worst);
     return true;
@@ -1391,6 +1416,7 @@ private:
       ecx_dcsync0(
         &context_, static_cast<std::uint16_t>(index), TRUE,
         static_cast<std::uint32_t>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
+      logSync0Readback(index);
     }
     say("● 从站时钟差最大 %d ns，启动 SYNC0", worst);
     return true;
