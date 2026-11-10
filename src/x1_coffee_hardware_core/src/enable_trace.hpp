@@ -13,8 +13,8 @@ namespace x1_coffee_hardware_core::detail
 struct EnableCycleDiagnostics
 {
   std::uint64_t send_started_us{0}, wake_late_us{0};
-  std::int64_t al6_age_us{-1};
-  std::uint16_t al6_state{0}, al6_code{0};
+  std::int64_t al_age_us{-1};
+  std::array<std::uint16_t, kCoffeeAxisCount> al_state{}, al_code{};
 };
 
 struct EnableTraceFrame
@@ -24,7 +24,7 @@ struct EnableTraceFrame
   std::int64_t dc_phase_ns{0};
   EnableCycleDiagnostics diagnostics{};
   std::uint64_t max_send_gap_us{0}, max_wake_late_us{0};
-  bool al6_changed{false};
+  std::uint32_t al_changed{0};
   int wkc{0}, expected_wkc{0}, minimum_wkc{0}, send_rc{0};
   bool operational{false}, summary{false};
   std::uint32_t changed_axes{0};
@@ -60,10 +60,17 @@ public:
     if (diagnostics.wake_late_us > max_wake_late_us_) {
       max_wake_late_us_ = diagnostics.wake_late_us;
     }
-    const bool al6_changed = diagnostics.al6_age_us >= 0 &&
-      (previous_diagnostics_.al6_age_us < 0 ||
-      diagnostics.al6_state != previous_diagnostics_.al6_state ||
-      diagnostics.al6_code != previous_diagnostics_.al6_code);
+    std::uint32_t al_changed = 0;
+    // 每台分别比较缓存，未取得快照时不把零值解释为真实状态。
+    for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+      if (diagnostics.al_age_us >= 0 &&
+        (previous_diagnostics_.al_age_us < 0 ||
+        diagnostics.al_state[i] != previous_diagnostics_.al_state[i] ||
+        diagnostics.al_code[i] != previous_diagnostics_.al_code[i]))
+      {
+        al_changed |= std::uint32_t{1} << i;
+      }
+    }
     previous_diagnostics_ = diagnostics;
     const bool phase_changed = !initialized_ || operational != operational_;
     if (!initialized_) {
@@ -108,12 +115,12 @@ public:
       }
     }
     const bool summary = phase_changed || now_us - last_summary_us_ >= kSummaryIntervalUs;
-    if (al6_changed || summary || changed != 0 || bad_wkc != previous_bad_wkc_ || send_rc <= 0) {
+    if (al_changed != 0 || summary || changed != 0 || bad_wkc != previous_bad_wkc_ || send_rc <= 0) {
       EnableTraceFrame frame;
       frame.diagnostics = diagnostics;
       frame.max_send_gap_us = max_send_gap_us_;
       frame.max_wake_late_us = max_wake_late_us_;
-      frame.al6_changed = al6_changed;
+      frame.al_changed = al_changed;
       frame.tick = tick_;
       frame.elapsed_us = now_us - started_us_;
       frame.operational = operational;

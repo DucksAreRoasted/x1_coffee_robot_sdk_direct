@@ -421,6 +421,22 @@ public:
       } else if (shortest_watchdog_ns < 0 || watchdog_ns < shortest_watchdog_ns) {
         shortest_watchdog_ns = watchdog_ns;
       }
+      // 启动周期前读取 SM2/SM3 原始寄存器；返回码不足时不当作有效配置。
+      for (int sm = 2; sm <= 3; ++sm) {
+        std::array<std::uint8_t, 8> raw{};
+        const int rc = ecx_FPRD(&context_.port, context_.slavelist[slave].configadr,
+          0x0800 + sm * 8, raw.size(), raw.data(), EC_TIMEOUTRET);
+        say("[x1-sm] slave=%d sm=%d rc=%d raw=%02x %02x %02x %02x %02x %02x %02x %02x",
+          slave, sm, rc, raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
+      }
+      // 只读取设备实际同步类型；不改已有 DC 模式。失败时保留 rc 和长度供诊断。
+      std::uint16_t sync_type = 0;
+      int sync_size = sizeof(sync_type);
+      const int sync_rc = ecx_SDOread(&context_, slave, 0x1C32, 0x01, FALSE,
+        &sync_size, &sync_type, EC_TIMEOUTRXM);
+      say("[x1-dc] slave=%d hasdc=%d sync_type_rc=%d size=%d sync_type=0x%04x planned_cycle_ns=%lld shift_ns=%d",
+        slave, context_.slavelist[slave].hasdc, sync_rc, sync_size, etohs(sync_type),
+        static_cast<long long>(DcCycleTimer::kCycleNs), DcCycleTimer::kSync0ShiftNs);
       const bool torque = torque_axis_[static_cast<std::size_t>(slave - 1)];
       const int expect_out = torque ? static_cast<int>(sizeof(TorqueOutput)) :
         static_cast<int>(sizeof(ZeroErrOutput));
@@ -677,9 +693,9 @@ private:
 
   static void printEnableTrace(const detail::EnableTraceFrame & frame)
   {
-    // 默认记录初始化汇总及第 6 从站 AL 变化；详细模式仍可记录全部事件。
+    // 默认记录初始化汇总及全部从站 AL 变化；详细模式仍可记录全部事件。
     if (std::getenv("X1_ECAT_DEBUG") == nullptr &&
-      (frame.operational || (!frame.summary && !frame.al6_changed))) {
+      (frame.operational || (!frame.summary && frame.al_changed == 0))) {
       return;
     }
     std::fprintf(
@@ -696,14 +712,21 @@ private:
       static_cast<long long>(frame.dc_phase_ns), static_cast<unsigned long long>(frame.dropped));
     std::fprintf(stderr,
       "[x1-cycle] tick=%llu max_send_call_gap_us=%llu max_wake_late_us=%llu "
-      "al6=0x%04x/0x%04x al6_age_us=%lld al6_changed=%d\n",
+      "al_age_us=%lld al_changed=0x%04x\n",
       static_cast<unsigned long long>(frame.tick),
       static_cast<unsigned long long>(frame.max_send_gap_us),
       static_cast<unsigned long long>(frame.max_wake_late_us),
-      frame.diagnostics.al6_state, frame.diagnostics.al6_code,
-      static_cast<long long>(frame.diagnostics.al6_age_us), frame.al6_changed ? 1 : 0);
+      static_cast<long long>(frame.diagnostics.al_age_us), frame.al_changed);
     for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
-      if (!frame.summary && (frame.changed_axes & (std::uint32_t{1} << i)) == 0) {
+      if (frame.summary || (frame.al_changed & (std::uint32_t{1} << i)) != 0) {
+        std::fprintf(stderr,
+          "[x1-al] tick=%llu slave=%zu state=0x%04x code=0x%04x age_us=%lld\n",
+          static_cast<unsigned long long>(frame.tick), i + 1,
+          frame.diagnostics.al_state[i], frame.diagnostics.al_code[i],
+          static_cast<long long>(frame.diagnostics.al_age_us));
+      }
+      if (!frame.summary &&
+        ((frame.changed_axes | frame.al_changed) & (std::uint32_t{1} << i)) == 0) {
         continue;
       }
       const auto & feedback = frame.feedback[i];
@@ -1049,7 +1072,7 @@ private:
       {
         std::uint16_t slstate = htoes(static_cast<std::uint16_t>(EC_STATE_OPERATIONAL));
         context_.slavelist[0].state = EC_STATE_OPERATIONAL;
-        ecx_BWR(
+        const int op_rc = ecx_BWR(
           &context_.port, 0, ECT_REG_ALCTL, sizeof(slstate), &slstate, kStatePollTimeoutUs);
         op_requested = true;
         op_requested_ = true;
@@ -1057,14 +1080,17 @@ private:
           // 官方示例在等待进入运行时，过程数据里已经是 0x0080，不是一直发 0x0006。
           cyclic_enable_flag_->store(true, std::memory_order_release);
         }
-        say("● 已连续发送有效输出，请求 15 台从站进入运行");
+        say("● 已连续发送有效输出，请求 15 台从站进入运行 tick=%d rc=%d dc_phase_ns=%lld",
+          cycle, op_rc, static_cast<long long>(detail::dcPhaseNs(last_dc, DcCycleTimer::kCycleNs)));
       }
       detail::EnableCycleDiagnostics diagnostics;
       diagnostics.wake_late_us = timer.wakeLateUs();
-      diagnostics.al6_state = etohs(startup_al[5].alstatus);
-      diagnostics.al6_code = etohs(startup_al[5].alstatuscode);
+      for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+        diagnostics.al_state[i] = etohs(startup_al[i].alstatus);
+        diagnostics.al_code[i] = etohs(startup_al[i].alstatuscode);
+      }
       if (startup_al_time != std::chrono::steady_clock::time_point{}) {
-        diagnostics.al6_age_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        diagnostics.al_age_us = std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::steady_clock::now() - startup_al_time).count();
       }
       diagnostics.send_started_us = std::chrono::duration_cast<std::chrono::microseconds>(

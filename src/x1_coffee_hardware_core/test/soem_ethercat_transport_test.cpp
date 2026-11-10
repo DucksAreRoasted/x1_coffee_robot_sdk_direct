@@ -710,23 +710,64 @@ TEST(EnableTrace, retains_timing_peaks_and_pre_ack_al_changes)
   diagnostics.send_started_us = 1000;
   trace.capture(feedback, command, 1010, false, 45, 45, 1, 0, diagnostics);
   ASSERT_TRUE(trace.pop(&frame));
-  EXPECT_EQ(frame.diagnostics.al6_age_us, -1);
-  diagnostics = {121000, 119000, 0, 0x14, 0x1b};
+  EXPECT_EQ(frame.diagnostics.al_age_us, -1);
+  diagnostics.send_started_us = 121000;
+  diagnostics.wake_late_us = 119000;
+  diagnostics.al_age_us = 0;
+  diagnostics.al_state[5] = 0x14;
+  diagnostics.al_code[5] = 0x1b;
   trace.capture(feedback, command, 121010, false, 42, 45, 1, 0, diagnostics);
   ASSERT_TRUE(trace.pop(&frame));
-  EXPECT_TRUE(frame.al6_changed);
+  EXPECT_NE(frame.al_changed & (1u << 5), 0u);
   EXPECT_EQ(frame.max_send_gap_us, 120000u);
   EXPECT_EQ(frame.max_wake_late_us, 119000u);
   EXPECT_EQ(frame.low_wkc_frames, 1u);
-  diagnostics = {122000, 5, 0, 0x04, 0};
+  diagnostics.send_started_us = 122000;
+  diagnostics.wake_late_us = 5;
+  diagnostics.al_state[5] = 0x04;
+  diagnostics.al_code[5] = 0;
   trace.capture(feedback, command, 122010, false, 42, 45, 1, 0, diagnostics);
   ASSERT_TRUE(trace.pop(&frame));
-  EXPECT_TRUE(frame.al6_changed);
-  EXPECT_EQ(frame.diagnostics.al6_state, 0x04);
+  EXPECT_NE(frame.al_changed & (1u << 5), 0u);
+  EXPECT_EQ(frame.diagnostics.al_state[5], 0x04);
   EXPECT_EQ(frame.max_wake_late_us, 119000u);
   diagnostics.send_started_us = 123000;
   trace.capture(feedback, command, 123010, true, 45, 45, 1, 0, diagnostics);
   ASSERT_TRUE(trace.pop(&frame));
   EXPECT_EQ(frame.max_send_gap_us, 120000u);
   EXPECT_EQ(frame.max_wake_late_us, 119000u);
+}
+
+// 逐台注入 AL 故障和恢复，验证 15 台均会产生独立变化位，缓存变旧不产生假事件。
+TEST(EnableTrace, reports_each_slave_al_transition_without_repeating_cached_samples)
+{
+  using namespace x1_coffee_hardware_core::detail;
+  EnableTrace trace;
+  EnableTraceFrame frame;
+  std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
+  std::array<SlaveCommand, kCoffeeAxisCount> command{};
+  EnableCycleDiagnostics diagnostics;
+  diagnostics.al_age_us = 0;
+  diagnostics.al_state.fill(8);
+  std::uint64_t now = 1000;
+  trace.capture(feedback, command, now, false, 45, 45, 1, 0, diagnostics);
+  ASSERT_TRUE(trace.pop(&frame));
+  EXPECT_EQ(frame.al_changed, 0x7fffu);
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    diagnostics.al_state[i] = 0x14;
+    diagnostics.al_code[i] = 0x1b;
+    trace.capture(feedback, command, ++now, false, 45, 45, 1, 0, diagnostics);
+    ASSERT_TRUE(trace.pop(&frame));
+    EXPECT_EQ(frame.al_changed, 1u << i);
+    EXPECT_EQ(frame.diagnostics.al_code[i], 0x1b);
+    diagnostics.al_age_us = 1000;
+    trace.capture(feedback, command, ++now, false, 45, 45, 1, 0, diagnostics);
+    EXPECT_FALSE(trace.pop(&frame));
+    diagnostics.al_age_us = 0;
+    diagnostics.al_state[i] = 8;
+    diagnostics.al_code[i] = 0;
+    trace.capture(feedback, command, ++now, false, 45, 45, 1, 0, diagnostics);
+    ASSERT_TRUE(trace.pop(&frame));
+    EXPECT_EQ(frame.al_changed, 1u << i);
+  }
 }
