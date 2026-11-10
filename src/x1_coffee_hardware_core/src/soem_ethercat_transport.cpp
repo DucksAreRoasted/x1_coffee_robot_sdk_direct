@@ -1277,15 +1277,24 @@ private:
     std::uint8_t activation = 0;
     std::uint32_t cycle = 0;
     std::uint64_t start = 0;
+    // 尚未请求 SAFE-OP，使用 SOEM 常规 2 ms 返回时限；不放宽周期帧的 200 µs 时限。
     const int active_rc = ecx_FPRD(&context_.port, address, ECT_REG_DCSYNCACT,
-      sizeof(activation), &activation, kStatePollTimeoutUs);
+      sizeof(activation), &activation, EC_TIMEOUTRET);
     const int cycle_rc = ecx_FPRD(&context_.port, address, ECT_REG_DCCYCLE0,
-      sizeof(cycle), &cycle, kStatePollTimeoutUs);
+      sizeof(cycle), &cycle, EC_TIMEOUTRET);
     const int start_rc = ecx_FPRD(&context_.port, address, ECT_REG_DCSTART0,
-      sizeof(start), &start, kStatePollTimeoutUs);
-    say("[x1-sync0] slave=%d activation=0x%02x rc=%d cycle_ns=%u rc=%d start_ns=%llu rc=%d",
-      slave, activation, active_rc, etohl(cycle), cycle_rc,
-      static_cast<unsigned long long>(etohll(start)), start_rc);
+      sizeof(start), &start, EC_TIMEOUTRET);
+    // 无有效应答时输出 unknown，避免把本地初始化的零误当成设备配置。
+    std::ostringstream report;
+    report << "[x1-sync0] slave=" << slave << " activation=";
+    if (active_rc == 1) {report << "0x" << std::hex << static_cast<unsigned>(activation) << std::dec;}
+    else {report << "unknown";}
+    report << " rc=" << active_rc << " cycle_ns=";
+    if (cycle_rc == 1) {report << etohl(cycle);} else {report << "unknown";}
+    report << " rc=" << cycle_rc << " start_ns=";
+    if (start_rc == 1) {report << etohll(start);} else {report << "unknown";}
+    report << " rc=" << start_rc;
+    say("%s", report.str().c_str());
     if (active_rc != 1 || cycle_rc != 1 || start_rc != 1 ||
       activation != 3 || etohl(cycle) != static_cast<std::uint32_t>(DcCycleTimer::kCycleNs))
     {
