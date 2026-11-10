@@ -29,6 +29,10 @@ class UrdfGravity
 {
 public:
   bool load(const std::string & path, std::string * error);
+  struct TcpPose { std::array<double, 3> position{}; std::array<double, 9> rotation{}; };
+  // 双臂实际TCP位姿，用于与控制模式无关的速度保护。
+  bool tcpPoses(const std::array<double, kCoffeeAxisCount> & q,
+    std::array<TcpPose, 2> * output) const;
   bool ready() const {return ready_;}
   std::uint64_t sourceFingerprint() const {return source_fingerprint_;}
   bool torques(
@@ -101,6 +105,7 @@ private:
   std::vector<FlatJoint> flat_joints_;
   std::vector<std::vector<int>> flat_children_;
   int root_id_{-1};
+  int tcp_ids_[2]{-1, -1};
   void buildFlat();
   bool torquesOf(
     const std::vector<FlatLink> & links,

@@ -14,6 +14,7 @@
 #include "x1_coffee_hardware_core/gtn_transport.hpp"
 #include "x1_coffee_hardware_core/urdf_gravity.hpp"
 #include "x1_coffee_hardware_core/current_gravity_file.hpp"
+#include "x1_coffee_hardware_core/tcp_speed_guard.hpp"
 
 namespace x1_coffee_hardware_core
 {
@@ -224,6 +225,8 @@ private:
   double mit_kd_{24.0};
   double mit_limit_{1000.0};
   // URDF 静重力，单位 N·m。换成 0x6071 时只除以该轴读到的 0x6076。
+  TcpSpeedGuard tcp_speed_guard_;
+  bool tcp_speed_fault_{false};
   UrdfGravity gravity_;
   bool gravity_ready_{false};
   double rated_torque_nm_{50.0};

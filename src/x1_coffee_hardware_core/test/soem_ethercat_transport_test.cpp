@@ -864,14 +864,23 @@ TEST(SoemEthercatTransport, current_gravity_modes_limits_exit_and_feedback_failu
   ASSERT_TRUE(transport.enterCurrentGravity());
   link->replay();link->replay();
   // 邻域外返回当前位置保持，不继续外推补偿电流。
-  link->position_shift = 40;
-  link->replay();
+  // 用低速连续测量越过邻域，瞬移现在应优先触发全局速度关断。
+  for (int shift = 1; shift <= 40; ++shift) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    link->position_shift = shift;
+    link->replay();
+    if (!transport.currentGravityStatus()) {break;}
+  }
   const auto domain_status = transport.currentGravityStatus();
   EXPECT_FALSE(domain_status);
   EXPECT_NE(domain_status.detail.find("辨识姿态邻域"), std::string::npos);
   EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
-  EXPECT_EQ(link->last[8].target_position, 9040);
-  link->position_shift = 0;
+  EXPECT_EQ(link->last[8].target_position, 9000 + link->position_shift);
+  while (link->position_shift > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    --link->position_shift;
+    link->replay();
+  }
   link->replay();link->replay();
   ASSERT_TRUE(transport.enterCurrentGravity());
   link->feedback_valid = false;
@@ -904,4 +913,31 @@ TEST(SoemEthercatTransport, current_gravity_mode_timeout_does_not_claim_success)
   EXPECT_FALSE(transport.currentGravityStatus());
   EXPECT_EQ(link->last[8].control_word, 0x0006);
   EXPECT_FALSE(transport.enterCurrentGravity());
+}
+
+TEST(SoemEthercatTransport, tcp_overspeed_shuts_down_all_axes_in_csp_and_cst)
+{
+  for (bool torque : {false, true}) {
+    auto owned = std::make_unique<FakeLink>();auto * link = owned.get();
+    link->status = 0x1237;link->actual_current = 0;
+    SoemEthercatTransport transport(std::move(owned));
+    auto config = parameters(true);config["gravity_urdf"] = X1_GRAVITY_URDF;
+    int axis = 0;
+    for (const auto & descriptor : coffeeAxisDescriptors()) {
+      config["model_zero." + std::string(descriptor.joint_name)] = std::to_string(-(++axis));
+    }
+    ASSERT_TRUE(transport.configure(config));ASSERT_TRUE(transport.activate());
+    for (int i = 0; i < 1002; ++i) {link->replay();}
+    if (torque) {
+      ASSERT_TRUE(transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE));
+      ASSERT_TRUE(transport.enterCurrentGravity());link->replay();link->replay();
+    }
+    link->position_shift = 40;link->replay();
+    for (const auto & command : link->last) {
+      EXPECT_EQ(command.control_word, 0x0006);EXPECT_EQ(command.target_torque, 0);
+    }
+    EXPECT_FALSE(transport.startMotion());
+    link->replay();
+    for (const auto & command : link->last) {EXPECT_EQ(command.control_word, 0x0006);}
+  }
 }

@@ -140,3 +140,47 @@ TEST(UrdfGravity, currentBasisRejectsInvalidInput)
   q[3] = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(gravity.currentBasis(q, false, &basis));
 }
+
+#include "x1_coffee_hardware_core/tcp_speed_guard.hpp"
+TEST(TcpSpeedGuard, eitherArmTranslationTripsAndLatches)
+{
+  for (int side = 0; side < 2; ++side) {
+    x1_coffee_hardware_core::TcpSpeedGuard guard;
+    std::array<UrdfGravity::TcpPose, 2> poses{};
+    for (auto & p : poses) {p.rotation = {1,0,0,0,1,0,0,0,1};}
+    ASSERT_TRUE(guard.update(poses, 1.0));
+    poses[side].position[0] = 0.0016;
+    EXPECT_FALSE(guard.update(poses, 1.01));
+    EXPECT_FALSE(guard.update(poses, 1.02));
+  }
+}
+TEST(TcpSpeedGuard, angularSpeedAndStaleMeasurementTrip)
+{
+  std::array<UrdfGravity::TcpPose, 2> poses{};
+  for (auto & p : poses) {p.rotation = {1,0,0,0,1,0,0,0,1};}
+  x1_coffee_hardware_core::TcpSpeedGuard guard;
+  ASSERT_TRUE(guard.update(poses, 1.0));
+  const double a = 0.006;
+  poses[1].rotation = {std::cos(a),-std::sin(a),0,std::sin(a),std::cos(a),0,0,0,1};
+  EXPECT_FALSE(guard.update(poses, 1.01));
+  guard = {};
+  ASSERT_TRUE(guard.update(poses, 1.0));
+  EXPECT_FALSE(guard.update(poses, 1.03));
+}
+TEST(TcpSpeedGuard, normalMotionAndNonfiniteFeedback)
+{
+  UrdfGravity model;std::string error;
+  ASSERT_TRUE(model.load(X1_GRAVITY_URDF, &error));
+  std::array<double, kCoffeeAxisCount> q{};
+  std::array<UrdfGravity::TcpPose, 2> poses{};
+  ASSERT_TRUE(model.tcpPoses(q, &poses));
+  x1_coffee_hardware_core::TcpSpeedGuard guard;
+  ASSERT_TRUE(guard.update(poses, 1.0));
+  q[0] = .0001;
+  ASSERT_TRUE(model.tcpPoses(q, &poses));
+  EXPECT_TRUE(guard.update(poses, 1.001));
+  poses[0].position[0] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(guard.update(poses, 1.002));
+  q[0] = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(model.tcpPoses(q, &poses));
+}

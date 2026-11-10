@@ -107,4 +107,15 @@ class PlanTest(unittest.TestCase):
                 self.assertEqual(len({s['pose_id'] for s in ordered[i:i+4]}),1)
                 self.assertEqual([s['approach'] for s in ordered[i:i+4]],[1,1,-1,-1])
 
+    def test_expanded_plan_respects_clearance_filter_and_envelope(self):
+        seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+
+                        float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+        def clearance(q):
+            if q[8]<seed[8]-.1:raise ValueError('模拟贴近躯干')
+        plan=make_plan(seed,self.model,'r',30,.35,clearance)
+        self.assertGreater(max(abs(np.array(s['q'])[9:]-seed[9:]).max()for s in plan),.2)
+        for step in plan:
+            clearance(step['q']);check_local_pose(seed,step['q'],'r',.4)
+        with self.assertRaises(ValueError):make_plan(seed,self.model,'r',30,.36)
+
 if __name__=='__main__':unittest.main()

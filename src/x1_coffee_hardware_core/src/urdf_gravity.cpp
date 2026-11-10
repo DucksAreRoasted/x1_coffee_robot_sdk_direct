@@ -272,6 +272,8 @@ void UrdfGravity::buildFlat()
     }
     flat_links_.push_back(link);
   }
+  tcp_ids_[0] = ids.count("left_gripper_tcp") ? ids["left_gripper_tcp"] : -1;
+  tcp_ids_[1] = ids.count("right_gripper_tcp") ? ids["right_gripper_tcp"] : -1;
   root_id_ = ids.count("dummy_root") ? ids["dummy_root"] : 0;
   flat_children_.resize(flat_links_.size());
   flat_joints_.resize(joints_.size());
@@ -397,6 +399,37 @@ bool UrdfGravity::torquesOf(
     }
     // tau 是重力拖关节的力矩。电机前馈要把它抵消掉。
     (*tau_nm)[static_cast<std::size_t>(joint.axis_index)] = -tau;
+  }
+  return true;
+}
+
+bool UrdfGravity::tcpPoses(const std::array<double, kCoffeeAxisCount> & q,
+  std::array<TcpPose, 2> * output) const
+{
+  if (!output || !ready_ || root_id_ < 0 || tcp_ids_[0] < 0 || tcp_ids_[1] < 0 ||
+    flat_links_.size() > kMaxLinks) {return false;}
+  for (double v : q) {if (!std::isfinite(v)) {return false;}}
+  Pose poses[kMaxLinks];
+  const auto walk = [&](auto && self, int link, const Pose & pose) -> void {
+      poses[link] = pose;
+      for (int index : flat_children_[static_cast<std::size_t>(link)]) {
+        const auto & j = flat_joints_[static_cast<std::size_t>(index)];
+        Pose child = multiply(pose, j.origin_r, {j.xyz[0], j.xyz[1], j.xyz[2]});
+        if (j.revolute && j.axis_index >= 0) {
+          double spin[3][3];
+          rodrigues({j.axis[0], j.axis[1], j.axis[2]}, q[j.axis_index], spin);
+          child = multiplyRotation(child, spin);
+        }
+        self(self, j.child, child);
+      }
+    };
+  walk(walk, root_id_, Pose{});
+  for (int side = 0; side < 2; ++side) {
+    const auto & pose = poses[tcp_ids_[side]];
+    for (int r = 0; r < 3; ++r) {
+      (*output)[side].position[r] = pose.p[r];
+      for (int c = 0; c < 3; ++c) {(*output)[side].rotation[3*r+c] = pose.r[r][c];}
+    }
   }
   return true;
 }

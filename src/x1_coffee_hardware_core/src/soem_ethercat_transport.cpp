@@ -2042,6 +2042,8 @@ Result SoemEthercatTransport::activate()
     // 上一轮可能已经锁过位置、走过接通节拍。重开前清掉，避免沿用失败那次的状态。
     cyclic_enable_.store(false, std::memory_order_release);
     shutdown_outputs_ = false;
+    tcp_speed_guard_ = TcpSpeedGuard{};
+    tcp_speed_fault_ = false;
     current_active_ = false;
     mit_active_ = false;
     motion_armed_ = false;
@@ -2262,6 +2264,9 @@ Result SoemEthercatTransport::startMotion()
     return Result::fail(CoreError::kWriteFailed, "MIT 占用中，先退出再允许位置运动");
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
+  if (tcp_speed_fault_ || shutdown_outputs_) {
+    return Result::fail(CoreError::kWriteFailed, "关断已锁存，禁止重新允许运动；需检查原因后重新初始化");
+  }
   // 只打开跟随。目标仍是锁存位置，下一次 write 才把 MoveIt 的位置写进 0x607A。
   motion_armed_ = true;
   return Result{CoreError::kOk, "已允许周期同步位置，后续位置指令按速度上限写入 0x607A"};
@@ -2436,6 +2441,30 @@ void SoemEthercatTransport::onCycle(
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
   last_cycle_at_ = std::chrono::steady_clock::now();
+  // 全局速度保护先于位置插补和力矩更新，所有运行模式共用关断路径。
+  if (gravity_ready_ && drives_enabled_ && all_enabled_logged_ && official_enable_step_ > kOfficialEnableEnd &&
+    !shutdown_outputs_ && !tcp_speed_fault_)
+  {
+    std::array<double, kCoffeeAxisCount> q{};
+    bool valid = true;
+    for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+      valid = valid && feedback[i].valid && (feedback[i].status_word & 0x006F) == 0x0027;
+      q[i] = pulseToPosition(i, feedback[i].actual_position);
+    }
+    std::array<UrdfGravity::TcpPose, 2> poses{};
+    const double now = std::chrono::duration<double>(last_cycle_at_.time_since_epoch()).count();
+    if (!valid || !gravity_.tcpPoses(q, &poses) || !tcp_speed_guard_.update(poses, now)) {
+      tcp_speed_fault_ = true;
+      shutdown_outputs_ = true;
+      motion_armed_ = false;
+      path_active_ = false;
+      std::fprintf(stderr,
+        "[x1-tcp-guard] 全轴关断抱闸锁存：TCP超速或反馈/时间无效；"
+        "left=%.4fm/s %.4frad/s right=%.4fm/s %.4frad/s；阈值0.15m/s 0.5rad/s\n",
+        tcp_speed_guard_.linear[0], tcp_speed_guard_.angular[0],
+        tcp_speed_guard_.linear[1], tcp_speed_guard_.angular[1]);
+    }
+  }
   if (current_active_) {updateCurrentGravity(feedback);}
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
   if (mit_active_ && !current_active_ && gravity_ready_) {

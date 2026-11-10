@@ -21,19 +21,20 @@ def arm_indices(side):
     return list(range(1,8)) if side=='l' else list(range(8,15))
 
 
-def check_local_pose(seed,q,side='r'):
+def check_local_pose(seed,q,side='r',radius=LOCAL_RADIUS_RAD):
     seed=np.asarray(seed,float);q=np.asarray(q,float)
     if seed.shape!=(15,) or q.shape!=(15,) or not np.isfinite([seed,q]).all():
         raise ValueError('局部范围检查收到无效角度')
     moving=arm_indices(side)
     delta=np.abs(q-seed)
     for j,name in enumerate(JOINTS):
-        limit=LOCAL_RADIUS_RAD if j in moving else FIXED_DRIFT_RAD
+        limit=radius if j in moving else FIXED_DRIFT_RAD
         if delta[j]>limit+1e-12:
             raise ValueError(f'{name} 偏离启动角 {delta[j]:.4f} rad，超过局部范围 {limit:.2f} rad')
 
 
-def make_plan(seed,model,side='r',pose_count=15):
+def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None):
+    if not np.isfinite(target_radius) or not .15<=target_radius<=.35:raise ValueError('采样半径须为0.15到0.35rad')
     if not isinstance(pose_count,int) or not 15<=pose_count<=100:
         raise ValueError('采样姿态数须为15到100')
     moving=arm_indices(side)
@@ -53,21 +54,33 @@ def make_plan(seed,model,side='r',pose_count=15):
     for j in moving:
         # 目标为正反接近点预留 0.04 rad，再为软限位保留 0.05 rad。
         # 先求可用区间再采样，不裁剪已生成姿态，避免重复点和单侧接近。
-        lo=max(seed[j]-.15,bounds[j][0]+.09)
-        hi=min(seed[j]+.15,bounds[j][1]-.09)
+        lo=max(seed[j]-target_radius,bounds[j][0]+.09)
+        hi=min(seed[j]+target_radius,bounds[j][1]-.09)
         if hi-lo < .04:
             raise ValueError(f'{JOINTS[j]} 可用辨识区间仅 {hi-lo:.4f} rad，请先人工移到更居中的安全姿态')
         low.append(lo);high.append(hi)
     rng=np.random.default_rng(17); plan=[]
-    for i in range(pose_count):
-        q=seed.copy();q[moving]=rng.uniform(low,high)
+    if clearance is not None:clearance(seed)
+    attempts=0
+    while len(plan)<pose_count*4:
+        attempts+=1
+        if attempts>1000:raise ValueError('无法生成足够远离躯干的姿态，请先调整起点；不会自动缩小净距')
+        i=len(plan)//4;q=seed.copy();q[moving]=rng.uniform(low,high);block=[]
         for direction in (1,-1):
             approach=q.copy();approach[moving]-=direction*.04
-            plan.extend([dict(pose_id=f'pose{i+1:02}',approach=direction,record=False,q=approach.tolist()),
-                         dict(pose_id=f'pose{i+1:02}',approach=direction,record=True,q=q.tolist())])
+            block.extend([dict(pose_id=f'pose{i+1:02}',approach=direction,record=False,q=approach.tolist()),
+                          dict(pose_id=f'pose{i+1:02}',approach=direction,record=True,q=q.tolist())])
+        if clearance is not None:
+            previous=plan[-1]['q'] if plan else seed
+            try:
+                for step in block:
+                    for point in path_points(previous,step['q']):clearance(point)
+                    previous=step['q']
+            except ValueError:continue
+        plan.extend(block)
     # 腰和未选手臂保持原位；只对会移动的手臂要求额外限位余量。
     for step in plan:
-        check_local_pose(seed,step['q'],side)
+        check_local_pose(seed,step['q'],side,target_radius+.05)
         for j in moving:
             if not bounds[j][0]+.05-1e-12 <= step['q'][j] <= bounds[j][1]-.05+1e-12:
                 raise ValueError('采样姿态接近或超过限位 '+JOINTS[j])
@@ -114,6 +127,7 @@ def main():
     p.add_argument('--inventory',type=Path,default=Path(__file__).with_name('motor_inventory.json'))
     p.add_argument('--efficiency',type=float,default=.7,help='电流换算效率先验假设，并非实测值')
     p.add_argument('--additional-gripper-kg',type=float,nargs=2,default=[0.,0.],help='URDF之外额外负载；当前CAD已包含夹爪')
+    p.add_argument('--target-radius',type=float,default=.35,help='采样目标相对起点最大角差，默认0.35rad')
     p.add_argument('--poses',type=int,default=30,help='双向配对姿态数，默认30，范围15到100')
     p.add_argument('--output-dir',type=Path,required=True)
     p.add_argument('--execute',action='store_true');p.add_argument('--operator-ready',action='store_true')
@@ -142,6 +156,10 @@ def main():
         manifest[name]=dict(source=str(source_paths[name].resolve()),sha256=hashlib.sha256(content).hexdigest())
     (inputs/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
     model=Model(a.urdf,[1,1])
+    from ament_index_python.packages import get_package_share_directory
+    from body_clearance import BodyClearance
+    clearance=BodyClearance(a.urdf,get_package_share_directory('arm_describle'))
+    def body_check(q):clearance.check(model,q,a.side)
     import rclpy
     from rclpy.qos import qos_profile_sensor_data
     from std_msgs.msg import Float64MultiArray,String
@@ -179,7 +197,8 @@ def main():
     def health():
         if fault:raise RuntimeError(fault[0])
         if time.monotonic()-received>.5:raise RuntimeError('电机反馈过期')
-        if seed is not None:check_local_pose(seed,qnow(),a.side)
+        if seed is not None:check_local_pose(seed,qnow(),a.side,a.target_radius+.05)
+        if seed is not None:body_check(qnow())
     def call(client,request):
         future=client.call_async(request);end=time.monotonic()+3
         while not future.done() and time.monotonic()<end:spin();health()
@@ -188,6 +207,7 @@ def main():
     def qnow():return np.array([latest[j].position for j in JOINTS])
     def collision(start,end):
         for q in path_points(start,end):
+            body_check(q)
             req=GetStateValidity.Request();req.robot_state.joint_state.name=JOINTS
             req.robot_state.joint_state.position=q.tolist()
             if not call(validity,req).valid:raise RuntimeError('MoveIt 路径采样点无效/碰撞')
@@ -195,8 +215,15 @@ def main():
         print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
         end=time.monotonic()+10
         while not latest and time.monotonic()<end:spin()
-        health();seed=qnow();plan=make_plan(seed,model,a.side,a.poses)
-        plan,saved=optimize_visit_order(seed,plan)
+        health();seed=qnow();plan=make_plan(seed,model,a.side,a.poses,a.target_radius,body_check)
+        ordered,saved=optimize_visit_order(seed,plan)
+        try:
+            previous=seed
+            for step in ordered:
+                for point in path_points(previous,step['q']):body_check(point)
+                previous=step['q']
+            plan=ordered
+        except ValueError:saved=0.  # 重排路径贴近躯干时保留已筛选的原顺序。
         print(f'[提速] 保留{a.poses}个双向姿态；访问顺序预计减少运动 {saved:.1f}s；非采样点停稳确认0.2s。',flush=True)
         if not validity.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
         moving=arm_indices(a.side)
@@ -208,7 +235,7 @@ def main():
             if index==1 or index%4==0:
                 print(f'[路径检查] {index}/{len(plan)}段',flush=True)
             collision(previous,step['q']);previous=np.array(step['q'])
-        (a.output_dir/'plan.json').write_text(json.dumps({'side':a.side,'pose_count':a.poses,'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'local_radius_rad':LOCAL_RADIUS_RAD,'fixed_drift_rad':FIXED_DRIFT_RAD,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
+        (a.output_dir/'plan.json').write_text(json.dumps({'side':a.side,'pose_count':a.poses,'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'local_radius_rad':a.target_radius+.05,'target_radius_rad':a.target_radius,'body_clearance_m':clearance.margin,'fixed_drift_rad':FIXED_DRIFT_RAD,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
         print('计划已检查并保存：',a.output_dir/'plan.json',flush=True)
         if not a.execute:return
         if not stop.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 PVT 取消服务')
