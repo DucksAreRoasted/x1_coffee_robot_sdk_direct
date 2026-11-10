@@ -66,3 +66,14 @@ python3 tools/gravity_identification/test_identification.py
 先以位置模式验证离线模型在留出姿态的残差，再单臂支撑下低力矩验证正方向、重力补偿和阻尼，最后才双臂。CSP→CST 应锁定当前角度作为交接基准，并平滑接入力矩；退出应先确认当前位置与模式状态。软件停止不能代替硬件急停。此工具不授权或执行上述动作。
 
 本次不自动覆盖 `right_arm_gravity.yaml`，也不修改现有右臂标定流程；它会自行写运行参数，不能当作本工具的等价采集入口。无真实双向样本时，不能给出“已完成辨识”的最终数值。
+
+## 从已有日志准备换算草稿
+
+可用历史启动日志提取所有轴的额定扭矩，不需要重新使能机器人：
+
+```bash
+python3 tools/gravity_identification/prepare.py /path/to/launch.log --output /tmp/x1_conversion.json
+python3 tools/gravity_identification/test_prepare.py
+```
+
+工具拒绝缺轴或多轮额定值冲突的日志，保存源日志哈希。方向 `sign`、方向验证标志和负载信息保持未确认。只凭质量拟合得到符号可能掩盖模型错误；不能直接将 `torque_signs_verified` 改成 true 跳过现场核对。历史日志值还需与当前电机及负载工况匹配。
