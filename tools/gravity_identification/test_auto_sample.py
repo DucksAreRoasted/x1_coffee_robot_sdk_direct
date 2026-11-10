@@ -1,8 +1,8 @@
 import unittest
 from pathlib import Path
 import numpy as np
-from model import Model
-from auto_sample import make_plan,path_points
+from model import Model,JOINTS
+from auto_sample import make_plan,path_points,check_local_pose
 
 class PlanTest(unittest.TestCase):
     def setUp(self):
@@ -18,6 +18,36 @@ class PlanTest(unittest.TestCase):
     def test_limits_and_nonfinite_refused(self):
         for seed in [np.full(15,np.nan),np.full(15,100)]:
             with self.assertRaises(ValueError):make_plan(seed,self.model)
+    def test_right_joint_at_both_limits_keeps_two_sided_approach_inside_margin(self):
+        for edge in ['lower','upper']:
+            seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+            seed[9]=float(self.model.by_name['Joint_r2'].find('limit').get(edge))
+            plan=make_plan(seed,self.model)
+            for step in plan:
+                check_local_pose(seed,step['q'])
+                np.testing.assert_allclose(step['q'][:8],seed[:8])
+                for j in range(8,15):
+                    limit=self.model.by_name[JOINTS[j]].find('limit')
+                    self.assertGreaterEqual(step['q'][j],float(limit.get('lower'))+.05-1e-12)
+                    self.assertLessEqual(step['q'][j],float(limit.get('upper'))-.05+1e-12)
+            for i in range(0,60,4):
+                self.assertLess(plan[i]['q'][9],plan[i+1]['q'][9])
+                self.assertGreater(plan[i+2]['q'][9],plan[i+3]['q'][9])
+    def test_local_envelope_rejects_full_turn_and_drift(self):
+        seed=np.zeros(15)
+        for j,delta in [(9,2*np.pi),(9,-2*np.pi),(14,.201),(0,.021),(7,-.021)]:
+            q=seed.copy();q[j]=delta
+            with self.assertRaisesRegex(ValueError,'超过局部范围'):check_local_pose(seed,q)
+        q=seed.copy();q[8:]=.20;q[:8]=.02
+        check_local_pose(seed,q)
+        q[9]=np.nan
+        with self.assertRaises(ValueError):check_local_pose(seed,q)
+
+    def test_narrow_range_is_rejected(self):
+        limit=self.model.by_name['Joint_r2'].find('limit')
+        limit.set('lower','-.1');limit.set('upper','.1')
+        seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+        with self.assertRaisesRegex(ValueError,'可用辨识区间'):make_plan(seed,self.model)
     def test_segment_includes_endpoints_and_spacing(self):
         p=path_points(np.zeros(15),np.ones(15)*.127)
         np.testing.assert_allclose(p[0],0);np.testing.assert_allclose(p[-1],.127)

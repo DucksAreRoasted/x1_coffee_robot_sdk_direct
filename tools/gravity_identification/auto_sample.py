@@ -8,23 +8,57 @@ from record import validated_joints
 from identify import paired,fit
 
 
+# 自动采样只在启动角附近移动，不做整圈等价角搜索。
+LOCAL_RADIUS_RAD=.20
+FIXED_DRIFT_RAD=.02
+
+
+def check_local_pose(seed,q):
+    seed=np.asarray(seed,float);q=np.asarray(q,float)
+    if seed.shape!=(15,) or q.shape!=(15,) or not np.isfinite([seed,q]).all():
+        raise ValueError('局部范围检查收到无效角度')
+    delta=np.abs(q-seed)
+    for j,name in enumerate(JOINTS):
+        limit=LOCAL_RADIUS_RAD if j>=8 else FIXED_DRIFT_RAD
+        if delta[j]>limit+1e-12:
+            raise ValueError(f'{name} 偏离启动角 {delta[j]:.4f} rad，超过局部范围 {limit:.2f} rad')
+
+
 def make_plan(seed,model):
     seed=np.asarray(seed,float)
     if seed.shape!=(15,) or not np.isfinite(seed).all(): raise ValueError('初始角无效')
+    bounds=[]
+    for j,name in enumerate(JOINTS):
+        limit=model.by_name[name].find('limit')
+        if limit is None: raise ValueError('缺少 URDF 限位 '+name)
+        lower,upper=float(limit.get('lower')),float(limit.get('upper'))
+        if not np.isfinite([lower,upper]).all() or lower>=upper:
+            raise ValueError('无效 URDF 限位 '+name)
+        if not lower<=seed[j]<=upper:
+            raise ValueError(f'起点越限 {name}: {seed[j]:.4f}，允许 [{lower:.4f}, {upper:.4f}]')
+        bounds.append((lower,upper))
+    low=[];high=[]
+    for j in range(8,15):
+        # 目标为正反接近点预留 0.04 rad，再为软限位保留 0.05 rad。
+        # 先求可用区间再采样，不裁剪已生成姿态，避免重复点和单侧接近。
+        lo=max(seed[j]-.15,bounds[j][0]+.09)
+        hi=min(seed[j]+.15,bounds[j][1]-.09)
+        if hi-lo < .04:
+            raise ValueError(f'{JOINTS[j]} 可用辨识区间仅 {hi-lo:.4f} rad，请先人工移到更居中的安全姿态')
+        low.append(lo);high.append(hi)
     rng=np.random.default_rng(17); plan=[]
-    # 从现场起点周围生成有限幅度的多关节姿态，不复用旧自动标定的固定大范围姿态。
     for i in range(15):
-        q=seed.copy();q[8:]+=rng.uniform(-.15,.15,7)
+        q=seed.copy();q[8:]=rng.uniform(low,high)
         for direction in (1,-1):
             approach=q.copy();approach[8:]-=direction*.04
             plan.extend([dict(pose_id=f'pose{i+1:02}',approach=direction,record=False,q=approach.tolist()),
                          dict(pose_id=f'pose{i+1:02}',approach=direction,record=True,q=q.tolist())])
+    # 腰和左臂保持原位；只对会移动的右臂要求额外限位余量。
     for step in plan:
-        for j,name in enumerate(JOINTS):
-            limit=model.by_name[name].find('limit')
-            if limit is None: raise ValueError('缺少 URDF 限位 '+name)
-            if not float(limit.get('lower'))+.05 <= step['q'][j] <= float(limit.get('upper'))-.05:
-                raise ValueError('采样姿态接近或超过限位 '+name)
+        check_local_pose(seed,step['q'])
+        for j in range(8,15):
+            if not bounds[j][0]+.05-1e-12 <= step['q'][j] <= bounds[j][1]-.05+1e-12:
+                raise ValueError('采样姿态接近或超过限位 '+JOINTS[j])
     return plan
 
 
@@ -51,7 +85,7 @@ def main():
     from moveit_msgs.srv import GetStateValidity
     from x1_coffee_interfaces.msg import MotorStateArray
     rclpy.init();node=rclpy.create_node('x1_right_auto_sample')
-    latest={};results={};fault=[];sent_sequences=set();last_stamp=0;received=0.;motion_started=False
+    latest={};results={};fault=[];sent_sequences=set();last_stamp=0;received=0.;motion_started=False;seed=None
     def receive(msg):
         nonlocal last_stamp,received,latest
         stamp=msg.header.stamp.sec*10**9+msg.header.stamp.nanosec
@@ -78,6 +112,7 @@ def main():
     def health():
         if fault:raise RuntimeError(fault[0])
         if time.monotonic()-received>.5:raise RuntimeError('电机反馈过期')
+        if seed is not None:check_local_pose(seed,qnow())
     def call(client,request):
         future=client.call_async(request);end=time.monotonic()+3
         while not future.done() and time.monotonic()<end:spin();health()
@@ -96,7 +131,7 @@ def main():
         if not validity.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
         previous=seed
         for step in plan:collision(previous,step['q']);previous=np.array(step['q'])
-        (a.output_dir/'plan.json').write_text(json.dumps({'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
+        (a.output_dir/'plan.json').write_text(json.dumps({'seed':seed.tolist(),'steps':plan,'collision_step_rad':.01,'local_radius_rad':LOCAL_RADIUS_RAD,'fixed_drift_rad':FIXED_DRIFT_RAD,'urdf_sha256':hashlib.sha256(a.urdf.read_bytes()).hexdigest()},indent=2))
         print('计划已检查并保存：',a.output_dir/'plan.json',flush=True)
         if not a.execute:return
         if not stop.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 PVT 取消服务')
