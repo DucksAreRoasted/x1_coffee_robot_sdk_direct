@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from model import Model,JOINTS
-from auto_sample import make_plan,path_points,check_local_pose
+from auto_sample import make_plan,path_points,check_local_pose,optimize_visit_order,movement_seconds
 
 class PlanTest(unittest.TestCase):
     def setUp(self):
@@ -93,5 +93,18 @@ class PlanTest(unittest.TestCase):
         for step in plan:check_local_pose(seed,step['q'],'r')
         for count in (0,14,101):
             with self.assertRaises(ValueError):make_plan(seed,self.model,'r',count)
+
+    def test_reorder_preserves_all_pairs_and_never_increases_duration(self):
+        seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+
+                        float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+        import json
+        for side in ('l','r'):
+            plan=make_plan(seed,self.model,side,30);ordered,saved=optimize_visit_order(seed,plan)
+            self.assertEqual(sorted(json.dumps(v,sort_keys=True) for v in plan),
+                             sorted(json.dumps(v,sort_keys=True) for v in ordered))
+            self.assertGreaterEqual(saved,0)
+            for i in range(0,len(ordered),4):
+                self.assertEqual(len({s['pose_id'] for s in ordered[i:i+4]}),1)
+                self.assertEqual([s['approach'] for s in ordered[i:i+4]],[1,1,-1,-1])
 
 if __name__=='__main__':unittest.main()

@@ -74,6 +74,27 @@ def make_plan(seed,model,side='r',pose_count=15):
     return plan
 
 
+def movement_seconds(start, end):
+    return max(1.,float(np.max(np.abs(np.asarray(end)-start)))*2/.08)
+
+
+def optimize_visit_order(seed, plan):
+    """只重排完整正反配对块；保留全部姿态、接近方向与运动速度。"""
+    blocks=[plan[i:i+4] for i in range(0,len(plan),4)]
+    def cost(steps):
+        total=0.;previous=seed
+        for step in steps:
+            total+=movement_seconds(previous,step['q']);previous=step['q']
+        return total
+    pending=blocks[:];ordered=[];previous=seed
+    while pending:
+        i=min(range(len(pending)),key=lambda k:movement_seconds(previous,pending[k][0]['q']))
+        block=pending.pop(i);ordered.extend(block);previous=block[-1]['q']
+    before=cost(plan);after=cost(ordered)
+    # 贪心并不保证全局更短，比较总时长后才采用。
+    return (ordered,before-after) if after<before else (plan,0.)
+
+
 def path_points(start,end):
     # 单目标 PVT 在关节空间的直线段上插值；以不超过 0.01 rad 的步距检查整段。
     count=max(1,int(np.ceil(np.max(np.abs(np.array(end)-start))/.01)))
@@ -175,6 +196,8 @@ def main():
         end=time.monotonic()+10
         while not latest and time.monotonic()<end:spin()
         health();seed=qnow();plan=make_plan(seed,model,a.side,a.poses)
+        plan,saved=optimize_visit_order(seed,plan)
+        print(f'[提速] 保留{a.poses}个双向姿态；访问顺序预计减少运动 {saved:.1f}s；非采样点停稳确认0.2s。',flush=True)
         if not validity.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
         moving=arm_indices(a.side)
         print(f'[计划] {a.side}臂，{a.poses}个姿态 × 正反2次采样，共{len(plan)}段运动。',flush=True)
@@ -201,11 +224,13 @@ def main():
             print(f'[运动 {index}/{len(plan)}] {label}；正在检查当前路径',flush=True)
             if np.max(np.abs(qnow()[fixed]-seed[fixed]))>.02:raise RuntimeError('腰或未选手臂漂移')
             collision(qnow(),target)
-            duration=max(1.,float(np.max(np.abs(target-qnow())))*2/.08)
+            duration=movement_seconds(qnow(),target)
             print(f'[下发] 计划运动时间 {duration:.1f}s；目标角度 '+angle_text(target[moving],a.side),flush=True)
             print('[本段目标变化] '+angle_text((target-qnow())[moving],a.side),flush=True)
             seq+=1;msg=Float64MultiArray();msg.data=[float(seq),duration,1.,*target.tolist()]
             sent_sequences.add(seq);motion_started=True;pub.publish(msg)
+            sent_at=time.monotonic()
+            arrival_quiet=1. if step['record'] else .2
             deadline=time.monotonic()+duration+8;stable_since=None;next_notice=0.
             while time.monotonic()<deadline:
                 spin();health()
@@ -220,7 +245,8 @@ def main():
                     next_notice=time.monotonic()+2
                 stable=np.max(np.abs(qnow()-target))<.01 and max(abs(s.velocity) for s in latest.values())<.02
                 stable_since=(stable_since or time.monotonic()) if stable else None
-                if seq in results and stable_since and time.monotonic()-stable_since>=1:break
+                if (seq in results and stable_since and time.monotonic()-stable_since>=arrival_quiet
+                        and time.monotonic()-sent_at>=duration):break
             else:raise RuntimeError('未测量确认到位/停稳')
             if not step['record']:continue
             print('[保持采样] 已到位，等待3秒电流/扭矩窗口连续达标3秒，最多30秒。',flush=True)
