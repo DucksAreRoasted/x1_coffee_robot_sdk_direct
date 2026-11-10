@@ -20,6 +20,12 @@ install(PROGRAMS
   scripts/joint_angle_check.py
   DESTINATION lib/${PROJECT_NAME})
 
+# 键盘从安装目录启动离线辨识工具，不依赖源码仓库的绝对路径。
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/gravity_identification/
+  DESTINATION share/${PROJECT_NAME}/gravity_identification
+  FILES_MATCHING PATTERN "*.py" PATTERN "*.json"
+  PATTERN "test_*.py" EXCLUDE PATTERN "__pycache__" EXCLUDE)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
   ament_add_test(test_startup_motion

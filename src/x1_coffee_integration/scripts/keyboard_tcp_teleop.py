@@ -7,6 +7,11 @@ current measured gripper pose, then sends one profile-position target on
 enable drives and does not release brakes.
 """
 
+import json
+import signal
+import subprocess
+import tempfile
+from pathlib import Path
 import math
 import os
 import select
@@ -756,32 +761,75 @@ class CurrentGravitySession:
         return False
 
 
+def sampling_command(tool_dir, urdf, side, output, execute=False):
+    """构造参数列表，不通过 shell；左臂方向配置必须显式提供。"""
+    short = {"left": "l", "right": "r"}[side]
+    configured = os.environ.get("X1_" + side.upper() + "_GRAVITY_CONVERSION")
+    if short == "l" and not configured:
+        raise ValueError("左臂尚缺方向配置：设置 X1_LEFT_GRAVITY_CONVERSION 后再采样")
+    conversion = Path(configured) if configured else Path(tool_dir) / "right_arm_session.json"
+    if not conversion.is_file():
+        raise ValueError("找不到方向配置：" + str(conversion))
+    command = [sys.executable, "-u", str(Path(tool_dir) / "auto_sample.py"),
+               "--side", short, "--urdf", str(urdf), "--conversion", str(conversion),
+               "--output-dir", str(output)]
+    if execute:
+        command += ["--execute", "--operator-ready"]
+    return command
+
+
 HELP = """
-末端键盘。先用 URDF 计算当前 TCP 在 dummy_root 里的全局坐标，再在这个坐标系里沿直线加 5 mm，并保持这一步开始时的姿态。
-  1/2     左臂 / 右臂
-  w/s     全局 X 正 / 负
-  a/d     全局 Y 正 / 负
-  q/e     全局 Z 正 / 负
-  i/k j/l u/o   绕全局 X / Y / Z
-  [ / ]   腰关节小步转动
-  点动    一次把 15 轴目标写成轮廓位置。驱动器用已配置的轮廓速度走向新的 0x607A
-  h h     连按两次：回到机械零位（出厂脉冲对应的 URDF 角度，不是全零）
-  0 0     连按两次：回到 URDF 零位（15 个关节角全部为 0）
-  z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
-  m m     连按两次：只对右臂做 MIT。左臂和腰保持位置，请扶右臂
-  c       加载下位机 X1_CURRENT_GRAVITY_FILE 参数（不切模式）
-  t t     连按两次：进入已加载的电流重力补偿，腰保持位置
-  n       退出补偿 / MIT，回到位置保持
-  g g     连按两次：右臂切到周期同步扭矩，两侧软持采样并拟合。请先按 n，并让开右臂
-  v v     连按两次：右臂零重力，只有重力前馈。请扶着右臂，按 n 退出
-  p p     连按两次：把当前右臂重力修正写入文件
-  r r     连按两次：右臂重力在内存恢复 URDF 初值，不写文件
-  b       关断并重新抱闸
-  空格    停在当前目标，不再追加
-  Esc     退出
-手臂要先上电。控制栈这样启动后，再开这个程序：
-  ros2 launch x1_coffee_integration robot_startup.launch.py motion_enabled:=false drives_enabled:=true ethercat_ifname:=eno1
+日常点动
+  1/2  选左/右臂       w/s a/d q/e  TCP沿全局XYZ平移
+  i/k j/l u/o  TCP绕全局XYZ旋转     [/]  腰小步转动
+功能菜单
+  g  重力采样与补偿    h  回零    `  高级调试    ?  显示帮助
+通用操作
+  n  取消采样 / 退出补偿    b  关断抱闸
+  空格  不再追加目标（不会取消已发轨迹）
+  Esc  菜单中返回；主界面退出程序
+先在下位机运行 start_real_hold.sh enp3s0，再在上位机运行 start_upper_moveit.sh。
 """
+
+
+class KeyboardMenu:
+    """菜单数字只解释为菜单动作，不穿透到选臂和点动。"""
+    ITEMS = {
+        "gravity": {"1": "f", "2": "x", "3": "c", "4": "t"},
+        "home": {"1": "h", "2": "0"},
+        "advanced": {"1": "m", "2": "v", "3": "g", "4": "r", "5": "p", "6": "z"},
+    }
+    TEXT = {
+        "main": HELP,
+        "gravity": "重力菜单：1 路径预览  2 自动采样并辨识  3 加载参数  4 进入补偿\n2/4需连续选择两次；n取消/退出，Esc返回。选臂在主界面1/2完成。",
+        "home": "回零菜单：1 机械零位  2 URDF零位\n需连续选择两次；Esc返回。会移动15轴。",
+        "advanced": "高级调试（旧流程，未经新PDO实机验证）：\n1 旧MIT  2 旧零重力  3 旧重力标定  4 重置旧参数  5 保存旧参数  6 零力矩\n需连续选择两次；n退出模式，Esc返回。",
+    }
+
+    def __init__(self):
+        self.mode = "main"
+
+    def route(self, key, busy=False):
+        if busy:
+            # 模式不明时只放行退出与关断，不打开其他操作入口。
+            return key if key in ("n", "b", "\x1b") else None
+        if key == "?":
+            return None
+        if key in ("n", "b", " "):
+            return key
+        if key == "\x1b":
+            if self.mode == "main":
+                return key
+            self.mode = "main"
+            return None
+        if self.mode != "main":
+            return self.ITEMS[self.mode].get(key)
+        menus = {"g": "gravity", "h": "home", "`": "advanced"}
+        if key in menus:
+            self.mode = menus[key]
+            return None
+        # 旧顶层调试快捷键不再生效，避免无菜单提示时直接触发。
+        return key if key in "12wsadqeikjluo[]" else None
 
 
 def run_teleop() -> int:
@@ -800,6 +848,13 @@ def run_teleop() -> int:
     class Teleop(Node):
         def __init__(self) -> None:
             super().__init__("keyboard_tcp_teleop")
+            self.menu = KeyboardMenu()
+            self.sample_process = None
+            self.sample_log = None
+            self.sample_output = None
+            self.sample_execute = False
+            self.sample_cancelled = False
+            self.sample_confirm_until = 0.0
             self.current_session = CurrentGravitySession()
             self.current_confirm_until = 0.0
             self.current_check_at = 0.0
@@ -927,6 +982,56 @@ def run_teleop() -> int:
             print(f"\n{result.message}")
             return True
 
+        def start_sample(self, execute):
+            from ament_index_python.packages import get_package_share_directory
+            tool_dir = Path(get_package_share_directory("x1_coffee_integration")) / "gravity_identification"
+            parent = Path(tempfile.mkdtemp(prefix="x1_keyboard_gravity_"))
+            self.sample_output = parent / "samples"
+            try:
+                command = sampling_command(tool_dir, urdf_path, self.side, self.sample_output, execute)
+                self.sample_log = (parent / "sampling.log").open("w")
+                self.sample_process = subprocess.Popen(command, stdout=self.sample_log,
+                    stderr=subprocess.STDOUT, start_new_session=True)
+            except Exception as error:
+                if self.sample_log:
+                    self.sample_log.close()
+                print(f"\n采样未启动：{error}")
+                return
+            self.sample_execute = execute
+            self.sample_cancelled = False
+            self.motion_requested = False
+            print(f"\n{'自动采样' if execute else '路径预览'}已启动；按 n 取消。日志：{parent / 'sampling.log'}")
+
+        def cancel_sample(self):
+            if self.sample_process and self.sample_process.poll() is None and not self.sample_cancelled:
+                # 让采样器执行取消PVT和停稳检查，不强杀正在处理退出的进程。
+                try:
+                    self.sample_process.send_signal(signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+                self.sample_cancelled = True
+                print("\n已请求取消，等待采样器完成停止处理。")
+
+        def poll_sample(self):
+            if self.sample_process is None or self.sample_process.poll() is None:
+                return
+            code = self.sample_process.returncode
+            self.sample_process = None
+            self.sample_log.close()
+            print(f"\n采样进程结束，返回码 {code}；结果：{self.sample_output}")
+            failure = self.sample_output / "failure.txt"
+            if failure.is_file():
+                print(failure.read_text())
+            candidate = self.sample_output / "candidate.json"
+            if code == 0 and candidate.is_file():
+                report = json.loads(candidate.read_text())
+                print("离线辨识通过：", report.get("accepted_offline"),
+                      "；原因：", report.get("rejection_reasons"))
+                print("候选尚未加载；需完成电流预算和阻尼设计。")
+            if self.sample_execute:
+                self.current_session.state = "unknown"
+                self.leave_current()
+
         def current_query(self, name):
             client = self.current_clients[name]
             if not client.wait_for_service(timeout_sec=0.2):
@@ -1000,7 +1105,7 @@ def run_teleop() -> int:
             names: Sequence[str],
             waypoints: Sequence[Dict[str, float]],
         ) -> bool:
-            if self.current_session.locked:
+            if self.current_session.locked or self.sample_process is not None:
                 print("\n补偿模式或退出状态未确认，禁止位置命令。")
                 return False
             if not waypoints:
@@ -1129,6 +1234,7 @@ def run_teleop() -> int:
 
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.05)
+            node.poll_sample()
             if node.current_session.state == "active" and time.monotonic() >= node.current_check_at:
                 node.current_check_at = time.monotonic() + 0.5
                 if not node.current_query("status"):
@@ -1141,14 +1247,35 @@ def run_teleop() -> int:
                 continue
             key = sys.stdin.read(1)
             print(f"[x1-debug] key={key!r}", flush=True)
-            if key != "h":
-                node.home_confirm_until = 0.0
-            if key != "0":
-                node.urdf_confirm_until = 0.0
+            if node.sample_process is not None:
+                if key in ("n", "\x1b"):
+                    node.cancel_sample()
+                elif key == "b":
+                    node.cancel_sample()
+                    node.current_session.state = "unknown"
+                    node.call_trigger(node.brake_client, "/x1/brake_hold")
+                else:
+                    print("\n采样期间锁定其他按键，按 n 取消。")
+                continue
+            key = node.menu.route(key, busy=node.current_session.locked)
+            # 换菜单、其他选择及帮助都会撤销上一次二次确认，不能跨菜单复用。
+            for action, field in {
+                "h": "home_confirm_until", "0": "urdf_confirm_until",
+                "x": "sample_confirm_until", "t": "current_confirm_until",
+                "z": "zero_confirm_until", "m": "mit_confirm_until",
+                "v": "zero_g_confirm_until", "g": "gravity_confirm_until",
+                "r": "gravity_reset_until", "p": "gravity_save_until",
+            }.items():
+                if key != action:
+                    setattr(node, field, 0.0)
+            if key is None:
+                if node.current_session.locked:
+                    print("\n补偿运行或状态未确认：n 退出，b 关断，Esc 退出程序。")
+                else:
+                    print(f"\n当前选择：{node.side}\n{node.menu.TEXT[node.menu.mode]}")
+                continue
             if key == "\x1b":
                 break
-            if key != "t":
-                node.current_confirm_until = 0.0
             if key == "n" and node.current_session.locked:
                 node.leave_current()
                 continue
@@ -1158,6 +1285,19 @@ def run_teleop() -> int:
                     node.call_trigger(node.brake_client, "/x1/brake_hold")
                 else:
                     print("\n电流补偿期间仅允许 n 退出、b 关断、Esc 退出程序。")
+                continue
+            if key in ("f", "x"):
+                if node.mit_hold or node.zero_torque or pending_since is not None:
+                    print("\n请先退出旧模式并等待运动结束。")
+                    continue
+                if key == "x":
+                    now = time.monotonic()
+                    if now > node.sample_confirm_until:
+                        node.sample_confirm_until = now + 3.0
+                        print(f"\n再次选择 2：{node.side} 自动运动采样。请清空空间、保持无人接触，并准备硬件急停。")
+                        continue
+                    node.sample_confirm_until = 0.0
+                node.start_sample(execute=key == "x")
                 continue
             if key == "c":
                 node.call_trigger(node.current_clients["load"], "/x1/current_gravity_load")
@@ -1169,7 +1309,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.current_confirm_until:
                     node.current_confirm_until = now + 3.0
-                    print("\n再按 t：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
+                    print("\n再次选择 4：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
                     continue
                 node.current_confirm_until = 0.0
                 node.motion_requested = False
@@ -1196,7 +1336,7 @@ def run_teleop() -> int:
                 if now > node.home_confirm_until:
                     node.home_confirm_until = now + 3.0
                     node.zero_confirm_until = 0.0
-                    print("\n再按一次 h：15 轴回到机械零位。请让开手臂。")
+                    print("\n再次选择 1：15 轴回到机械零位。请让开手臂。")
                     continue
                 node.home_confirm_until = 0.0
                 node.zero_confirm_until = 0.0
@@ -1207,7 +1347,7 @@ def run_teleop() -> int:
                 if now > node.urdf_confirm_until:
                     node.urdf_confirm_until = now + 3.0
                     node.zero_confirm_until = 0.0
-                    print("\n再按一次 0：15 轴回到 URDF 零位，关节角全部为 0。请让开手臂。")
+                    print("\n再次选择 2：15 轴回到 URDF 零位，关节角全部为 0。请让开手臂。")
                     continue
                 node.urdf_confirm_until = 0.0
                 node.zero_confirm_until = 0.0
@@ -1217,7 +1357,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.zero_confirm_until:
                     node.zero_confirm_until = now + 3.0
-                    print("\n再按一次 z：请求零力矩。当前若已是轮廓位置，这一步不会改成 0 力矩。")
+                    print("\n再次选择 6：请求零力矩。当前若已是轮廓位置，这一步不会改成 0 力矩。")
                     continue
                 node.zero_confirm_until = 0.0
                 if node.call_trigger(node.zero_torque_client, "/x1/zero_torque"):
@@ -1228,7 +1368,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.mit_confirm_until:
                     node.mit_confirm_until = now + 3.0
-                    print("\n再按一次 m：只松开右臂做 MIT。左臂和腰保持位置，请扶着右臂。")
+                    print("\n再次选择 1：只松开右臂做 MIT。左臂和腰保持位置，请扶着右臂。")
                     continue
                 node.mit_confirm_until = 0.0
                 if node.call_trigger(node.mit_hold_client, "/x1/mit_hold"):
@@ -1246,7 +1386,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.zero_g_confirm_until:
                     node.zero_g_confirm_until = now + 3.0
-                    print("\n再按一次 v：右臂进入零重力。没有位置弹簧，请扶着右臂。")
+                    print("\n再次选择 2：右臂进入零重力。没有位置弹簧，请扶着右臂。")
                     continue
                 node.zero_g_confirm_until = 0.0
                 if node.call_trigger(node.zero_gravity_client, "/x1/zero_gravity"):
@@ -1258,7 +1398,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_confirm_until:
                     node.gravity_confirm_until = now + 3.0
-                    print("\n再按一次 g：右臂进入周期同步扭矩，从两侧软持到标定姿态。请先按 n，并让开右臂。")
+                    print("\n再次选择 3：右臂进入周期同步扭矩，从两侧软持到标定姿态。请先按 n，并让开右臂。")
                     continue
                 node.gravity_confirm_until = 0.0
                 node.call_trigger(node.gravity_calib_client, "/x1/right_arm_gravity_calib")
@@ -1267,7 +1407,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_reset_until:
                     node.gravity_reset_until = now + 3.0
-                    print("\n再按一次 r：右臂重力恢复 URDF 初值。")
+                    print("\n再次选择 4：右臂重力恢复 URDF 初值。")
                     continue
                 node.gravity_reset_until = 0.0
                 node.call_trigger(node.gravity_reset_client, "/x1/right_arm_gravity_reset")
@@ -1276,7 +1416,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_save_until:
                     node.gravity_save_until = now + 3.0
-                    print("\n再按一次 p：把当前右臂重力修正写入文件。")
+                    print("\n再次选择 5：把当前右臂重力修正写入文件。")
                     continue
                 node.gravity_save_until = 0.0
                 node.call_trigger(node.gravity_save_client, "/x1/right_arm_gravity_save")
@@ -1366,6 +1506,11 @@ def run_teleop() -> int:
             )
     finally:
         try:
+            if node.sample_process is not None:
+                node.cancel_sample()
+                while node.sample_process is not None:
+                    rclpy.spin_once(node, timeout_sec=0.05)
+                    node.poll_sample()
             if node.current_session.locked and not node.leave_current():
                 status = 1
         finally:
