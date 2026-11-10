@@ -88,6 +88,7 @@ def main():
     p.add_argument('csv',type=Path,nargs='+');p.add_argument('--urdf',type=Path,required=True)
     p.add_argument('--gripper-kg',type=float,nargs=2,required=True,metavar=('LEFT','RIGHT'))
     p.add_argument('--max-rms-nm',type=float,required=True)
+    p.add_argument('--side',choices=['l','r','both'],default='both')
     p.add_argument('--output',type=Path,required=True)
     args=p.parse_args()
     if not np.isfinite(args.max_rms_nm) or args.max_rms_nm<=0: p.error('误差阈值必须为正')
@@ -98,7 +99,7 @@ def main():
     report={'schema':'x1_drag_candidate_v1','waist_mode':'position_hold','runtime_applied':False,
         'source_sha256':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in args.csv},
         'urdf_sha256':hashlib.sha256(args.urdf.read_bytes()).hexdigest(),
-        'gripper_kg':args.gripper_kg,'arms':[fit(model,paired(rows,s),s,args.max_rms_nm) for s in 'lr']}
+        'gripper_kg':args.gripper_kg,'arms':[fit(model,paired(rows,s),s,args.max_rms_nm) for s in ('lr' if args.side=='both' else args.side)]}
     # 只产生独立候选，不覆盖运行配置；JSON 也是合法 YAML 1.2。
     with args.output.open('x') as f: json.dump(report,f,ensure_ascii=False,indent=2,allow_nan=False)
     print(args.output)

@@ -5,6 +5,17 @@ from pathlib import Path
 from model import JOINTS
 
 
+def validated_joints(cfg, side):
+    # 方向验证按臂隔离，右臂已验证不替代左臂验证。
+    selected = [f'Joint_{side}{i}' for i in range(1,8)]
+    if cfg.get('torque_signs_verified') is not True and side not in cfg.get('verified_sides',[]):
+        raise ValueError('所选手臂的扭矩方向尚未确认')
+    for j in selected:
+        c=cfg['joints'][j]
+        if not isinstance(c['rated_nm'],(int,float)) or not math.isfinite(c['rated_nm']) or c['rated_nm']<=0 or c['sign'] not in [-1,1]:
+            raise ValueError('换算参数无效 '+j)
+    return selected
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--conversion',type=Path,required=True)
@@ -12,11 +23,9 @@ def main():
     p.add_argument('--pose-id',required=True);p.add_argument('--approach',type=int,choices=[-1,1],required=True)
     p.add_argument('--seconds',type=float,default=3);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args(); cfg=json.loads(a.conversion.read_text())
-    if cfg.get('torque_signs_verified') is not True: p.error('必须先现场核对扭矩正方向并确认 torque_signs_verified')
+    try: selected=validated_joints(cfg,a.side)
+    except (ValueError,KeyError) as e: p.error(str(e))
     if not math.isfinite(a.seconds) or not 0<a.seconds<=60: p.error('采样时长必须为 0~60 秒')
-    for j in JOINTS:
-        c=cfg['joints'][j]
-        if not isinstance(c['rated_nm'],(int,float)) or not math.isfinite(c['rated_nm']) or c['rated_nm']<=0 or c['sign'] not in [-1,1]: p.error('换算参数无效 '+j)
     import rclpy
     from rclpy.qos import qos_profile_sensor_data
     from x1_coffee_interfaces.msg import MotorStateArray
@@ -35,9 +44,10 @@ def main():
             row=dict(conversion_sha256=conversion_hash,time_ns=stamp,side=a.side,pose_id=a.pose_id,approach=a.approach,valid=1)
             for j in JOINTS:
                 s=states[j];c=cfg['joints'][j]
-                if not (s.position_valid and s.velocity_valid and s.torque_valid and s.enabled and s.position_unit=='rad') or s.alarm or s.follow_error or s.emergency_input_active: row['valid']=0
+                if not (s.position_valid and s.velocity_valid and (j not in selected or s.torque_valid) and s.enabled and s.position_unit=='rad') or s.alarm or s.follow_error or s.emergency_input_active: row['valid']=0
                 row['q_'+j]=s.position;row['dq_'+j]=s.velocity
-                row['tau_'+j]=s.torque_permille*.001*c['rated_nm']*c['sign']
+                # 未辨识手臂只提供几何姿态，扭矩填零且不参与该臂拟合。
+                row['tau_'+j]=s.torque_permille*.001*c['rated_nm']*c['sign'] if j in selected else 0.
             w.writerow(row);count+=1
         sub=node.create_subscription(MotorStateArray,'/x1/motor_states',receive,qos_profile_sensor_data)
         end=time.monotonic()+a.seconds

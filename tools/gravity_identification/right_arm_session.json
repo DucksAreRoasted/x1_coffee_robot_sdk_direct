@@ -1,0 +1,80 @@
+{
+  "torque_signs_verified": false,
+  "note": "额定扭矩来自历史启动日志，精度受日志小数位限制；sign 须独立实测。",
+  "joints": {
+    "Joint_Body": {
+      "rated_nm": 87.0,
+      "sign": null
+    },
+    "Joint_l1": {
+      "rated_nm": 52.0,
+      "sign": null
+    },
+    "Joint_l2": {
+      "rated_nm": 52.0,
+      "sign": null
+    },
+    "Joint_l3": {
+      "rated_nm": 21.0,
+      "sign": null
+    },
+    "Joint_l4": {
+      "rated_nm": 21.0,
+      "sign": null
+    },
+    "Joint_l5": {
+      "rated_nm": 10.0,
+      "sign": null
+    },
+    "Joint_l6": {
+      "rated_nm": 5.4,
+      "sign": null
+    },
+    "Joint_l7": {
+      "rated_nm": 5.4,
+      "sign": null
+    },
+    "Joint_r1": {
+      "rated_nm": 52.0,
+      "sign": 1
+    },
+    "Joint_r2": {
+      "rated_nm": 52.0,
+      "sign": 1
+    },
+    "Joint_r3": {
+      "rated_nm": 21.0,
+      "sign": 1
+    },
+    "Joint_r4": {
+      "rated_nm": 21.0,
+      "sign": 1
+    },
+    "Joint_r5": {
+      "rated_nm": 10.0,
+      "sign": 1
+    },
+    "Joint_r6": {
+      "rated_nm": 5.4,
+      "sign": 1
+    },
+    "Joint_r7": {
+      "rated_nm": 5.4,
+      "sign": 1
+    }
+  },
+  "verified_sides": [
+    "r"
+  ],
+  "direction_evidence": "用户确认无重力前馈的现有右臂 MIT 稳定保持；该控制律直接在 URDF 关节误差上输出正向扭矩。仅复用右臂证据。",
+  "source": {
+    "log": "2026-11-10-10-45-07-489151/launch.log",
+    "sha256": "0069ec7a03efd155e865aec968e641588b8c6cb47b634c79056c32f3e93ce884"
+  },
+  "load_condition": {
+    "left_gripper_kg": 1.0,
+    "right_gripper_kg": 1.0,
+    "additional_payload_kg": 0.0,
+    "source": "用户确认手册每夹爪 1kg，无额外工具"
+  }
+}

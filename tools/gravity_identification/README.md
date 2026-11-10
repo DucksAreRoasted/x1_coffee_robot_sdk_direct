@@ -77,3 +77,29 @@ python3 tools/gravity_identification/test_prepare.py
 ```
 
 工具拒绝缺轴或多轮额定值冲突的日志，保存源日志哈希。方向 `sign`、方向验证标志和负载信息保持未确认。只凭质量拟合得到符号可能掩盖模型错误；不能直接将 `torque_signs_verified` 改成 true 跳过现场核对。历史日志值还需与当前电机及负载工况匹配。
+
+## 当前机器：先采右臂
+
+`right_arm_session.json` 记录历史额定扭矩、用户确认的右臂无前馈 MIT 稳定保持证据，以及两个 1 kg 夹爪、无额外负载。只确认右臂，不将证据扩展到左臂。下次更换电机、方向配置或负载后必须重新审核。右臂采样时仍要求全部 15 轴位置/速度有效且使能，左臂和腰的扭矩列填零、不参与右臂拟合。
+
+在现场已按原流程启动并确认全部使能后，用既有位置控制到达已审核的右臂姿态，停稳且松手再运行：
+
+```bash
+mkdir -p /tmp/x1_right_samples
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+python3 tools/gravity_identification/record.py \
+  --conversion tools/gravity_identification/right_arm_session.json \
+  --side r --pose-id pose01 --approach 1 --seconds 3 \
+  --output /tmp/x1_right_samples/pose01_plus.csv
+```
+
+从相反方向接近同一姿态后，用 `--approach -1`、`pose01_minus.csv` 再次记录。左右臂和腰在配对记录间都应保持同一姿态。不要将同一段静止记录复制两份充当两个接近方向。完成至少 pose01～pose15 后：
+
+```bash
+python3 tools/gravity_identification/identify.py /tmp/x1_right_samples/*.csv \
+  --side r --urdf src/arm_describle/urdf/HRB3Q-LC.urdf \
+  --gripper-kg 1 1 --max-rms-nm 0.3 --output /tmp/x1_right_candidate.json
+```
+
+0.3 N·m 是首次离线筛查阈值，不是每个关节已确认的实机安全误差。此命令只生成报告，不加载参数。现场运动仍需操作者在场、确认空间及硬件急停可用；记录器本身不发送目标或切换模式。
