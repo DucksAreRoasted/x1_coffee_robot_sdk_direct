@@ -697,3 +697,36 @@ TEST(EnableTrace, producer_and_consumer_preserve_complete_frames)
 }
 
 }  // namespace
+
+// 模拟 120 ms 发帧中断和看门狗状态变化，不连接硬件。
+TEST(EnableTrace, retains_timing_peaks_and_pre_ack_al_changes)
+{
+  using namespace x1_coffee_hardware_core::detail;
+  EnableTrace trace;
+  EnableTraceFrame frame;
+  std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
+  std::array<SlaveCommand, kCoffeeAxisCount> command{};
+  EnableCycleDiagnostics diagnostics;
+  diagnostics.send_started_us = 1000;
+  trace.capture(feedback, command, 1010, false, 45, 45, 1, 0, diagnostics);
+  ASSERT_TRUE(trace.pop(&frame));
+  EXPECT_EQ(frame.diagnostics.al6_age_us, -1);
+  diagnostics = {121000, 119000, 0, 0x14, 0x1b};
+  trace.capture(feedback, command, 121010, false, 42, 45, 1, 0, diagnostics);
+  ASSERT_TRUE(trace.pop(&frame));
+  EXPECT_TRUE(frame.al6_changed);
+  EXPECT_EQ(frame.max_send_gap_us, 120000u);
+  EXPECT_EQ(frame.max_wake_late_us, 119000u);
+  EXPECT_EQ(frame.low_wkc_frames, 1u);
+  diagnostics = {122000, 5, 0, 0x04, 0};
+  trace.capture(feedback, command, 122010, false, 42, 45, 1, 0, diagnostics);
+  ASSERT_TRUE(trace.pop(&frame));
+  EXPECT_TRUE(frame.al6_changed);
+  EXPECT_EQ(frame.diagnostics.al6_state, 0x04);
+  EXPECT_EQ(frame.max_wake_late_us, 119000u);
+  diagnostics.send_started_us = 123000;
+  trace.capture(feedback, command, 123010, true, 45, 45, 1, 0, diagnostics);
+  ASSERT_TRUE(trace.pop(&frame));
+  EXPECT_EQ(frame.max_send_gap_us, 120000u);
+  EXPECT_EQ(frame.max_wake_late_us, 119000u);
+}

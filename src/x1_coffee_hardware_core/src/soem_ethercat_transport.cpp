@@ -96,11 +96,17 @@ public:
       if (late > max_late_ns_) {
         max_late_ns_ = late;
       }
+      wake_late_ns_ = late;
       next_ = now;
       return;
     }
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_, nullptr);
+    // 睡醒后再次测量；只在睡前检查会漏掉调度唤醒延迟。不改变原有调度节拍。
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    wake_late_ns_ = std::max<std::int64_t>(0, toNs(now) - toNs(next_));
   }
+
+  std::int64_t wakeLateUs() const {return wake_late_ns_ / 1000;}
 
   long overruns() const {return overruns_;}
   std::int64_t maxLateNs() const {return max_late_ns_;}
@@ -119,6 +125,7 @@ private:
     next_.tv_nsec = static_cast<long>(total % 1000000000LL);
   }
 
+  std::int64_t wake_late_ns_{0};
   timespec next_{};
   std::int64_t integral_{0};
   long overruns_{0};
@@ -670,7 +677,9 @@ private:
 
   static void printEnableTrace(const detail::EnableTraceFrame & frame)
   {
-    if (std::getenv("X1_ECAT_DEBUG") == nullptr) {
+    // 默认记录初始化汇总及第 6 从站 AL 变化；详细模式仍可记录全部事件。
+    if (std::getenv("X1_ECAT_DEBUG") == nullptr &&
+      (frame.operational || (!frame.summary && !frame.al6_changed))) {
       return;
     }
     std::fprintf(
@@ -685,6 +694,14 @@ private:
       static_cast<unsigned long long>(frame.nonpositive_send_frames),
       static_cast<unsigned long long>(frame.max_cycle_gap_us),
       static_cast<long long>(frame.dc_phase_ns), static_cast<unsigned long long>(frame.dropped));
+    std::fprintf(stderr,
+      "[x1-cycle] tick=%llu max_send_call_gap_us=%llu max_wake_late_us=%llu "
+      "al6=0x%04x/0x%04x al6_age_us=%lld al6_changed=%d\n",
+      static_cast<unsigned long long>(frame.tick),
+      static_cast<unsigned long long>(frame.max_send_gap_us),
+      static_cast<unsigned long long>(frame.max_wake_late_us),
+      frame.diagnostics.al6_state, frame.diagnostics.al6_code,
+      static_cast<long long>(frame.diagnostics.al6_age_us), frame.al6_changed ? 1 : 0);
     for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
       if (!frame.summary && (frame.changed_axes & (std::uint32_t{1} << i)) == 0) {
         continue;
@@ -709,13 +726,14 @@ private:
   void traceCycle(
     const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback,
     const std::array<SlaveCommand, kCoffeeAxisCount> & command,
-    bool operational, int wkc, int send_rc)
+    bool operational, int wkc, int send_rc,
+    const detail::EnableCycleDiagnostics & diagnostics = {})
   {
     const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
     enable_trace_->capture(
       feedback, command, static_cast<std::uint64_t>(now_us), operational, wkc, expected_wkc_,
-      send_rc, context_.DCtime % DcCycleTimer::kCycleNs);
+      send_rc, context_.DCtime % DcCycleTimer::kCycleNs, diagnostics);
   }
 
   static int writePdoEntry(
@@ -1041,8 +1059,18 @@ private:
         }
         say("● 已连续发送有效输出，请求 15 台从站进入运行");
       }
+      detail::EnableCycleDiagnostics diagnostics;
+      diagnostics.wake_late_us = timer.wakeLateUs();
+      diagnostics.al6_state = etohs(startup_al[5].alstatus);
+      diagnostics.al6_code = etohs(startup_al[5].alstatuscode);
+      if (startup_al_time != std::chrono::steady_clock::time_point{}) {
+        diagnostics.al6_age_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - startup_al_time).count();
+      }
+      diagnostics.send_started_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
       const int send_rc = ecx_send_processdata(&context_);
-      traceCycle(feedback, command, false, wkc, send_rc);
+      traceCycle(feedback, command, false, wkc, send_rc, diagnostics);
       // 安全操作下工作计数也会满。必须 15 台状态都是运行，才算进入运行。
       if (op_requested && slavesAtLeast(EC_STATE_OPERATIONAL) &&
         detail::completeProcessData(wkc, expected_wkc_))

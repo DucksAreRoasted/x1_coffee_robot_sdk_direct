@@ -9,11 +9,22 @@
 namespace x1_coffee_hardware_core::detail
 {
 
+// 发送调用前的主机时间不是网线上实际发帧时间；AL 为已有轮询的缓存。
+struct EnableCycleDiagnostics
+{
+  std::uint64_t send_started_us{0}, wake_late_us{0};
+  std::int64_t al6_age_us{-1};
+  std::uint16_t al6_state{0}, al6_code{0};
+};
+
 struct EnableTraceFrame
 {
   std::uint64_t tick{0}, elapsed_us{0}, dropped{0}, low_wkc_frames{0}, nonpositive_send_frames{0};
   std::uint64_t max_cycle_gap_us{0};
   std::int64_t dc_phase_ns{0};
+  EnableCycleDiagnostics diagnostics{};
+  std::uint64_t max_send_gap_us{0}, max_wake_late_us{0};
+  bool al6_changed{false};
   int wkc{0}, expected_wkc{0}, minimum_wkc{0}, send_rc{0};
   bool operational{false}, summary{false};
   std::uint32_t changed_axes{0};
@@ -37,8 +48,23 @@ public:
     const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback,
     const std::array<SlaveCommand, kCoffeeAxisCount> & command,
     std::uint64_t now_us, bool operational, int wkc, int expected_wkc,
-    int send_rc, std::int64_t dc_phase_ns)
+    int send_rc, std::int64_t dc_phase_ns,
+    const EnableCycleDiagnostics & diagnostics = {})
   {
+    // 跨阶段保留整轮最大值，不能在进入 OP 时抹掉失败前的间隔。
+    if (previous_send_us_ != 0 && diagnostics.send_started_us >= previous_send_us_) {
+      const auto gap = diagnostics.send_started_us - previous_send_us_;
+      if (gap > max_send_gap_us_) {max_send_gap_us_ = gap;}
+    }
+    if (diagnostics.send_started_us != 0) {previous_send_us_ = diagnostics.send_started_us;}
+    if (diagnostics.wake_late_us > max_wake_late_us_) {
+      max_wake_late_us_ = diagnostics.wake_late_us;
+    }
+    const bool al6_changed = diagnostics.al6_age_us >= 0 &&
+      (previous_diagnostics_.al6_age_us < 0 ||
+      diagnostics.al6_state != previous_diagnostics_.al6_state ||
+      diagnostics.al6_code != previous_diagnostics_.al6_code);
+    previous_diagnostics_ = diagnostics;
     const bool phase_changed = !initialized_ || operational != operational_;
     if (!initialized_) {
       started_us_ = now_us;
@@ -82,8 +108,12 @@ public:
       }
     }
     const bool summary = phase_changed || now_us - last_summary_us_ >= kSummaryIntervalUs;
-    if (summary || changed != 0 || bad_wkc != previous_bad_wkc_ || send_rc <= 0) {
+    if (al6_changed || summary || changed != 0 || bad_wkc != previous_bad_wkc_ || send_rc <= 0) {
       EnableTraceFrame frame;
+      frame.diagnostics = diagnostics;
+      frame.max_send_gap_us = max_send_gap_us_;
+      frame.max_wake_late_us = max_wake_late_us_;
+      frame.al6_changed = al6_changed;
       frame.tick = tick_;
       frame.elapsed_us = now_us - started_us_;
       frame.operational = operational;
@@ -153,6 +183,8 @@ private:
   std::uint64_t low_wkc_frames_{0}, nonpositive_send_frames_{0};
   std::uint64_t previous_us_{0}, max_cycle_gap_us_{0};
   int minimum_wkc_{0};
+  EnableCycleDiagnostics previous_diagnostics_{};
+  std::uint64_t previous_send_us_{0}, max_send_gap_us_{0}, max_wake_late_us_{0};
   std::array<std::uint64_t, kCoffeeAxisCount> state_since_us_{};
   std::array<std::uint64_t, kCoffeeAxisCount> raw_status_changes_{};
   std::array<SlaveFeedback, kCoffeeAxisCount> previous_feedback_{};
