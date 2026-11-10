@@ -44,10 +44,17 @@ TEST(ZeroErrDrive, rated_torque_converts_newton_meters_without_a_stand_in)
   EXPECT_EQ(x1_coffee_hardware_core::torquePermilleFromNm(16.0, 0.0), 0.0);
 }
 
-TEST(ZeroErrDrive, pdo_image_matches_official_csp)
+TEST(ZeroErrDrive, pdo_image_supports_position_torque_and_mode_feedback)
 {
-  EXPECT_EQ(sizeof(ZeroErrOutput), 8u);
-  EXPECT_EQ(sizeof(ZeroErrInput), 12u);
+  EXPECT_EQ(sizeof(ZeroErrOutput), 10u);
+  EXPECT_EQ(sizeof(ZeroErrInput), 16u);
+  ZeroErrInput input{};
+  input.actual_torque = 123;
+  input.actual_current = -321;
+  const auto * feedback = reinterpret_cast<const std::uint8_t *>(&input);
+  EXPECT_EQ(feedback[10], 123);
+  EXPECT_EQ(feedback[12], 0xBF);
+  EXPECT_EQ(feedback[13], 0xFE);
   ZeroErrOutput output{};
   output.control_word = 0x000F;
   output.target_position = 5566;
@@ -57,7 +64,12 @@ TEST(ZeroErrDrive, pdo_image_matches_official_csp)
   EXPECT_EQ(bytes[1], 0x00);
   EXPECT_EQ(bytes[2], 0xBE);
   EXPECT_EQ(bytes[3], 0x15);
-  EXPECT_EQ(bytes[6], 0x08);
+  EXPECT_EQ(bytes[8], 0x08);
+  output.target_torque = -321;
+  EXPECT_EQ(bytes[6], 0xBF);
+  EXPECT_EQ(bytes[7], 0xFE);
+  input.mode_of_operation = 0x0A;
+  EXPECT_EQ(feedback[14], 0x0A);
 }
 
 }  // namespace

@@ -150,12 +150,19 @@ Pose multiplyRotation(const Pose & parent, const double rotation[3][3])
 bool UrdfGravity::load(const std::string & path, std::string * error)
 {
   ready_ = false;
+  source_fingerprint_ = 0;
   links_.clear();
   joints_.clear();
   children_.clear();
   std::string xml = readFile(path, error);
   if (xml.empty()) {
     return false;
+  }
+  // FNV-1a仅用于核对两端URDF字节一致，不作为密码学认证。
+  source_fingerprint_ = 14695981039346656037ULL;
+  for (unsigned char byte : xml) {
+    source_fingerprint_ ^= byte;
+    source_fingerprint_ *= 1099511628211ULL;
   }
   // 末端关节注释里还有一组旧 origin，不能当成当前坐标。
   for (std::size_t comment = xml.find("<!--"); comment != std::string::npos; comment = xml.find("<!--")) {
@@ -390,6 +397,77 @@ bool UrdfGravity::torquesOf(
     }
     // tau 是重力拖关节的力矩。电机前馈要把它抵消掉。
     (*tau_nm)[static_cast<std::size_t>(joint.axis_index)] = -tau;
+  }
+  return true;
+}
+
+bool UrdfGravity::currentBasis(
+  const std::array<double, kCoffeeAxisCount> & q_rad,
+  bool right_arm, CurrentBasis * basis) const
+{
+  if (basis == nullptr) {return false;}
+  *basis = {};
+  if (!ready_ || root_id_ < 0 || cad_links_.empty() || cad_links_.size() > kMaxLinks) {
+    return false;
+  }
+  for (double angle : q_rad) {
+    if (!std::isfinite(angle)) {return false;}
+  }
+  constexpr double g = 9.80665;
+  const int start = right_arm ? 8 : 1;
+  int selected[7]{-1, -1, -1, -1, -1, -1, -1};
+  for (const FlatJoint & joint : flat_joints_) {
+    if (joint.axis_index >= start && joint.axis_index < start + 7) {
+      selected[joint.axis_index - start] = joint.child;
+    }
+  }
+  for (int link : selected) {if (link < 0) {return false;}}
+  Pose poses[kMaxLinks];
+  const auto walk = [&](auto && self, int link, const Pose & pose) -> void {
+      poses[link] = pose;
+      for (const int index : flat_children_[static_cast<std::size_t>(link)]) {
+        const FlatJoint & joint = flat_joints_[static_cast<std::size_t>(index)];
+        Pose child = multiply(pose, joint.origin_r, {joint.xyz[0], joint.xyz[1], joint.xyz[2]});
+        if (joint.revolute && joint.axis_index >= 0) {
+          double spin[3][3];
+          rodrigues({joint.axis[0], joint.axis[1], joint.axis[2]},
+            q_rad[static_cast<std::size_t>(joint.axis_index)], spin);
+          child = multiplyRotation(child, spin);
+        }
+        self(self, joint.child, child);
+      }
+    };
+  walk(walk, root_id_, Pose{});
+  for (const FlatJoint & joint : flat_joints_) {
+    if (joint.axis_index < start || joint.axis_index >= start + 7) {continue;}
+    const Pose frame = multiply(poses[joint.parent], joint.origin_r,
+      {joint.xyz[0], joint.xyz[1], joint.xyz[2]});
+    double axis[3]{};
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 3; ++c) {axis[r] += frame.r[r][c] * joint.axis[c];}
+    }
+    auto & row = (*basis)[static_cast<std::size_t>(joint.axis_index - start)];
+    for (int n = 0; n < joint.subtree_count; ++n) {
+      const int link = joint.subtree[n];
+      const Pose & pose = poses[link];
+      int slot = -1;
+      for (int j = 0; j < 7; ++j) {if (selected[j] == link) {slot = j;}}
+      if (slot >= 0) {
+        row[4 * slot] = g * (axis[0] * (pose.p[1] - frame.p[1]) -
+          axis[1] * (pose.p[0] - frame.p[0]));
+        for (int c = 0; c < 3; ++c) {
+          row[4 * slot + c + 1] = g * (axis[0] * pose.r[1][c] - axis[1] * pose.r[0][c]);
+        }
+      } else {
+        // 非辨识连杆（包括夹爪）保留为第29列固定重力项。
+        const FlatLink & body = cad_links_[static_cast<std::size_t>(link)];
+        double delta[2]{pose.p[0] - frame.p[0], pose.p[1] - frame.p[1]};
+        for (int r = 0; r < 2; ++r) {
+          for (int c = 0; c < 3; ++c) {delta[r] += pose.r[r][c] * body.com[c];}
+        }
+        row[28] += body.mass * g * (axis[0] * delta[1] - axis[1] * delta[0]);
+      }
+    }
   }
   return true;
 }

@@ -223,6 +223,37 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });
+  // 独立入口，不复用旧的Nm标定/保存服务；加载不会启用扭矩控制。
+  const std::array<std::string, 5> current_services{
+    "/x1/current_gravity_load", "/x1/current_gravity_enter", "/x1/current_gravity_status",
+    "/x1/current_gravity_exit", "/x1/current_gravity_hold_status"};
+  for (std::size_t i = 0; i < current_services.size(); ++i) {
+    current_gravity_services_[i] = motion_node_->create_service<std_srvs::srv::Trigger>(
+      current_services[i], [this, i](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        auto * direct = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(transport_.get());
+        if (direct == nullptr) {
+          response->success = false;
+          response->message = "当前后端不支持电流补偿";
+          return;
+        }
+        x1_coffee_hardware_core::Result result;
+        if (i == 0) {
+          const char * path = std::getenv("X1_CURRENT_GRAVITY_FILE");
+          if (path == nullptr || path[0] == '\0') {
+            response->success = false;
+            response->message = "下位机未设置X1_CURRENT_GRAVITY_FILE参数文件路径";
+            return;
+          }
+          result = direct->loadCurrentGravity(path);
+        } else if (i == 1) {result = direct->enterCurrentGravity();
+        } else if (i == 2) {result = direct->currentGravityStatus();
+        } else if (i == 3) {result = direct->exitMitHold();
+        } else {result = direct->currentGravityHoldStatus();}
+        response->success = static_cast<bool>(result);
+        response->message = result.detail;
+      });
+  }
   start_motion_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/start_motion",
     [this](

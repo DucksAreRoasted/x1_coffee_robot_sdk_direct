@@ -1,0 +1,28 @@
+{
+  "purpose": "官方源码审阅依据，不执行参考工程控制栈",
+  "repositories": [
+    {
+      "url": "https://github.com/ZeroErrControl/eRob_Compensation_Controller",
+      "commit": "d5308b6228d9fc89dcb051b49a77198099fcb309",
+      "local_checkout": "/tmp/x1_gravity_references/eRob_Compensation_Controller",
+      "reviewed": [
+        "README.md",
+        "demo/eRob_PT.cpp"
+      ]
+    },
+    {
+      "url": "https://github.com/ZeroErrControl/eRob_GravityFrictionCompensator",
+      "commit": "d2e769049011e00afe34f4254c48bd44e8328829",
+      "local_checkout": "/tmp/x1_gravity_references/eRob_GravityFrictionCompensator",
+      "reviewed": [
+        "README.md",
+        "File/User/main.c"
+      ]
+    }
+  ],
+  "findings": [
+    "CAN示例直接以电流表达重力正弦系数，与摩擦电流相加后下发",
+    "单轴正弦模型不能直接作为多关节耦合重力模型",
+    "后续应辨识姿态到补偿电流的关系，并保留跨姿态验证，不以每节质量唯一可辨识为前提"
+  ]
+}

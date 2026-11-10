@@ -452,6 +452,24 @@ public:
         shutdownToInit();
         return failed;
       }
+      if (!torque) {
+        // 校验新增电流、模式和目标扭矩字段，不能只凭总字节数认定映射有效。
+        struct MappingCheck {std::uint16_t index; std::uint8_t sub; std::uint32_t expected;};
+        for (const auto & check : {MappingCheck{0x1A00, 5, kZeroErrTxActualCurrent},
+          MappingCheck{0x1A00, 6, kZeroErrTxModeDisplay}, MappingCheck{0x1600, 3, kZeroErrRxTargetTorque}})
+        {
+          std::uint32_t entry = 0;
+          int size = sizeof(entry);
+          const int rc = ecx_SDOread(&context_, slave, check.index, check.sub, FALSE,
+            &size, &entry, EC_TIMEOUTRXM);
+          if (rc <= 0 || size != static_cast<int>(sizeof(entry)) || etohl(entry) != check.expected) {
+            const Result failed = Result::fail(CoreError::kEthercatNotReady,
+              "从站 " + std::to_string(slave) + " 的位置/扭矩共用PDO读回不符");
+            shutdownToInit();
+            return failed;
+          }
+        }
+      }
       if (torque) {
         torque_out_[slave] = reinterpret_cast<TorqueOutput *>(context_.slavelist[slave].outputs);
         torque_in_[slave] = reinterpret_cast<TorqueInput *>(context_.slavelist[slave].inputs);
@@ -462,6 +480,7 @@ public:
         position_in_[slave] = reinterpret_cast<ZeroErrInput *>(context_.slavelist[slave].inputs);
         position_out_[slave]->control_word = 0;
         position_out_[slave]->target_position = 0;
+        position_out_[slave]->target_torque = 0;
         position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
         position_out_[slave]->reserved = 0;
       }
@@ -919,11 +938,13 @@ private:
     writePdoEntry(context, slave, 0x1600, 1, sizeof(value32), &value32);
     value32 = kZeroErrRxTargetPosition;
     writePdoEntry(context, slave, 0x1600, 2, sizeof(value32), &value32);
-    value32 = kZeroErrRxModeOfOperation;
+    value32 = kZeroErrRxTargetTorque;
     writePdoEntry(context, slave, 0x1600, 3, sizeof(value32), &value32);
-    value32 = kZeroErrRxPadding;
+    value32 = kZeroErrRxModeOfOperation;
     writePdoEntry(context, slave, 0x1600, 4, sizeof(value32), &value32);
-    value8 = 4;
+    value32 = kZeroErrRxPadding;
+    writePdoEntry(context, slave, 0x1600, 5, sizeof(value32), &value32);
+    value8 = 5;
     writePdoEntry(context, slave, 0x1600, 0, sizeof(value8), &value8);
     value8 = 0;
     writePdoEntry(context, slave, 0x1C12, 0, sizeof(value8), &value8);
@@ -942,7 +963,14 @@ private:
     writePdoEntry(context, slave, 0x1A00, 3, sizeof(value32), &value32);
     value32 = kZeroErrTxActualTorque;
     writePdoEntry(context, slave, 0x1A00, 4, sizeof(value32), &value32);
-    value8 = 4;
+    // 通信手册8.2.98：0x6078可映射到TxPDO，单位额定电流千分比。
+    value32 = kZeroErrTxActualCurrent;
+    writePdoEntry(context, slave, 0x1A00, 5, sizeof(value32), &value32);
+    value32 = kZeroErrTxModeDisplay;
+    writePdoEntry(context, slave, 0x1A00, 6, sizeof(value32), &value32);
+    value32 = kZeroErrRxPadding;
+    writePdoEntry(context, slave, 0x1A00, 7, sizeof(value32), &value32);
+    value8 = 7;
     writePdoEntry(context, slave, 0x1A00, 0, sizeof(value8), &value8);
     value8 = 0;
     writePdoEntry(context, slave, 0x1C13, 0, sizeof(value8), &value8);
@@ -1048,6 +1076,8 @@ private:
           item.status_word = position_in_[slave]->status_word;
           item.actual_position = position_in_[slave]->actual_position;
           item.actual_torque = position_in_[slave]->actual_torque;
+          item.actual_current = position_in_[slave]->actual_current;
+          item.mode_of_operation = position_in_[slave]->mode_of_operation;
         }
         // SAFE_OP 可能只有输入工作计数；请求 OP 后必须等完整计数，不能信任旧过程映像。
         const bool complete = detail::completeProcessData(wkc, expected_wkc_) ||
@@ -1069,7 +1099,8 @@ private:
         } else if (position_out_[slave] != nullptr) {
           position_out_[slave]->control_word = item.control_word;
           position_out_[slave]->target_position = item.target_position;
-          position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
+          position_out_[slave]->mode_of_operation = item.mode_of_operation;
+          position_out_[slave]->target_torque = item.target_torque;
           position_out_[slave]->reserved = 0;
         }
       }
@@ -1235,6 +1266,8 @@ private:
           item.status_word = position_in_[slave]->status_word;
           item.actual_position = position_in_[slave]->actual_position;
           item.actual_torque = position_in_[slave]->actual_torque;
+          item.actual_current = position_in_[slave]->actual_current;
+          item.mode_of_operation = position_in_[slave]->mode_of_operation;
         }
         item.valid = detail::completeProcessData(wkc, expected_wkc_) && item.status_word != 0;
       }
@@ -1258,7 +1291,8 @@ private:
         } else if (position_out_[slave] != nullptr) {
           position_out_[slave]->control_word = item.control_word;
           position_out_[slave]->target_position = item.target_position;
-          position_out_[slave]->mode_of_operation = kZeroErrCyclicPositionMode;
+          position_out_[slave]->mode_of_operation = item.mode_of_operation;
+          position_out_[slave]->target_torque = item.target_torque;
           position_out_[slave]->reserved = 0;
         }
       }
@@ -1618,32 +1652,10 @@ private:
   void applyPendingDriveMode()
   {
     const std::uint32_t packed = pending_drive_mode_.exchange(0);
-    if (packed == 0) {
-      return;
-    }
-    const int mode = static_cast<int>(packed & 0xFF);
-    const std::uint16_t mask = static_cast<std::uint16_t>(packed >> 8);
-    std::uint8_t value = static_cast<std::uint8_t>(mode);
-    int failed = 0;
-    int written = 0;
-    for (int slave = 1; slave <= static_cast<int>(kCoffeeAxisCount); ++slave) {
-      if ((mask & (1u << (slave - 1))) == 0) {
-        continue;
-      }
-      ++written;
-      const int rc = ecx_SDOwrite(
-        &context_, static_cast<std::uint16_t>(slave), 0x6060, 0x00, FALSE,
-        sizeof(value), &value, EC_TIMEOUTRXM);
-      if (rc <= 0) {
-        ++failed;
-      }
-    }
-    if (failed == 0) {
-      say(mode == static_cast<int>(kZeroErrCyclicTorqueMode) ?
-        "✓ 右臂 %d 轴已切到周期同步扭矩" : "✓ 右臂 %d 轴已切回周期同步位置", written);
-    } else {
-      say("✗ %d 台运行模式写入失败，目标 0x%02x", failed, mode);
-    }
+    if (packed == 0) {return;}
+    // 实际模式由onCycle输出0x6060并通过0x6061观察；请求不代表切换完成。
+    say("● 模式切换已请求，mask=0x%04x mode=0x%02x，等待PDO模式反馈",
+      static_cast<unsigned>(packed >> 8), static_cast<unsigned>(packed & 0xFF));
   }
 
   void applyStuckEnableProbe()
@@ -1844,6 +1856,8 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
       return Result::fail(CoreError::kInvalidConfiguration, "drives_enabled 必须为 true/false 或 1/0");
     }
   }
+  current_loaded_ = false;
+  current_active_ = false;
   gravity_ready_ = false;
   if (const std::string * urdf = findParameter(parameters, "gravity_urdf")) {
     std::string error;
@@ -2028,6 +2042,8 @@ Result SoemEthercatTransport::activate()
     // 上一轮可能已经锁过位置、走过接通节拍。重开前清掉，避免沿用失败那次的状态。
     cyclic_enable_.store(false, std::memory_order_release);
     shutdown_outputs_ = false;
+    current_active_ = false;
+    mit_active_ = false;
     motion_armed_ = false;
     path_active_ = false;
     path_.clear();
@@ -2114,6 +2130,8 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
     held = held_;
   }
   snapshot->sampled_at = std::chrono::steady_clock::now();
+  const double elapsed = has_previous_position_ ?
+    std::chrono::duration<double>(snapshot->sampled_at - previous_read_time_).count() : 0.0;
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     AxisState & axis = snapshot->axes[index];
     const SlaveFeedback & item = feedback[index];
@@ -2125,7 +2143,12 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
     axis.position = pulseToPosition(index, item.actual_position);
     axis.position_valid = std::isfinite(axis.position);
     if (has_previous_position_) {
-      axis.velocity = axis.position - previous_position_[index];
+      // 反馈为 rad/s；跨编码器整圈时仍沿用每轴脉冲归一化规则。
+      const double pulse_delta = normalizePulseDelta(
+        (axis.position - previous_position_[index]) * calibration_[index].pulses_per_unit,
+        calibration_[index].wrap_period_pulse);
+      axis.velocity = elapsed > 0.0 ?
+        pulse_delta / calibration_[index].pulses_per_unit / elapsed : 0.0;
     } else {
       axis.velocity = 0.0;
     }
@@ -2140,11 +2163,10 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
     axis.emergency_input_active = false;
     axis.torque_permille = item.actual_torque;
     axis.torque_valid = true;
-    if (torque_axis_[index]) {
-      axis.current_permille = item.actual_current;
-      axis.current_valid = true;
-    }
+    axis.current_permille = item.actual_current;
+    axis.current_valid = true;
   }
+  previous_read_time_ = snapshot->sampled_at;
   has_previous_position_ = true;
   return Result::ok();
 }
@@ -2171,6 +2193,9 @@ Result SoemEthercatTransport::write(const PositionCommandFrame & command)
     }
     if (!held_[index]) {
       return Result::fail(CoreError::kReadFailed, "位置尚未锁存");
+    }
+    if (!latest_[index].valid || latest_[index].mode_of_operation != kZeroErrCyclicPositionMode) {
+      return Result::fail(CoreError::kReadFailed, "实际模式尚未确认CSP，拒绝位置目标");
     }
     double pulse = 0.0;
     const Result converted = positionToPulse(
@@ -2326,6 +2351,9 @@ Result SoemEthercatTransport::installPath(
     if (!held_[index]) {
       return Result::fail(CoreError::kReadFailed, "位置尚未锁存");
     }
+    if (!latest_[index].valid || latest_[index].mode_of_operation != kZeroErrCyclicPositionMode) {
+      return Result::fail(CoreError::kReadFailed, "实际模式尚未确认CSP，拒绝位置目标");
+    }
   }
   std::vector<CoordinatedKnot> path;
   path.reserve(waypoints.size() + 1);
@@ -2407,8 +2435,10 @@ void SoemEthercatTransport::onCycle(
     return;
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
+  last_cycle_at_ = std::chrono::steady_clock::now();
+  if (current_active_) {updateCurrentGravity(feedback);}
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
-  if (mit_active_ && gravity_ready_) {
+  if (mit_active_ && !current_active_ && gravity_ready_) {
     std::array<double, kCoffeeAxisCount> q{};
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
       if (feedback[index].valid) {
@@ -2492,6 +2522,8 @@ void SoemEthercatTransport::onCycle(
     SlaveCommand & out = (*command)[index];
     out.target_position = held_[index] ? held_pulse_[index] : 0;
     out.target_torque = 0;
+    out.mode_of_operation = mit_active_ && (mit_mask_ & (1u << index)) != 0 ?
+      kZeroErrCyclicTorqueMode : kZeroErrCyclicPositionMode;
     // 不完整帧不推进使能。故障位在官方 1 秒节拍结束前仍按示例发 0x0080，之后才停在 0。
     if (!item.valid) {
       out.control_word = 0x0000;
@@ -2543,7 +2575,13 @@ void SoemEthercatTransport::onCycle(
       held_pulse_[index] = item.actual_position;
       goal_pulse_[index] = item.actual_position;
       out.target_position = item.actual_position;
-      out.target_torque = mitTorque(index, item.actual_position);
+      if (current_active_) {
+        const int side = index >= 8 ? 1 : 0;
+        const int slot = static_cast<int>(index) - (side == 1 ? 8 : 1);
+        out.target_torque = static_cast<std::int16_t>(std::lround(current_previous_[side][slot]));
+      } else {
+        out.target_torque = mitTorque(index, item.actual_position);
+      }
     }
   }
   if (bus_operational_.load(std::memory_order_acquire)) {
@@ -2616,6 +2654,166 @@ void SoemEthercatTransport::logEnableProgress(
       command[index].control_word, enablePhaseLabel(enable_phase_[index]),
       enable_retries_[index], enable_ready_cycles_[index], item.actual_position, dropped_note);
   }
+}
+
+Result SoemEthercatTransport::loadCurrentGravity(const std::string & path)
+{
+  std::uint64_t fingerprint = 0;
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    if (mit_active_ || path_active_ || gravity_calib_running_.load()) {
+      return Result::fail(CoreError::kWriteFailed, "运动或扭矩模式中不能加载参数");
+    }
+    current_loaded_ = false;
+    if (!gravity_ready_) {return Result::fail(CoreError::kInvalidConfiguration, "没有URDF模型");}
+    fingerprint = gravity_.sourceFingerprint();
+  }
+  // 文件读写和内存分配不持有周期线程锁。
+  CurrentGravityBundle parsed;
+  std::string error;
+  if (!loadCurrentGravityFile(path, fingerprint, &parsed, &error)) {
+    return Result::fail(CoreError::kInvalidConfiguration, error);
+  }
+  std::array<CurrentGravity, 2> models;
+  for (int side = 0; side < 2; ++side) {
+    if (parsed.present[side] && !models[side].configure(parsed.arms[side])) {
+      return Result::fail(CoreError::kInvalidConfiguration, "电流模型参数无效");
+    }
+  }
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (mit_active_ || path_active_ || gravity_calib_running_.load() ||
+    fingerprint != gravity_.sourceFingerprint()) {
+    return Result::fail(CoreError::kWriteFailed, "加载期间运行状态改变，未应用参数");
+  }
+  current_bundle_ = std::move(parsed);
+  current_models_ = std::move(models);
+  current_loaded_ = true;
+  current_fault_ = 0;
+  return Result{CoreError::kOk, "电流参数已加载，未切换模式；仅供现场受控验证"};
+}
+
+Result SoemEthercatTransport::enterCurrentGravity()
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!active_ || !current_loaded_ || !drives_enabled_ || shutdown_outputs_ ||
+    !bus_operational_.load() || official_enable_step_ <= kOfficialEnableEnd ||
+    mit_active_ || path_active_ || gravity_calib_running_.load())
+  {
+    return Result::fail(CoreError::kWriteFailed, "未就绪、参数未加载或其他运动模式占用");
+  }
+  if (std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100)) {
+    return Result::fail(CoreError::kReadFailed, "进入时反馈过期");
+  }
+  CurrentGravity::Pose q{}, dq{};
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    if (torque_axis_[i] || !latest_[i].valid || (latest_[i].status_word & 0x006F) != 0x0027 ||
+      latest_[i].mode_of_operation != kZeroErrCyclicPositionMode)
+    {
+      return Result::fail(CoreError::kReadFailed, "进入前需要15轴有效使能且实际模式为CSP");
+    }
+    q[i] = pulseToPosition(i, latest_[i].actual_position);
+  }
+  std::uint16_t mask = 0;
+  for (int side = 0; side < 2; ++side) {
+    if (!current_bundle_.present[side]) {continue;}
+    const int start = side == 1 ? 8 : 1;
+    for (int j = 0; j < 7; ++j) {
+      // 从位置保持时实际电流起步，避免进入时先把支撑电流降为零。
+      current_previous_[side][j] = latest_[start+j].actual_current;
+    }
+    CurrentGravity::Arm check{};
+    if (!current_models_[side].command(gravity_, q, dq, current_previous_[side], kEthercatCycleSec, &check)) {
+      return Result::fail(CoreError::kWriteFailed, "起点超出辨识邻域或电流预算");
+    }
+    mask |= side == 1 ? 0x7F00 : 0x00FE;
+  }
+  current_previous_q_ = q;
+  current_velocity_.fill(0.0);
+  current_mode_wait_ = 0;
+  current_modes_confirmed_ = false;
+  current_fault_ = 0;
+  current_active_ = true;
+  mit_active_ = true;
+  mit_zero_g_ = false;
+  mit_mask_ = mask;
+  motion_armed_ = false;
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    held_pulse_[i] = goal_pulse_[i] = latest_[i].actual_position;
+  }
+  link_->requestDriveMode(kZeroErrCyclicTorqueMode, mask);
+  return Result{CoreError::kOk, "已请求电流重力补偿，等待0x6061确认；腰和未选手臂保持位置"};
+}
+
+Result SoemEthercatTransport::currentGravityStatus()
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (current_fault_ != 0) {
+    return Result::fail(CoreError::kWriteFailed, "电流补偿已退出，故障码=" + std::to_string(current_fault_));
+  }
+  if (!current_active_ || shutdown_outputs_ ||
+    std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
+  {return Result::fail(CoreError::kWriteFailed, "电流补偿未运行或反馈过期");}
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    const auto mode = (mit_mask_ & (1u << i)) != 0 ? kZeroErrCyclicTorqueMode : kZeroErrCyclicPositionMode;
+    if (!latest_[i].valid || (latest_[i].status_word & 0x006F) != 0x0027 || latest_[i].mode_of_operation != mode) {
+      return Result::fail(CoreError::kReadFailed, "模式切换尚未得到全轴反馈确认");
+    }
+  }
+  return Result{CoreError::kOk, "所选手臂CST已确认，腰和未选手臂CSP已确认"};
+}
+
+Result SoemEthercatTransport::currentGravityHoldStatus()
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!active_ || mit_active_ || shutdown_outputs_ || path_active_ || motion_armed_ ||
+    std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
+  {return Result::fail(CoreError::kWriteFailed, "尚未确认位置保持");}
+  for (const auto & item : latest_) {
+    if (!item.valid || (item.status_word & 0x006F) != 0x0027 ||
+      item.mode_of_operation != kZeroErrCyclicPositionMode)
+    {return Result::fail(CoreError::kReadFailed, "CSP实际模式或使能反馈未确认");}
+  }
+  return Result{CoreError::kOk, "15轴CSP使能反馈已确认，仍须观察实际停稳"};
+}
+
+void SoemEthercatTransport::updateCurrentGravity(
+  const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback)
+{
+  CurrentGravity::Pose q{};
+  int fault = 0;
+  bool modes_ready = true;
+  if (shutdown_outputs_) {fault = 1;}
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    if (!feedback[i].valid || (feedback[i].status_word & 0x006F) != 0x0027) {fault = 1;}
+    q[i] = pulseToPosition(i, feedback[i].actual_position);
+    const double delta = normalizePulseDelta((q[i] - current_previous_q_[i]) * calibration_[i].pulses_per_unit,
+      calibration_[i].wrap_period_pulse) / calibration_[i].pulses_per_unit;
+    current_velocity_[i] += 0.05 * (delta / kEthercatCycleSec - current_velocity_[i]);
+    const auto mode = (mit_mask_ & (1u << i)) != 0 ? kZeroErrCyclicTorqueMode : kZeroErrCyclicPositionMode;
+    modes_ready = modes_ready && feedback[i].mode_of_operation == mode;
+  }
+  current_previous_q_ = q;
+  if (!modes_ready && (current_modes_confirmed_ || ++current_mode_wait_ > 1000)) {fault = 3;}
+  if (modes_ready) {current_mode_wait_ = 0; current_modes_confirmed_ = true;}
+  auto next = current_previous_;
+  for (int side = 0; side < 2 && fault == 0; ++side) {
+    if (current_bundle_.present[side] && !current_models_[side].command(gravity_, q,
+      current_velocity_, current_previous_[side], kEthercatCycleSec, &next[side])) {fault = 2;}
+  }
+  if (fault != 0) {
+    current_fault_ = fault;
+    current_active_ = false;
+    mit_active_ = false;
+    motion_armed_ = false;
+    // 有效反馈下超域则回CSP保持；反馈/模式故障无法确认保持，执行关断。
+    if (fault != 2) {shutdown_outputs_ = true;}
+    for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+      if (feedback[i].valid) {held_pulse_[i] = goal_pulse_[i] = feedback[i].actual_position;}
+    }
+    link_->requestDriveMode(kZeroErrCyclicPositionMode, mit_mask_);
+    return;
+  }
+  if (modes_ready) {current_previous_ = next;}
 }
 
 std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t actual_pulse)
@@ -2732,6 +2930,8 @@ Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
   if (!drives_enabled_) {
     return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能进入 MIT");
   }
+  if (mit_active_) {return Result::fail(CoreError::kWriteFailed, "已有扭矩模式占用，请先退出");}
+  mit_mask_ = 0x7F00;
   const auto & descriptors = coffeeAxisDescriptors();
   for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     const SlaveFeedback & item = latest_[index];
@@ -2772,20 +2972,30 @@ Result SoemEthercatTransport::exitMitHold()
     return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
+  if (shutdown_outputs_) {
+    return Result::fail(CoreError::kWriteFailed, "已请求关断，不能把退出请求当成位置保持成功");
+  }
+  current_active_ = false;
   mit_active_ = false;
   mit_zero_g_ = false;
   mit_track_qdes_ = false;
   mit_soft_hold_ = false;
+  motion_armed_ = false;
   gravity_calib_stop_.store(true);
-  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-    if (!latest_[index].valid) {
-      continue;
+  for (const auto & item : latest_) {
+    if (!item.valid || (item.status_word & 0x006F) != 0x0027 ||
+      std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
+    {
+      shutdown_outputs_ = true;
+      return Result::fail(CoreError::kReadFailed, "退出时反馈无效，已请求关断，不能确认位置保持");
     }
+  }
+  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
     held_pulse_[index] = latest_[index].actual_position;
     goal_pulse_[index] = latest_[index].actual_position;
   }
   link_->requestDriveMode(kZeroErrCyclicPositionMode, mit_mask_);
-  return Result{CoreError::kOk, "右臂已回到位置保持"};
+  return Result{CoreError::kOk, "已请求退出扭矩模式并锁存当前位置；需确认CSP反馈和停稳"};
 }
 
 double SoemEthercatTransport::pulseToPosition(std::size_t index, std::int32_t pulse) const

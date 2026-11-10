@@ -727,6 +727,35 @@ def self_check(urdf_path: str) -> int:
     return 0
 
 
+class CurrentGravitySession:
+    """电流补偿会话：请求超时仍锁住位置控制，只有测量确认退出才解锁。"""
+
+    def __init__(self):
+        self.state = "idle"
+
+    @property
+    def locked(self):
+        return self.state != "idle"
+
+    def enter(self, request, confirm):
+        if self.locked:
+            return False
+        self.state = "unknown"
+        if request() and confirm():
+            self.state = "active"
+            return True
+        return False
+
+    def exit(self, request, confirm):
+        self.state = "unknown"
+        # 后端可能已因姿态越界自动退出，退出请求失败仍检查实际保持。
+        request()
+        if confirm():
+            self.state = "idle"
+            return True
+        return False
+
+
 HELP = """
 末端键盘。先用 URDF 计算当前 TCP 在 dummy_root 里的全局坐标，再在这个坐标系里沿直线加 5 mm，并保持这一步开始时的姿态。
   1/2     左臂 / 右臂
@@ -740,7 +769,9 @@ HELP = """
   0 0     连按两次：回到 URDF 零位（15 个关节角全部为 0）
   z z     连按两次：请求零力矩。进 OP 之后不能改过程数据映射，这一步不会松开抱闸
   m m     连按两次：只对右臂做 MIT。左臂和腰保持位置，请扶右臂
-  n       退出 MIT，回到位置保持
+  c       加载下位机 X1_CURRENT_GRAVITY_FILE 参数（不切模式）
+  t t     连按两次：进入已加载的电流重力补偿，腰保持位置
+  n       退出补偿 / MIT，回到位置保持
   g g     连按两次：右臂切到周期同步扭矩，两侧软持采样并拟合。请先按 n，并让开右臂
   v v     连按两次：右臂零重力，只有重力前馈。请扶着右臂，按 n 退出
   p p     连按两次：把当前右臂重力修正写入文件
@@ -769,6 +800,13 @@ def run_teleop() -> int:
     class Teleop(Node):
         def __init__(self) -> None:
             super().__init__("keyboard_tcp_teleop")
+            self.current_session = CurrentGravitySession()
+            self.current_confirm_until = 0.0
+            self.current_check_at = 0.0
+            self.current_enter_future = None
+            self.quiet_since = None
+            self.joint_received_at = None
+            self.joint_stamp_ns = 0
             self.measured: Dict[str, float] = {}
             self.commanded: Dict[str, float] = {}
             self.side = "left"
@@ -801,6 +839,10 @@ def run_teleop() -> int:
             self.gravity_reset_client = self.create_client(Trigger, "/x1/right_arm_gravity_reset")
             self.gravity_save_client = self.create_client(Trigger, "/x1/right_arm_gravity_save")
             self.zero_gravity_client = self.create_client(Trigger, "/x1/zero_gravity")
+            self.current_clients = {
+                name: self.create_client(Trigger, "/x1/current_gravity_" + name)
+                for name in ("load", "enter", "status", "exit", "hold_status")
+            }
             self.trajectory_clients = {}
 
         def attach_joint_states(self) -> None:
@@ -831,7 +873,26 @@ def run_teleop() -> int:
                 JointState, "/joint_states", self._on_joints, profile)
 
         def _on_joints(self, message: JointState) -> None:
-            for name, position in zip(message.name, message.position):
+            stamp = message.header.stamp.sec * 1000000000 + message.header.stamp.nanosec
+            # 重复/倒退的消息不能刷新停稳证据；时钟回退后须重新启动本会话。
+            if stamp <= self.joint_stamp_ns:
+                self.quiet_since = None
+                return
+            self.joint_stamp_ns = stamp
+            now = time.monotonic()
+            positions = dict(zip(message.name, message.position))
+            velocities = dict(zip(message.name, message.velocity))
+            quiet = all(name in positions and name in velocities
+                        and math.isfinite(positions[name]) and math.isfinite(velocities[name])
+                        and abs(velocities[name]) < 0.02 for name in COFFEE_JOINTS)
+            if self.joint_received_at is None or now - self.joint_received_at > 0.5:
+                self.quiet_since = None
+            if not quiet:
+                self.quiet_since = None
+            elif self.quiet_since is None:
+                self.quiet_since = now
+            self.joint_received_at = now
+            for name, position in positions.items():
                 self.measured[name] = float(position)
 
         def ready(self) -> bool:
@@ -866,6 +927,61 @@ def run_teleop() -> int:
             print(f"\n{result.message}")
             return True
 
+        def current_query(self, name):
+            client = self.current_clients[name]
+            if not client.wait_for_service(timeout_sec=0.2):
+                return False
+            future = client.call_async(Trigger.Request())
+            if name == "enter":
+                self.current_enter_future = future
+            rclpy.spin_until_future_complete(self, future, timeout_sec=0.3)
+            try:
+                reply = future.result() if future.done() else None
+                if not future.done() and name != "enter":
+                    client.remove_pending_request(future)
+                return reply is not None and reply.success
+            except Exception as error:
+                print(f"\n补偿服务 {name} 异常: {error}")
+                return False
+
+        def current_confirm(self, holding=False):
+            deadline = time.monotonic() + 2.0
+            # 退出后重新累计测量停稳窗口，不能沿用进入前的结果。
+            if holding:
+                self.quiet_since = None
+            while rclpy.ok() and time.monotonic() < deadline:
+                confirmed = self.current_query("hold_status" if holding else "status")
+                now = time.monotonic()
+                quiet = (self.joint_received_at is not None
+                         and now - self.joint_received_at < 0.5
+                         and self.quiet_since is not None and now - self.quiet_since >= 0.3)
+                if confirmed and (not holding or quiet):
+                    return True
+                rclpy.spin_once(self, timeout_sec=0.05)
+            return False
+
+        def leave_current(self):
+            self.motion_requested = False
+            # 进入请求仍悬而未决时，保持反馈可能早于迟到的模式切换，不能解锁。
+            pending = self.current_enter_future
+            if pending is not None and not pending.done():
+                rclpy.spin_until_future_complete(self, pending, timeout_sec=2.0)
+                if not pending.done():
+                    self.current_session.state = "unknown"
+                    self.current_query("exit")
+                    print("\n进入请求尚未返回，不能确认退出。位置命令保持锁定，请检查下位机及实机。")
+                    return False
+            success = self.current_session.exit(
+                lambda: self.current_query("exit"), lambda: self.current_confirm(holding=True))
+            if success:
+                self.commanded = dict(self.measured)
+                self.mit_hold = False
+                self.zero_g = False
+                print("\n电流补偿已退出：全轴 CSP 保持及测量停稳已确认。")
+            else:
+                print("\n未确认退出保持，位置命令继续锁定；请检查实机，必要时使用硬件急停。")
+            return success
+
         def _on_pvt_result(self, message: String) -> None:
             self.pvt_result = message.data
 
@@ -884,6 +1000,9 @@ def run_teleop() -> int:
             names: Sequence[str],
             waypoints: Sequence[Dict[str, float]],
         ) -> bool:
+            if self.current_session.locked:
+                print("\n补偿模式或退出状态未确认，禁止位置命令。")
+                return False
             if not waypoints:
                 return False
             rows = []
@@ -1010,6 +1129,11 @@ def run_teleop() -> int:
 
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.05)
+            if node.current_session.state == "active" and time.monotonic() >= node.current_check_at:
+                node.current_check_at = time.monotonic() + 0.5
+                if not node.current_query("status"):
+                    print("\n补偿实际模式确认丢失，正在请求退出。")
+                    node.leave_current()
             if pending_since is not None and (node.get_clock().now() - pending_since).nanoseconds > int(node.last_segment_sec * 1e9):
                 node.note_if_ignored()
                 pending_since = None
@@ -1023,6 +1147,39 @@ def run_teleop() -> int:
                 node.urdf_confirm_until = 0.0
             if key == "\x1b":
                 break
+            if key != "t":
+                node.current_confirm_until = 0.0
+            if key == "n" and node.current_session.locked:
+                node.leave_current()
+                continue
+            if node.current_session.locked:
+                if key == "b":
+                    node.current_session.state = "unknown"
+                    node.call_trigger(node.brake_client, "/x1/brake_hold")
+                else:
+                    print("\n电流补偿期间仅允许 n 退出、b 关断、Esc 退出程序。")
+                continue
+            if key == "c":
+                node.call_trigger(node.current_clients["load"], "/x1/current_gravity_load")
+                continue
+            if key == "t":
+                if node.mit_hold or node.zero_torque or pending_since is not None:
+                    print("\n请先退出旧模式并等待位置运动结束。")
+                    continue
+                now = time.monotonic()
+                if now > node.current_confirm_until:
+                    node.current_confirm_until = now + 3.0
+                    print("\n再按 t：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
+                    continue
+                node.current_confirm_until = 0.0
+                node.motion_requested = False
+                if node.current_session.enter(lambda: node.current_query("enter"),
+                                              lambda: node.current_confirm()):
+                    print("\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
+                else:
+                    print("\n进入未确认，正在请求退出并验证保持。")
+                    node.leave_current()
+                continue
             if key == "1":
                 node.side = "left"
                 print("\n左臂")
@@ -1208,7 +1365,11 @@ def run_teleop() -> int:
                 f" -> {target_pose[0]:.3f} {target_pose[1]:.3f} {target_pose[2]:.3f}"
             )
     finally:
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, terminal)
+        try:
+            if node.current_session.locked and not node.leave_current():
+                status = 1
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, terminal)
         node.destroy_node()
         rclpy.shutdown()
     return status

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <cmath>
 #include <string>
 #include <unordered_map>
@@ -29,9 +30,16 @@ class UrdfGravity
 public:
   bool load(const std::string & path, std::string * error);
   bool ready() const {return ready_;}
+  std::uint64_t sourceFingerprint() const {return source_fingerprint_;}
   bool torques(
     const std::array<double, kCoffeeAxisCount> & q_rad,
     std::array<double, kCoffeeAxisCount> * tau_nm) const;
+  using CurrentBasis = std::array<std::array<double, 29>, 7>;
+  // 左/右臂质量和一阶矩几何基函数，加固定部件项；与离线模型一致。
+  // 不使用运行时质量修正；周期调用只使用栈内存。
+  bool currentBasis(
+    const std::array<double, kCoffeeAxisCount> & q_rad,
+    bool right_arm, CurrentBasis * basis) const;
   // 只改右臂 7 节。质量倍率相对 CAD，质心偏移在连杆坐标系，单位米。
   bool setRightArmCorrection(
     const std::array<double, 7> & mass_scale,
@@ -63,6 +71,7 @@ private:
   };
 
   bool ready_{false};
+  std::uint64_t source_fingerprint_{0};
   std::unordered_map<std::string, Link> links_;
   std::vector<Joint> joints_;
   std::unordered_map<std::string, std::vector<int>> children_;

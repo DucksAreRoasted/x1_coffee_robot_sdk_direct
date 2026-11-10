@@ -13,6 +13,7 @@
 
 #include "x1_coffee_hardware_core/gtn_transport.hpp"
 #include "x1_coffee_hardware_core/urdf_gravity.hpp"
+#include "x1_coffee_hardware_core/current_gravity_file.hpp"
 
 namespace x1_coffee_hardware_core
 {
@@ -24,6 +25,7 @@ struct SlaveFeedback
   std::int32_t actual_position{0};
   std::int16_t actual_torque{0};
   std::int16_t actual_current{0};
+  std::uint8_t mode_of_operation{0};
 };
 
 struct SlaveCommand
@@ -31,6 +33,7 @@ struct SlaveCommand
   std::uint16_t control_word{0};
   std::int32_t target_position{0};
   std::int16_t target_torque{0};
+  std::uint8_t mode_of_operation{0x08};
 };
 
 // 生产主站和单测替身都走这个口。替身不打开网口。
@@ -102,6 +105,10 @@ public:
   Result engageBrakes() override;
   Result requestEngageBrakes() override;
   // 停在当前角度，主站按位置误差写 0x6071。退出后回到周期同步位置。
+  Result loadCurrentGravity(const std::string & path);
+  Result enterCurrentGravity();
+  Result currentGravityStatus();
+  Result currentGravityHoldStatus();
   Result enterMitHold();
   Result exitMitHold();
   // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。
@@ -145,6 +152,7 @@ private:
   std::array<SlaveFeedback, kCoffeeAxisCount> latest_{};
   std::array<double, kCoffeeAxisCount> previous_position_{};
   bool has_previous_position_{false};
+  std::chrono::steady_clock::time_point previous_read_time_{};
   std::string ifname_;
   bool configured_{false};
   bool active_{false};
@@ -196,6 +204,18 @@ private:
   int servo_wait_logged_sec_{-1};
   bool servo_wait_done_logged_{false};
   // 主站 MIT。扭矩单位是额定电流的千分比，1000 即额定的 100%。
+  CurrentGravityBundle current_bundle_;
+  std::array<CurrentGravity, 2> current_models_;
+  std::array<CurrentGravity::Arm, 2> current_previous_{};
+  CurrentGravity::Pose current_previous_q_{};
+  CurrentGravity::Pose current_velocity_{};
+  bool current_loaded_{false};
+  bool current_active_{false};
+  int current_mode_wait_{0};
+  bool current_modes_confirmed_{false};
+  int current_fault_{0};  // 1反馈故障、2超域/预算、3模式确认超时。
+  std::chrono::steady_clock::time_point last_cycle_at_{};
+  void updateCurrentGravity(const std::array<SlaveFeedback, kCoffeeAxisCount> & feedback);
   bool mit_active_{false};
   bool mit_zero_g_{false};
   // 单人调试只松开右臂 r1–r7，bit 8..14。左臂和腰保持周期同步位置。

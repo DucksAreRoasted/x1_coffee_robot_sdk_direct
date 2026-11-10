@@ -53,4 +53,34 @@ class PlanTest(unittest.TestCase):
         np.testing.assert_allclose(p[0],0);np.testing.assert_allclose(p[-1],.127)
         self.assertLessEqual(np.max(np.abs(np.diff(p,axis=0))),.01)
 
+    def test_left_plan_keeps_waist_right_fixed_and_pairs(self):
+        seed=np.array([(float(self.model.by_name[j].find('limit').get('lower'))+
+                        float(self.model.by_name[j].find('limit').get('upper')))/2 for j in JOINTS])
+        fixed=[0,*range(8,15)]
+        for edge in ('lower','upper'):
+            seed[2]=float(self.model.by_name['Joint_l2'].find('limit').get(edge))
+            plan=make_plan(seed,self.model,'l')
+            self.assertEqual(len(plan),60)
+            for step in plan:
+                q=np.asarray(step['q'])
+                np.testing.assert_array_equal(q[fixed],seed[fixed])
+                check_local_pose(seed,q,'l')
+                for j in range(1,8):
+                    limit=self.model.by_name[JOINTS[j]].find('limit')
+                    self.assertGreaterEqual(q[j],float(limit.get('lower'))+.05-1e-12)
+                    self.assertLessEqual(q[j],float(limit.get('upper'))-.05+1e-12)
+            for i in range(0,60,4):
+                np.testing.assert_array_equal(plan[i+1]['q'],plan[i+3]['q'])
+                self.assertLess(plan[i]['q'][2],plan[i+1]['q'][2])
+                self.assertGreater(plan[i+2]['q'][2],plan[i+3]['q'][2])
+
+    def test_left_monitor_rejects_right_drift_and_left_full_turn(self):
+        seed=np.zeros(15)
+        for j,delta in [(0,.021),(8,.021),(14,-.021),(2,2*np.pi),(7,.201)]:
+            q=seed.copy();q[j]=delta
+            with self.assertRaises(ValueError):check_local_pose(seed,q,'l')
+        q=seed.copy();q[1:8]=.20
+        check_local_pose(seed,q,'l')
+        with self.assertRaises(ValueError):make_plan(seed,self.model,'both')
+
 if __name__=='__main__':unittest.main()

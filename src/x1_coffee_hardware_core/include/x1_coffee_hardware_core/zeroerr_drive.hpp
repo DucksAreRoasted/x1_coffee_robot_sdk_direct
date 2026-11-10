@@ -6,11 +6,13 @@
 namespace x1_coffee_hardware_core
 {
 
-// 零差官方 eRob_CSP.cpp 的过程数据。接收 8 字节，发送 12 字节。
+// 在官方CSP布局基础上扩展位置/扭矩共用PDO：Rx 10字节、Tx 16字节。
+// 通信手册4.4.2：模式字节后的8位填充必须处于最后一个映射项。
 struct ZeroErrOutput
 {
   std::uint16_t control_word;
   std::int32_t target_position;
+  std::int16_t target_torque;
   std::uint8_t mode_of_operation;
   std::uint8_t reserved;
 } __attribute__((packed));
@@ -22,6 +24,10 @@ struct ZeroErrInput
   std::int32_t actual_velocity;
   // 0x6077，额定电流的千分比。
   std::int16_t actual_torque;
+  // 0x6078，CSP 采样也要提供独立的电流反馈。
+  std::int16_t actual_current;
+  std::uint8_t mode_of_operation;
+  std::uint8_t reserved;
 } __attribute__((packed));
 
 // 接收 PDO 0x1600，顺序与 eRob_CSP.cpp 相同。
@@ -33,6 +39,7 @@ constexpr std::uint32_t kZeroErrRxPadding = 0x00000008;
 constexpr std::uint32_t kZeroErrTxStatusWord = 0x60410010;
 constexpr std::uint32_t kZeroErrTxActualPosition = 0x60640020;
 constexpr std::uint32_t kZeroErrTxActualVelocity = 0x606C0020;
+constexpr std::uint32_t kZeroErrTxModeDisplay = 0x60610008;
 
 // 该示例写入的模式和轮廓参数。0x01 在 eRob 表 5-1 是轮廓位置。
 constexpr std::uint8_t kZeroErrProfilePositionMode = 0x01;

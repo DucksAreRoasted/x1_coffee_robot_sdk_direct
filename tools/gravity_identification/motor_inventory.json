@@ -3,71 +3,135 @@
   "source": "用户于 2026-11-10 提供的型号清单",
   "manual_reference": "manual/eRob最新手册/eRob机器人关节模组用户手册_V3.45.pdf，第25.2节，印刷页104–106",
   "runtime_applied": false,
-  "note": "型号和名义减速比不改变输出编码器角度换算。结构版本、电机参数及驱动器额定电流仍待核实；左臂型号不推定。",
+  "note": "产品版本按用户指定的最新版本假设分析，不改变输出编码器角度换算；Kt 与产品版本对应关系及输出侧换算未验证；左臂型号不推定。",
   "joints": {
     "Joint_Body": {
       "model": "erob110h120i-bs-18en",
       "nominal_gear_ratio": 120,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 25.0,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V6_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r1": {
       "model": "erob90h100i-bs-18en",
       "nominal_gear_ratio": 100,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 12.5,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.14,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r2": {
       "model": "erob90h100i-bs-18en",
       "nominal_gear_ratio": 100,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 12.5,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.14,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r3": {
       "model": "erob80h50i-bs-18en",
       "nominal_gear_ratio": 50,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 9.6,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V4_MC2/V5_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r4": {
       "model": "erob80h50i-bs-18en",
       "nominal_gear_ratio": 50,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 9.6,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V6",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V4_MC2/V5_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r5": {
       "model": "erob70h100i-bs-18en",
       "nominal_gear_ratio": 100,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 5.4,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V5",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.132,
+        "manual_structure_row": "V4_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r6": {
       "model": "erob70f100i-bs-18en",
       "nominal_gear_ratio": 100,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 5.4,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V3",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     },
     "Joint_r7": {
       "model": "erob70f100i-bs-18en",
       "nominal_gear_ratio": 100,
       "structure_version": null,
       "motor_kt_nm_per_a": null,
-      "drive_rated_current_a_0x6075": null,
-      "output_torque_conversion_verified": false
+      "drive_rated_current_a_0x6075": 5.4,
+      "output_torque_conversion_verified": false,
+      "drive_hardware_version_0x1009": "1005",
+      "assumed_product_version": "V3",
+      "analysis_kt_hypothesis": {
+        "value_nm_per_a": 0.134,
+        "manual_structure_row": "V3_MC2",
+        "basis": "手册该系列最新已列电机参数，仅供离线假设",
+        "product_version_mapping_verified": false
+      }
     }
   },
   "unconfirmed_joints": [
@@ -78,5 +142,18 @@
     "Joint_l5",
     "Joint_l6",
     "Joint_l7"
-  ]
+  ],
+  "current_source": {
+    "host": "192.168.2.230",
+    "path": "/home/szxn/.ros/log/2026-11-10-12-32-19-580216-szxn-Default-string-12876/launch.log",
+    "sha256": "c3c847ea3db94a2f524527659f115ccf2e1cd66ef49f4af192dd72a8980f0431",
+    "note": "本轮启动日志重复读数一致；不证明此前采样时参数完全相同。"
+  },
+  "version_policy": {
+    "selection": "latest_in_supplied_documents",
+    "basis": "用户指定2026年生产电机按最新版本处理，并允许同系列迭代参数近似用于离线辨识",
+    "status": "user_assumption_not_nameplate_verified",
+    "note": "产品版本与手册电机结构版本不可直接等同；没有对应 Kt 的产品版本仅使用最新已列 Kt 做敏感性假设。",
+    "allow_offline_identification": true
+  }
 }

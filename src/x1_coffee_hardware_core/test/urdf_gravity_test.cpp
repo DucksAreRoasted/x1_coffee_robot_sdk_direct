@@ -1,4 +1,6 @@
 #include <cmath>
+#include <fstream>
+#include <limits>
 
 #include "gtest/gtest.h"
 #include "x1_coffee_hardware_core/urdf_gravity.hpp"
@@ -90,4 +92,51 @@ TEST(UrdfGravity, rightArmIdentificationRecoversAMassScale)
   for (int slot = 0; slot < 6; ++slot) {
     EXPECT_NEAR(found_scale[static_cast<std::size_t>(slot)], 1.0, 0.15);
   }
+}
+
+// 固定数据由 Python 几何回归器生成，逐列验证两端坐标和单位一致。
+TEST(UrdfGravity, currentBasisMatchesPythonBothArmsAndIgnoresLegacyCorrections)
+{
+  UrdfGravity gravity;
+  std::string error;
+  ASSERT_TRUE(gravity.load(X1_GRAVITY_URDF, &error)) << error;
+  std::ifstream fixture(X1_CURRENT_BASIS_FIXTURE);
+  ASSERT_TRUE(fixture.good());
+  int cases = 0;
+  int right;
+  while (fixture >> right) {
+    std::array<double, kCoffeeAxisCount> q{};
+    for (double & angle : q) {ASSERT_TRUE(static_cast<bool>(fixture >> angle));}
+    UrdfGravity::CurrentBasis basis{};
+    ASSERT_TRUE(gravity.currentBasis(q, right != 0, &basis));
+    for (const auto & row : basis) {
+      for (double actual : row) {
+        double expected;
+        ASSERT_TRUE(static_cast<bool>(fixture >> expected));
+        EXPECT_NEAR(actual, expected, 1e-10);
+      }
+    }
+    std::array<double, 7> scales{};
+    scales.fill(1.5);
+    std::array<std::array<double, 3>, 7> com{};
+    ASSERT_TRUE(gravity.setRightArmCorrection(scales, com));
+    UrdfGravity::CurrentBasis after{};
+    ASSERT_TRUE(gravity.currentBasis(q, right != 0, &after));
+    EXPECT_EQ(basis, after);
+    ++cases;
+  }
+  EXPECT_EQ(cases, 6);
+}
+
+TEST(UrdfGravity, currentBasisRejectsInvalidInput)
+{
+  UrdfGravity gravity;
+  UrdfGravity::CurrentBasis basis{};
+  std::array<double, kCoffeeAxisCount> q{};
+  EXPECT_FALSE(gravity.currentBasis(q, true, &basis));
+  std::string error;
+  ASSERT_TRUE(gravity.load(X1_GRAVITY_URDF, &error));
+  EXPECT_FALSE(gravity.currentBasis(q, true, nullptr));
+  q[3] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(gravity.currentBasis(q, false, &basis));
 }

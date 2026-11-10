@@ -61,6 +61,9 @@ if(BUILD_TESTING)
   target_link_libraries(command_guard_test ${PROJECT_NAME})
   ament_add_gtest(soem_ethercat_transport_test test/soem_ethercat_transport_test.cpp)
   target_link_libraries(soem_ethercat_transport_test ${PROJECT_NAME})
+  target_compile_definitions(soem_ethercat_transport_test PRIVATE
+    X1_GRAVITY_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../arm_describle/urdf/HRB3Q-LC.urdf"
+    X1_CURRENT_BUNDLE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/test/data/current_bundle.txt")
   ament_add_gtest(erob_error_names_test test/erob_error_names_test.cpp)
   target_link_libraries(erob_error_names_test ${PROJECT_NAME})
   ament_add_gtest(ecat_coe_codec_test test/ecat_coe_codec_test.cpp)
@@ -71,9 +74,15 @@ if(BUILD_TESTING)
   target_link_libraries(direct_ecat_init_test ${PROJECT_NAME})
   ament_add_gtest(zeroerr_drive_test test/zeroerr_drive_test.cpp)
   target_link_libraries(zeroerr_drive_test ${PROJECT_NAME})
+  ament_add_gtest(current_gravity_test test/current_gravity_test.cpp)
+  target_link_libraries(current_gravity_test ${PROJECT_NAME})
+  target_compile_definitions(current_gravity_test PRIVATE
+    X1_CURRENT_BUNDLE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/test/data/current_bundle.txt"
+    X1_GRAVITY_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../arm_describle/urdf/HRB3Q-LC.urdf")
   ament_add_gtest(urdf_gravity_test test/urdf_gravity_test.cpp)
   target_link_libraries(urdf_gravity_test ${PROJECT_NAME})
   target_compile_definitions(urdf_gravity_test PRIVATE
+    X1_CURRENT_BASIS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/test/data/current_basis.txt"
     X1_GRAVITY_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../arm_describle/urdf/HRB3Q-LC.urdf")
 endif()
 

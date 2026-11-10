@@ -74,7 +74,11 @@ def fit(model, poses, side, rms_limit):
     rank = int(np.linalg.matrix_rank(y[~holdout].reshape(-1,28)*sigma))
     pose_rank = int(np.linalg.matrix_rank(np.array([p[1][slots] for p in poses])-np.mean([p[1][slots] for p in poses],axis=0)))
     if rank<7 or pose_rank<3: reasons.append('姿态激励不足')
+    # 静力学存在结构性不可辨识参数；秩不足不等同于所有重力预测都无效。
+    singular_values = np.linalg.svd(y[~holdout].reshape(-1,28)*sigma, compute_uv=False)
     return dict(side=side,accepted_offline=not reasons,rejection_reasons=reasons,
+        individual_link_parameters_unique=(rank==28),
+        regressor_singular_values=singular_values.tolist(),
         paired_poses=len(poses),validation_pose_ids=[p[0] for p,h in zip(poses,holdout) if h],
         regressor_rank=rank,pose_rank=pose_rank,parameter_count=28,mass_scale=scales.tolist(),com_delta_m=com_delta.tolist(),
         validation_rms_nm=validation.tolist(),cad_validation_rms_nm=cad_rms.tolist(),
