@@ -1,0 +1,66 @@
+{
+  "torque_signs_verified": false,
+  "note": "填入每台实际 0x6076 换算的 N·m，以及反馈扭矩到 URDF 正方向的符号；不能仅凭编码器方向推定。",
+  "joints": {
+    "Joint_Body": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l1": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l2": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l3": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l4": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l5": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l6": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_l7": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r1": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r2": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r3": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r4": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r5": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r6": {
+      "rated_nm": null,
+      "sign": null
+    },
+    "Joint_r7": {
+      "rated_nm": null,
+      "sign": null
+    }
+  }
+}
