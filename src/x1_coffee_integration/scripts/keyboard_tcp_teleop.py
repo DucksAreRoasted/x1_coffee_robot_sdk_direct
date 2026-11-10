@@ -1347,7 +1347,7 @@ def run_teleop() -> int:
                                               lambda: node.current_confirm()):
                     print("\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
                 else:
-                    print("\n进入未确认，正在请求退出并验证保持。")
+                    print(f"\n进入未确认：{node.current_query_detail}。正在请求退出并验证保持。")
                     node.leave_current()
                 continue
             if key == "1":
