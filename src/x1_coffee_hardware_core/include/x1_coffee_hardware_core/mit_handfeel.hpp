@@ -18,11 +18,11 @@ public:
     for (int j=0;j<7;++j) {
       if (!std::isfinite(bias[j]) || std::abs(bias[j]) > limits[j]*.8) {return false;}
     }
-    seed_=seed;bias_=bias; qdes_.fill(0.0); dqdes_.fill(0.0); kp_=kp; kd_=kd; ff_.fill(0.0); for (int j=0;j<7;++j) qdes_[j]=seed[8+j]; ready_=true;return true;
+    seed_=seed;bias_=bias; qdes_.fill(0.0); dqdes_.fill(0.0); kp_=kp; kd_=kd; ff_.fill(0.0); custom_.fill(false); for (int j=0;j<7;++j) qdes_[j]=seed[8+j]; ready_=true;return true;
   }
   bool update(int joint, double q_des, double dq_des, double kp_value, double kd_value, double tau_ff) {
     if (joint < 0 || joint >= 7 || !std::isfinite(q_des) || !std::isfinite(dq_des) || !std::isfinite(kp_value) || !std::isfinite(kd_value) || !std::isfinite(tau_ff) || q_des < -3.14 || q_des > 3.14 || std::abs(dq_des) > 2.0 || kp_value < 0 || kp_value > 1000 || kd_value < 0 || kd_value > 300 || std::abs(tau_ff) > limits[joint]) return false;
-    qdes_[joint] = q_des; dqdes_[joint] = dq_des; kp_[joint] = kp_value; kd_[joint] = kd_value; ff_[joint] = tau_ff; return true;
+    qdes_[joint] = q_des; dqdes_[joint] = dq_des; kp_[joint] = kp_value; kd_[joint] = kd_value; ff_[joint] = tau_ff; custom_[joint] = true; return true;
   }
   bool command(const Pose & q,const Pose & dq,const Arm & previous,double dt,Arm * out) const {
     if (!out) {return false;} *out={};
@@ -33,7 +33,7 @@ public:
     }
     Arm next{};
     for (int j=0;j<7;++j) {
-      const double desired=bias_[j]+kp_[j]*(qdes_[j]-q[8+j])-kd_[j]*(dqdes_[j]-dq[8+j])+ff_[j];
+      const double desired=bias_[j]+(custom_[j] ? kp_[j]*(qdes_[j]-q[8+j])+kd_[j]*(dqdes_[j]-dq[8+j])+ff_[j] : kp[j]*(seed_[8+j]-q[8+j])-kd[j]*dq[8+j]);
       if (!std::isfinite(previous[j]) || std::abs(previous[j])>limits[j] ||
           !std::isfinite(desired) || std::abs(desired)>limits[j]) {return false;}
       // 总目标电流限斜率；超过预算退出，不用饱和掩盖支撑不足。
@@ -42,6 +42,6 @@ public:
     *out=next;return true;
   }
 private:
-  bool ready_{false};Pose seed_{};Arm bias_{}; Arm qdes_{}; Arm dqdes_{}; Arm kp_{}; Arm kd_{}; Arm ff_{};
+  bool ready_{false};Pose seed_{};Arm bias_{}; Arm qdes_{}; Arm dqdes_{}; Arm kp_{}; Arm kd_{}; Arm ff_{}; std::array<bool,7> custom_{};
 };
 }
