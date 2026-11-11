@@ -112,6 +112,8 @@ public:
   Result currentGravityHoldStatus();
   Result enterMitHold();
   Result enterMitHandfeel();
+  // 只切 CST 并把 0x6071 恒写 0，不接 kp/kd；传 0 表示退出并回到 CSP。
+  Result enterCstZeroTorque(std::uint16_t axis_mask) override;
   Result updateMitHandfeel(int joint, double q_des, double dq_des, double kp, double kd, double tau_ff);
   Result exitMitHold();
   // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。
@@ -225,6 +227,8 @@ private:
   bool mit_zero_g_{false};
   // 单人调试只松开右臂 r1–r7，bit 8..14。左臂和腰保持周期同步位置。
   std::uint16_t mit_mask_{0x7F00};
+  // 零力矩 CST 验证的轴掩码，非 0 时这些轴按 CST 发、力矩恒 0。
+  std::uint16_t cst_zero_mask_{0};
   double mit_kp_{480.0};
   double mit_kd_{24.0};
   double mit_limit_{1000.0};
