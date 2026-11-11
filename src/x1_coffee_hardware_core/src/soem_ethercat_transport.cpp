@@ -2732,7 +2732,9 @@ Result SoemEthercatTransport::enterMitHandfeel()
   }
   current_previous_[1]=bias;current_previous_q_=q;current_velocity_.fill(0.0);
   current_mode_wait_=0;current_modes_confirmed_=false;current_fault_=0;
-  current_handfeel_=true;current_active_=true;mit_active_=true;mit_zero_g_=false;
+  current_fault_joint_ = -1;
+  current_over_limit_cycles_.fill(0);
+  current_handfeel_=true;current_zero_gravity_=false;current_active_=true;mit_active_=true;mit_zero_g_=false;
   mit_mask_=0x7F00;motion_armed_=false;
   for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
     held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
@@ -2777,11 +2779,19 @@ Result SoemEthercatTransport::enterCurrentGravity()
     mask |= side == 1 ? 0x7F00 : 0x00FE;
   }
   current_handfeel_ = false;
+  current_zero_gravity_ = true;
+  for (int side = 0; side < 2; ++side) {
+    if (current_bundle_.present[side]) {current_models_[side].setPoseDomainEnforced(false);}
+  }
+  current_fault_joint_ = -1;
+  current_over_limit_cycles_.fill(0);
   current_previous_q_ = q;
   current_velocity_.fill(0.0);
   current_mode_wait_ = 0;
   current_modes_confirmed_ = false;
   current_fault_ = 0;
+  current_fault_joint_ = -1;
+  current_over_limit_cycles_.fill(0);
   current_active_ = true;
   mit_active_ = true;
   mit_zero_g_ = false;
@@ -2800,10 +2810,14 @@ Result SoemEthercatTransport::currentGravityStatus()
   if (current_fault_ != 0) {
     // 状态服务提供退出类别；不能把模型保护退出统称为模式丢失。
     const char * reason = current_fault_ == 1 ? "反馈/使能失效或收到关断请求" :
-      current_fault_ == 2 ? (current_handfeel_ ? "超出MIT试验姿态范围或电流预算" : "超出辨识姿态邻域、电流预算或模型计算无效") :
-      current_fault_ == 3 ? "实际模式丢失或切换确认超时" : "未知故障";
+      current_fault_ == 2 ? (current_handfeel_ ? "MIT校准姿态窗口或控制器预算" : "重力模型计算或校准模型故障") :
+      current_fault_ == 3 ? "实际模式丢失或切换确认超时" :
+      current_fault_ == 4 ? "持续电流预算超限" :
+      current_fault_ == 5 ? "关节软限位超限" :
+      current_fault_ == 6 ? "关节速度超限" : "未知故障";
     return Result::fail(CoreError::kWriteFailed,
-      std::string("电流补偿保护退出：") + reason + "，故障码=" + std::to_string(current_fault_));
+      std::string("电流补偿保护退出：") + reason + "，故障码=" + std::to_string(current_fault_) +
+      "，关节=" + std::to_string(current_fault_joint_ + 1));
   }
   if (!current_active_ || shutdown_outputs_ ||
     std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
@@ -2850,12 +2864,42 @@ void SoemEthercatTransport::updateCurrentGravity(
   current_previous_q_ = q;
   if (!modes_ready && (current_modes_confirmed_ || ++current_mode_wait_ > 1000)) {fault = 3;}
   if (modes_ready) {current_mode_wait_ = 0; current_modes_confirmed_ = true;}
+  // 正式零重力使用真实关节软限位和速度上限；校准手感仍由自身局部窗口保护。
+  static constexpr double kJointMin[kCoffeeAxisCount] = {
+    -6.2831852,-3.1415926,-0.15,-3.1415926,-1.5707963,-3.1415926,-1.7453292,-6.2831853,
+    -3.1415926,-3.1415926,-3.1415926,-2.0943951,-3.1415926,-1.7453292,-6.2831853};
+  static constexpr double kJointMax[kCoffeeAxisCount] = {
+    6.2831852,3.1415926,3.1415926,3.1415926,2.0943951,3.1415926,1.7453292,6.2831853,
+    3.1415926,0.15,3.1415926,1.5707963,3.1415926,1.7453292,6.2831853};
+  if (fault == 0) {
+    for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+      const bool selected = (mit_mask_ & (1u << i)) != 0;
+      if (!selected) {continue;}
+      if (q[i] < kJointMin[i] || q[i] > kJointMax[i]) {
+        fault = 5; current_fault_joint_ = static_cast<int>(i); break;
+      }
+      if (std::abs(current_velocity_[i]) > max_velocity_rad_s_[i]) {
+        fault = 6; current_fault_joint_ = static_cast<int>(i); break;
+      }
+      const int side = i >= 8 ? 1 : 0;
+      const int slot = static_cast<int>(i) - (side == 1 ? 8 : 1);
+      if (slot >= 0 && slot < 7 && current_bundle_.present[side]) {
+        const double limit = current_models_[side].limitForJoint(static_cast<std::size_t>(slot));
+        const double measured = std::abs(static_cast<double>(feedback[i].actual_current));
+        if (measured > limit * 1.5 ||
+          (measured > limit && ++current_over_limit_cycles_[i] >= 20)) {
+          fault = 4; current_fault_joint_ = static_cast<int>(i); break;
+        }
+        if (measured <= limit) {current_over_limit_cycles_[i] = 0;}
+      }
+    }
+  }
   auto next = current_previous_;
   if (current_handfeel_ && fault == 0 &&
-    !handfeel_.command(q,current_velocity_,current_previous_[1],kEthercatCycleSec,&next[1])) {fault=2;}
+    !handfeel_.command(q,current_velocity_,current_previous_[1],kEthercatCycleSec,&next[1])) {fault=2; current_fault_joint_ = 8;}
   for (int side = 0; side < 2 && fault == 0 && !current_handfeel_; ++side) {
     if (current_bundle_.present[side] && !current_models_[side].command(gravity_, q,
-      current_velocity_, current_previous_[side], kEthercatCycleSec, &next[side])) {fault = 2;}
+      current_velocity_, current_previous_[side], kEthercatCycleSec, &next[side])) {fault = 4; current_fault_joint_ = side == 1 ? 8 : 1;}
   }
   if (fault != 0) {
     current_fault_ = fault;
@@ -3034,6 +3078,10 @@ Result SoemEthercatTransport::exitMitHold()
   }
   current_active_ = false;
   current_handfeel_ = false;
+  current_zero_gravity_ = false;
+  for (int side = 0; side < 2; ++side) {
+    if (current_bundle_.present[side]) {current_models_[side].setPoseDomainEnforced(true);}
+  }
   mit_active_ = false;
   mit_zero_g_ = false;
   mit_track_qdes_ = false;

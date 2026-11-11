@@ -46,6 +46,18 @@ TEST(CurrentGravity, dampingDirectionSlewAndLocalDomainBothArms)
   }
 }
 
+TEST(CurrentGravity, formalZeroGravityCanLeaveCalibrationNeighborhood)
+{
+  UrdfGravity model; std::string error; ASSERT_TRUE(model.load(X1_GRAVITY_URDF, &error));
+  CurrentGravity controller; auto p = parameters(true); ASSERT_TRUE(controller.configure(p));
+  CurrentGravity::Pose q{}, dq{}; CurrentGravity::Arm prev{}, out{};
+  q[8] = 0.10;
+  EXPECT_FALSE(controller.command(model, q, dq, prev, .001, &out));
+  controller.setPoseDomainEnforced(false);
+  EXPECT_TRUE(controller.command(model, q, dq, prev, .001, &out));
+  EXPECT_DOUBLE_EQ(controller.limitForJoint(0), 100.0);
+}
+
 TEST(CurrentGravity, gravityBudgetAndInvalidConfigurationFailClosed)
 {
   UrdfGravity model;

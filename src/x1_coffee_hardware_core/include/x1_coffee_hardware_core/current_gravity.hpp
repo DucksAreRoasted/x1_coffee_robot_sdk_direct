@@ -30,6 +30,7 @@ public:
   bool configure(const Parameters & p)
   {
     ready_ = false;
+    pose_domain_enforced_ = true;
     // 范围必须由加载者明确提供；局部邻域不是全工作空间有效性的证明。
     if (!std::isfinite(p.neighborhood_rad) || p.neighborhood_rad <= 0.0 ||
       p.neighborhood_rad > 0.20 || p.validated_poses.size() < 15) {return false;}
@@ -49,6 +50,9 @@ public:
   }
 
   // 返回 false 时输出清零但不等于设备停机；调用者必须执行退出/故障处理。
+  void setPoseDomainEnforced(bool enabled) noexcept {pose_domain_enforced_ = enabled;}
+  double limitForJoint(std::size_t joint) const noexcept {return joint < 7 ? parameters_.limit_permille[joint] : 0.0;}
+
   bool command(const UrdfGravity & model, const Pose & q, const Pose & dq,
     const Arm & previous_drive_permille, double dt, Arm * drive_permille) const
   {
@@ -58,8 +62,9 @@ public:
     for (double v : q) {if (!std::isfinite(v)) {return false;}}
     for (double v : dq) {if (!std::isfinite(v)) {return false;}}
     const int start = parameters_.right_arm ? 8 : 1;
-    bool inside = false;
+    bool inside = !pose_domain_enforced_;
     for (const auto & center : parameters_.validated_poses) {
+      if (!pose_domain_enforced_) {break;}
       // 另一条臂不属于本臂串联链；腰参与几何，但必须维持辨识时角度附近。
       bool near = std::abs(q[0] - center[0]) <= 0.02;
       for (int j = 0; j < 7; ++j) {
@@ -93,6 +98,7 @@ public:
 private:
   bool ready_{false};
   Parameters parameters_;
+  bool pose_domain_enforced_{true};
 };
 
 }  // namespace x1_coffee_hardware_core

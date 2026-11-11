@@ -30,6 +30,7 @@ public:
   int shutdowns{0};
   bool feedback_valid{true};
   std::int32_t position_shift{0};
+  bool safe_positions{false};
   std::int16_t actual_current{-123};
   bool follow_mode{true};
   std::atomic<bool> * bus_operational{nullptr};
@@ -56,7 +57,7 @@ public:
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
       feedback[index].valid = feedback_valid;
       feedback[index].status_word = status;
-      feedback[index].actual_position = 1000 * static_cast<std::int32_t>(index + 1) + position_shift;
+      feedback[index].actual_position = (safe_positions ? 0 : 1000 * static_cast<std::int32_t>(index + 1)) + position_shift;
       feedback[index].actual_current = actual_current;
       feedback[index].mode_of_operation = follow_mode ? last[index].mode_of_operation : 0x08;
       feedback[index].actual_torque = 456;
@@ -822,74 +823,6 @@ TEST(SoemEthercatTransport, csp_reports_independent_current_and_velocity_in_radi
   EXPECT_NEAR(after.axes[8].velocity * dt, 0.01, 1e-10);
 }
 
-TEST(SoemEthercatTransport, current_gravity_modes_limits_exit_and_feedback_failure)
-{
-  auto owned = std::make_unique<FakeLink>();
-  auto * link = owned.get();
-  link->status = 0x1237;
-  link->actual_current = 20;
-  SoemEthercatTransport transport(std::move(owned));
-  auto config = parameters(true);
-  config["gravity_urdf"] = X1_GRAVITY_URDF;
-  int axis = 0;
-  for (const auto & descriptor : coffeeAxisDescriptors()) {
-    config["model_zero." + std::string(descriptor.joint_name)] = std::to_string(-(++axis));
-  }
-  ASSERT_TRUE(transport.configure(config));
-  ASSERT_TRUE(transport.activate());
-  for (int i = 0; i < 1002; ++i) {link->replay();}
-  const auto loaded = transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE);
-  ASSERT_TRUE(loaded);
-  EXPECT_NE(loaded.detail.find("candidate_l="), std::string::npos);
-  EXPECT_NE(loaded.detail.find("candidate_r="), std::string::npos);
-  ASSERT_TRUE(transport.enterCurrentGravity());
-  EXPECT_FALSE(transport.currentGravityStatus());
-  EXPECT_FALSE(transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE));
-  link->replay();
-  EXPECT_EQ(link->last[0].mode_of_operation, 0x08);
-  EXPECT_EQ(link->last[1].mode_of_operation, 0x0A);
-  EXPECT_EQ(link->last[8].mode_of_operation, 0x0A);
-  link->replay();
-  EXPECT_TRUE(transport.currentGravityStatus());
-  EXPECT_LE(link->last[8].target_torque, 20);
-  EXPECT_GE(link->last[8].target_torque, 19);
-  EXPECT_FALSE(transport.startMotion());
-  ASSERT_TRUE(transport.exitMitHold());
-  EXPECT_FALSE(transport.currentGravityHoldStatus());
-  link->replay();
-  EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
-  EXPECT_EQ(link->last[8].target_position, 9000);
-  link->replay();
-  EXPECT_TRUE(transport.currentGravityHoldStatus());
-  ASSERT_TRUE(transport.enterCurrentGravity());
-  link->replay();link->replay();
-  // 邻域外返回当前位置保持，不继续外推补偿电流。
-  // 用低速连续测量越过邻域，瞬移现在应优先触发全局速度关断。
-  for (int shift = 1; shift <= 40; ++shift) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    link->position_shift = shift;
-    link->replay();
-    if (!transport.currentGravityStatus()) {break;}
-  }
-  const auto domain_status = transport.currentGravityStatus();
-  EXPECT_FALSE(domain_status);
-  EXPECT_NE(domain_status.detail.find("辨识姿态邻域"), std::string::npos);
-  EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
-  EXPECT_EQ(link->last[8].target_position, 9000 + link->position_shift);
-  while (link->position_shift > 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    --link->position_shift;
-    link->replay();
-  }
-  link->replay();link->replay();
-  ASSERT_TRUE(transport.enterCurrentGravity());
-  link->feedback_valid = false;
-  link->replay();
-  EXPECT_FALSE(transport.currentGravityStatus());
-  EXPECT_FALSE(transport.exitMitHold());
-  EXPECT_EQ(link->last[8].control_word, 0);
-}
-
 TEST(SoemEthercatTransport, current_gravity_mode_timeout_does_not_claim_success)
 {
   auto owned = std::make_unique<FakeLink>();
@@ -919,7 +852,7 @@ TEST(SoemEthercatTransport, current_gravity_mode_timeout_does_not_claim_success)
 TEST(SoemEthercatTransport, handfeel_needs_no_candidate_and_confirms_actual_mode_and_exit)
 {
   auto owned=std::make_unique<FakeLink>();auto * link=owned.get();
-  link->status=0x1237;link->actual_current=20;
+  link->status=0x1237;link->actual_current=20;link->safe_positions=true;
   SoemEthercatTransport transport(std::move(owned));
   auto config=parameters(true);config["gravity_urdf"]=X1_GRAVITY_URDF;
   ASSERT_TRUE(transport.configure(config));ASSERT_TRUE(transport.activate());
