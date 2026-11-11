@@ -827,7 +827,7 @@ class KeyboardMenu:
     """菜单数字只解释为菜单动作，不穿透到选臂和点动。"""
     ITEMS = {
         "gravity": {"1": "f", "2": "x", "3": "c", "4": "t", "5": "H"},
-        "mit": {"M": "M"},
+        "mit": {"M": "M", "m": "M"},
         "home": {"1": "h", "2": "0"},
         "advanced": {"1": "m", "2": "v", "3": "g", "4": "r", "5": "p", "6": "z"},
     }
@@ -857,7 +857,7 @@ class KeyboardMenu:
             return None
         if self.mode != "main":
             return self.ITEMS[self.mode].get(key)
-        menus = {"g": "gravity", "h": "home", "`": "advanced", "M": "mit"}
+        menus = {"g": "gravity", "h": "home", "`": "advanced", "M": "mit", "m": "mit"}
         if key in menus:
             self.mode = menus[key]
             return None
@@ -1316,7 +1316,7 @@ def run_teleop() -> int:
             # 换菜单、其他选择及帮助都会撤销上一次二次确认，不能跨菜单复用。
             for action, field in {
                 "h": "home_confirm_until", "0": "urdf_confirm_until",
-                "M": "handfeel_confirm_until",
+                "M": "handfeel_confirm_until", "m": "handfeel_confirm_until",
                 "x": "sample_confirm_until", "t": "current_confirm_until", "H": "handfeel_confirm_until",
                 "z": "zero_confirm_until", "m": "mit_confirm_until",
                 "v": "zero_g_confirm_until", "g": "gravity_confirm_until",
@@ -1370,29 +1370,29 @@ def run_teleop() -> int:
             if key == "c":
                 node.call_trigger(node.current_clients["load"], "/x1/current_gravity_load")
                 continue
-            if key in ("t", "H", "M"):
-                if key in ("H", "M") and node.side != "right":
+            if key in ("t", "H", "M", "m"):
+                if key in ("H", "M", "m") and node.side != "right":
                     print("\n本版MIT手感仅支持右臂，请返回主界面按2选择右臂。")
                     continue
                 if node.mit_hold or node.zero_torque or pending_since is not None:
                     print("\n请先退出旧模式并等待位置运动结束。")
                     continue
                 now = time.monotonic()
-                field = "handfeel_confirm_until" if key in ("H", "M") else "current_confirm_until"
+                field = "handfeel_confirm_until" if key in ("H", "M", "m") else "current_confirm_until"
                 if now > getattr(node, field):
                     setattr(node, field, now + 3.0)
-                    print("\n再次选择 M：右臂MIT参数模式，松手有回正趋势；请准备急停。" if key in ("H", "M") else
+                    print("\n再次选择 M：右臂MIT参数模式，松手有回正趋势；请准备急停。" if key in ("H", "M", "m") else
                           "\n再次选择 4：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
                     continue
                 setattr(node, field, 0.0)
                 node.motion_requested = False
-                service = "handfeel" if key in ("H", "M") else "enter"
+                service = "handfeel" if key in ("H", "M", "m") else "enter"
                 if key in ("H", "M") and not node.current_confirm(holding=True):
                     print("\n未确认全轴CSP和测量停稳，未发送MIT进入请求。")
                     continue
                 if node.current_session.enter(lambda: node.current_query(service),
                                               lambda: node.current_confirm()):
-                    if key in ("H", "M"):
+                    if key in ("H", "M", "m"):
                         node.mit_editor.active = True; node.mit_editor.arm = "right"
                         for index, name in enumerate(RIGHT_JOINTS):
                             node.mit_editor.values["q_des"] = node.measured.get(name, 0.0) if index == node.mit_editor.joint else node.mit_editor.values["q_des"]
