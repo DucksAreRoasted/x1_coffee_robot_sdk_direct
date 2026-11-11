@@ -31,8 +31,8 @@ int main(void)
   for (i=0;i<AXES;++i) {
     sc[i] = ecrt_master_slave_config(master, 0, (uint16_t)i, VENDOR, PRODUCT);
     if (!sc[i]) {fprintf(stderr,"IgH: slave %d config failed\n",i+1); return 1;}
-    if (ecrt_slave_config_sync_manager(sc[i], 2, EC_DIR_OUTPUT, 1, EC_WD_ENABLE) ||
-        ecrt_slave_config_sync_manager(sc[i], 3, EC_DIR_INPUT, 1, EC_WD_DISABLE)) {
+    if (ecrt_slave_config_sync_manager(sc[i], 2, EC_DIR_OUTPUT, EC_WD_ENABLE) ||
+        ecrt_slave_config_sync_manager(sc[i], 3, EC_DIR_INPUT, EC_WD_DISABLE)) {
       fprintf(stderr,"IgH: slave %d sync manager config failed\n",i+1); return 1;
     }
     /* 驱动器 PDO 映射对象只读：保留从站默认映射，仅注册已确认的 entry。 */
