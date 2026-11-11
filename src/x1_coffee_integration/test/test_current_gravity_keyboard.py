@@ -119,7 +119,9 @@ class MenuTest(unittest.TestCase):
         menu=NS['KeyboardMenu']()
         for key in '12wsadqeikjluo[]':self.assertEqual(menu.route(key),key)
         for key in 'fzvrcptx0':self.assertIsNone(menu.route(key))
-        self.assertIsNone(menu.route('m'))
+        self.assertEqual(menu.route('m'), 'M')
+        menu=NS['KeyboardMenu']()
+        self.assertIsNone(menu.route('M'))
         self.assertEqual(menu.route('M'), 'M')
 
     def test_menu_numbers_never_select_arm_or_jog(self):
