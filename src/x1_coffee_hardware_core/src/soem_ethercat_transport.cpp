@@ -2720,23 +2720,28 @@ Result SoemEthercatTransport::updateMitHandfeel(int joint, double q_des, double 
 
 Result SoemEthercatTransport::enterCstZeroTorque(std::uint16_t axis_mask)
 {
-  std::lock_guard<std::mutex> lock(sample_mu_);
-  if (!active_ || !drives_enabled_ || !bus_operational_.load() || shutdown_outputs_ ||
-    mit_active_ || path_active_ || motion_armed_ ||
-    std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
-  {return Result::fail(CoreError::kWriteFailed, "零力矩 CST 验证需要新鲜 CSP 保持且无其他运动占用");}
+  // 校验在锁内做完就放锁：IgH 的 requestDriveMode 是阻塞邮箱调用，
+  // 持锁调用会把周期线程卡住，服务也会永远不返回。
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    if (!active_ || !drives_enabled_ || !bus_operational_.load() || shutdown_outputs_ ||
+      mit_active_ || path_active_ || motion_armed_ ||
+      std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
+    {return Result::fail(CoreError::kWriteFailed, "零力矩 CST 验证需要新鲜 CSP 保持且无其他运动占用");}
+    if (axis_mask != 0) {
+      for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+        if ((axis_mask & (1u << i)) == 0) {continue;}
+        if (!latest_[i].valid || (latest_[i].status_word & 0x006F) != 0x0027) {
+          return Result::fail(CoreError::kReadFailed, "目标轴未处于已使能状态，拒绝切 CST");
+        }
+      }
+    }
+    cst_zero_mask_ = axis_mask;
+  }
   if (axis_mask == 0) {
-    cst_zero_mask_ = 0;
     link_->requestDriveMode(kZeroErrCyclicPositionMode, 0x7FFF);
     return Result{CoreError::kOk, "已请求回到周期同步位置"};
   }
-  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
-    if ((axis_mask & (1u << i)) == 0) {continue;}
-    if (!latest_[i].valid || (latest_[i].status_word & 0x006F) != 0x0027) {
-      return Result::fail(CoreError::kReadFailed, "目标轴未处于已使能状态，拒绝切 CST");
-    }
-  }
-  cst_zero_mask_ = axis_mask;
   link_->requestDriveMode(kZeroErrCyclicTorqueMode, axis_mask);
   return Result{CoreError::kOk, "已请求切 CST 且目标力矩恒 0，模式以 0x6061 读回为准"};
 }
