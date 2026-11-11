@@ -12,7 +12,8 @@
 #define EXPECTED_WKC (AXES * 3)
 #define SERVO_READY_NS 5000000000LL
 #define OFFICIAL_ENABLE_CYCLES 1000
-#define FEEDBACK_TIMEOUT_CYCLES 15000
+/* IgH 逐台下发 SDO 和 DC，实测 15 台要 14 秒左右才全部进 OP，15 秒太紧。 */
+#define FEEDBACK_TIMEOUT_CYCLES 30000
 #define ENABLE_TIMEOUT_CYCLES 10000
 
 enum drive_state { DRIVE_OTHER, DRIVE_ENABLED, DRIVE_FAULT };
@@ -126,7 +127,7 @@ int main(void)
       break;
     }
     if (!hold_latched && i > FEEDBACK_TIMEOUT_CYCLES) {
-      fprintf(stderr,"IgH: no complete 15-axis feedback within 15 s (WKC=%u state=%u)\n",
+      fprintf(stderr,"IgH: no complete 15-axis feedback within 30 s (WKC=%u state=%u)\n",
         ds.working_counter, ds.wc_state);
       break;
     }
