@@ -99,7 +99,8 @@ const ec_sync_info_t kSyncs[] = {
   {1, EC_DIR_INPUT, 0, nullptr, EC_WD_DISABLE},
   {2, EC_DIR_OUTPUT, 1, &kPdos[0], EC_WD_ENABLE},
   {3, EC_DIR_INPUT, 1, &kPdos[1], EC_WD_DISABLE},
-  {0xff},
+  // 终止项只看 index，其余字段显式写满，免得 -Wextra 报缺初始化。
+  {0xff, EC_DIR_INVALID, 0, nullptr, EC_WD_DISABLE},
 };
 
 constexpr std::size_t kRxCount = sizeof(kRxEntries) / sizeof(kRxEntries[0]);
