@@ -32,12 +32,11 @@ int main(void)
     sc[i] = ecrt_master_slave_config(master, 0, (uint16_t)i, VENDOR, PRODUCT);
     if (!sc[i]) {fprintf(stderr,"IgH: slave %d config failed\n",i+1); return 1;}
     /* 驱动器 PDO 映射对象只读：保留从站默认映射，仅注册已确认的 entry。 */
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x60ff,0, &off[i][0]};
+    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x607a,0, &off[i][0]};
     regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6040,0, &off[i][1]};
     regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6064,0, &off[i][2]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x606b,0, &off[i][3]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6074,0, &off[i][4]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6041,0, &off[i][5]};
+    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x60fd,0, &off[i][3]};
+    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6041,0, &off[i][4]};
     ecrt_slave_config_dc(sc[i], 0x0300, CYCLE_NS, 0, 0, 0);
   }
   if (ecrt_domain_reg_pdo_entry_list(domain, regs)) {fprintf(stderr,"IgH: PDO registration failed\n"); return 1;}
@@ -46,7 +45,7 @@ int main(void)
   clock_gettime(CLOCK_MONOTONIC,&next); printf("IgH probe: 15 slaves, 1 kHz, safe outputs\n");
   for (i=0; !stop && i<15000; ++i) {
     ecrt_master_receive(master); ecrt_domain_process(domain); ecrt_domain_state(domain,&ds); ecrt_master_state(master,&ms);
-    for (int j=0;j<AXES;++j) {EC_WRITE_U32(data+off[j][0],0); EC_WRITE_U16(data+off[j][1],0);}
+    for (int j=0;j<AXES;++j) {EC_WRITE_U32(data+off[j][0],0); EC_WRITE_U32(data+off[j][1],0); EC_WRITE_U16(data+off[j][2],0);}
     ecrt_domain_queue(domain); ecrt_master_application_time(master, (uint64_t)i*CYCLE_NS); ecrt_master_send(master); sleep_cycle(&next);
   }
   printf("IgH probe done: master=%u domain=%u working_counter=%u\n",ms.al_states,ds.working_counter,ds.wc_state);
