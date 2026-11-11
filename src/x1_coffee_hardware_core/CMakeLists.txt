@@ -7,6 +7,14 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 
+set(X1_ETHERCAT_BACKEND "SOEM" CACHE STRING "EtherCAT backend: SOEM or IGH")
+set_property(CACHE X1_ETHERCAT_BACKEND PROPERTY STRINGS SOEM IGH)
+string(TOUPPER "${X1_ETHERCAT_BACKEND}" X1_ETHERCAT_BACKEND_UPPER)
+if(NOT X1_ETHERCAT_BACKEND_UPPER STREQUAL "SOEM" AND
+   NOT X1_ETHERCAT_BACKEND_UPPER STREQUAL "IGH")
+  message(FATAL_ERROR "X1_ETHERCAT_BACKEND must be SOEM or IGH")
+endif()
+
 # SOEM 2.0.0，GPLv3 / 商业双许可。嵌进本包时不安装、不编示例。
 set(SOEM_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -25,6 +33,18 @@ add_library(${PROJECT_NAME} SHARED
   src/urdf_gravity.cpp
   src/mit_controller.cpp
 )
+if(X1_ETHERCAT_BACKEND_UPPER STREQUAL "IGH")
+  find_path(IGH_INCLUDE_DIR ecrt.h
+    PATHS /usr/local/etherlab/include /usr/include)
+  find_library(IGH_LIBRARY ethercat
+    PATHS /usr/local/etherlab/lib /usr/lib /usr/lib/x86_64-linux-gnu)
+  if(NOT IGH_INCLUDE_DIR OR NOT IGH_LIBRARY)
+    message(FATAL_ERROR "IgH requested but ecrt.h/libethercat was not found")
+  endif()
+  target_compile_definitions(${PROJECT_NAME} PRIVATE X1_ETHERCAT_BACKEND_IGH=1)
+  target_include_directories(${PROJECT_NAME} PRIVATE ${IGH_INCLUDE_DIR})
+  target_link_libraries(${PROJECT_NAME} PRIVATE ${IGH_LIBRARY})
+endif()
 target_include_directories(${PROJECT_NAME}
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
