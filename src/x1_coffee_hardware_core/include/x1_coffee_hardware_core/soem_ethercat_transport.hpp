@@ -114,6 +114,7 @@ public:
   Result enterMitHandfeel();
   // 只切 CST 并把 0x6071 恒写 0，不接 kp/kd；传 0 表示退出并回到 CSP。
   Result enterCstZeroTorque(std::uint16_t axis_mask) override;
+  Result cstZeroStatus(std::uint16_t axis_mask) override;
   Result updateMitHandfeel(int joint, double q_des, double dq_des, double kp, double kd, double tau_ff);
   Result exitMitHold();
   // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。

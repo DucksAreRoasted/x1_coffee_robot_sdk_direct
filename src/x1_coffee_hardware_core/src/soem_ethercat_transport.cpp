@@ -2728,7 +2728,15 @@ Result SoemEthercatTransport::enterCstZeroTorque(std::uint16_t axis_mask)
       mit_active_ || path_active_ || motion_armed_ ||
       std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
     {return Result::fail(CoreError::kWriteFailed, "零力矩 CST 验证需要新鲜 CSP 保持且无其他运动占用");}
-    if (axis_mask != 0) {
+    if (axis_mask == 0) {
+      // 退出前把 0x607A 重新对齐退出瞬间的实测值。CST 期间轴若被重力带偏，
+      // 直接回 CSP 会按进入前的旧目标猛拉，判据 4 也就不成立。
+      for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+        if ((cst_zero_mask_ & (1u << i)) == 0 || !latest_[i].valid) {continue;}
+        held_pulse_[i] = latest_[i].actual_position;
+        goal_pulse_[i] = latest_[i].actual_position;
+      }
+    } else {
       for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
         if ((axis_mask & (1u << i)) == 0) {continue;}
         if (!latest_[i].valid || (latest_[i].status_word & 0x006F) != 0x0027) {
@@ -2744,6 +2752,47 @@ Result SoemEthercatTransport::enterCstZeroTorque(std::uint16_t axis_mask)
   }
   link_->requestDriveMode(kZeroErrCyclicTorqueMode, axis_mask);
   return Result{CoreError::kOk, "已请求切 CST 且目标力矩恒 0，模式以 0x6061 读回为准"};
+}
+
+Result SoemEthercatTransport::cstZeroStatus(std::uint16_t axis_mask)
+{
+  // 只读周期线程的锁存值，不发 SDO、不改任何输出，服务可以反复轮询。
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!active_ || !drives_enabled_) {
+    return Result::fail(CoreError::kWriteFailed, "总线未激活，读不到 0x6061");
+  }
+  if (axis_mask == 0) {
+    return Result::fail(CoreError::kInvalidConfiguration, "读回掩码为空");
+  }
+  const auto & descriptors = coffeeAxisDescriptors();
+  std::string detail = "读回";
+  bool confirmed = true;
+  for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+    if ((axis_mask & (1u << i)) == 0) {continue;}
+    const SlaveFeedback & item = latest_[i];
+    // 期望模式跟着当前请求走：mask 内的轴应当是 CST，退出后应当已回到 CSP。
+    const std::uint8_t expected = (cst_zero_mask_ & (1u << i)) != 0 ?
+      kZeroErrCyclicTorqueMode : kZeroErrCyclicPositionMode;
+    const bool enabled = item.valid && (item.status_word & 0x006F) == 0x0027;
+    const bool mode_ok = item.valid && item.mode_of_operation == expected;
+    if (!enabled || !mode_ok) {confirmed = false;}
+    // Δ脉冲是 0x607A 目标与 0x6064 实际之差，退出后应接近 0。
+    const std::int32_t delta = item.valid ? held_pulse_[i] - item.actual_position : 0;
+    char buffer[192];
+    std::snprintf(
+      buffer, sizeof(buffer), " 轴%zu(%.*s)=0x%02x 期望0x%02x 状态0x%04x 力矩%d‰ Δ脉冲%d%s",
+      i + 1, static_cast<int>(descriptors[i].joint_name.size()),
+      descriptors[i].joint_name.data(),
+      static_cast<unsigned>(item.mode_of_operation),
+      static_cast<unsigned>(expected), static_cast<unsigned>(item.status_word),
+      static_cast<int>(item.actual_torque), static_cast<int>(delta),
+      (!enabled || !mode_ok) ? " 未确认" : "");
+    detail += buffer;
+  }
+  if (!confirmed) {
+    return Result::fail(CoreError::kWriteFailed, detail);
+  }
+  return Result{CoreError::kOk, detail};
 }
 
 Result SoemEthercatTransport::enterMitHandfeel()

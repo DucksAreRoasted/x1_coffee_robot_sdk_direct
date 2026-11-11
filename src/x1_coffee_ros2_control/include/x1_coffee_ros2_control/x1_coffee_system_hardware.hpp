@@ -73,6 +73,8 @@ private:
   // 零力矩 CST 验证开关：第一次调用切入，再调一次退回 CSP。
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cst_zero_service_;
   bool cst_zero_active_{false};
+  // 进入时用的掩码。退出后仍按它读回 0x6061，确认都回到 CSP。
+  std::uint16_t cst_zero_active_mask_{0};
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr mit_exit_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_calib_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_reset_service_;

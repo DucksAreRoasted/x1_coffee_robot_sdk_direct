@@ -869,3 +869,36 @@ TEST(SoemEthercatTransport, handfeel_needs_no_candidate_and_confirms_actual_mode
   for (const auto & cmd:link->last) {EXPECT_EQ(cmd.mode_of_operation,0x08);}
   link->actual_current=300;link->replay();EXPECT_FALSE(transport.enterMitHandfeel());
 }
+
+TEST(SoemEthercatTransport, cst_zero_exit_relatches_target_to_measured)
+{
+  // 零力矩 CST 只切掩码内的轴；退出时 0x607A 必须改成退出瞬间的 0x6064，
+  // 否则 CST 期间被重力带偏的轴回 CSP 会被旧目标猛拉（判据 4）。
+  auto owned = std::make_unique<FakeLink>();
+  auto * link = owned.get();
+  link->status = 0x1237;
+  SoemEthercatTransport transport(std::move(owned));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  for (int i = 0; i < 1002; ++i) {link->replay();}
+
+  // 位 8 = r1（轴 9），只切这一轴。
+  ASSERT_TRUE(transport.enterCstZeroTorque(0x0100));
+  // 0x6061 读回比 0x6060 输出晚一拍，模式确认要看下一拍的反馈。
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[8].mode_of_operation, 0x0A);
+  EXPECT_EQ(link->last[8].target_torque, 0);
+  EXPECT_EQ(link->last[9].mode_of_operation, 0x08);
+  EXPECT_TRUE(transport.cstZeroStatus(0x0100));
+
+  // CST 期间该轴被重力带偏 37 个脉冲；目标仍停在进入前的锁存值。
+  link->position_shift = 37;
+  link->replay();
+  EXPECT_EQ(link->last[8].target_position, 9000);
+
+  ASSERT_TRUE(transport.enterCstZeroTorque(0));
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
+  EXPECT_EQ(link->last[8].target_position, 9037);
+  EXPECT_TRUE(transport.cstZeroStatus(0x0100));
+}

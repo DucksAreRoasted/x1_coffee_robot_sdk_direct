@@ -209,6 +209,9 @@ bool X1CoffeeSystemHardware::startMotionService()
   motion_node_ = std::make_shared<rclcpp::Node>(
     "x1_coffee_system_hardware", rclcpp::NodeOptions().use_global_arguments(false));
   debugf("startMotionService node created");
+  // 零力矩 CST 验证的轴掩码。默认右臂 7 轴（文档 0x7F00）；实机第一次请先
+  // ros2 param set /x1_coffee_system_hardware cst_zero_mask 16384 只切 r7 单轴。
+  motion_node_->declare_parameter<std::int64_t>("cst_zero_mask", 0x7F00);
   // 自动采样的异常出口，服务成功仍须由调用方检查实际运动是否停止。
   cancel_pvt_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/cancel_pvt",
@@ -312,19 +315,52 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->message = result.detail.empty() ? std::string("已请求关断") : result.detail;
     });
   // 只切 CST、目标力矩恒 0，不接 kp/kd；用来单独验证模式切换。
+  // 掩码由参数 cst_zero_mask 给出，调用一次切入、再调用一次退出。
   cst_zero_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/mit_zero_check",
     [this](
       const std::shared_ptr<std_srvs::srv::Trigger::Request>,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
     {
-      const std::uint16_t mask = cst_zero_active_ ? 0x0000 : 0x7F00;
-      const auto result = transport_ ? transport_->enterCstZeroTorque(mask) :
-        x1_coffee_hardware_core::Result::fail(
-          x1_coffee_hardware_core::CoreError::kTransportUnavailable, "传输层尚未创建");
+      if (!transport_) {
+        response->success = false;
+        response->message = "传输层尚未创建";
+        return;
+      }
+      const std::int64_t configured = std::clamp<std::int64_t>(
+        motion_node_->get_parameter("cst_zero_mask").as_int(), 0, 0x7FFF);
+      const std::uint16_t mask = cst_zero_active_ ? 0x0000 :
+        static_cast<std::uint16_t>(configured);
+      // 退出后仍用进入时的掩码读回，确认这些轴都回到 CSP。
+      const std::uint16_t observe = cst_zero_active_ ? cst_zero_active_mask_ : mask;
+      RCLCPP_INFO(
+        motion_node_->get_logger(), "%s零力矩 CST 验证，掩码 0x%04x",
+        mask == 0 ? "退出" : "进入", static_cast<unsigned>(mask));
+      const auto result = transport_->enterCstZeroTorque(mask);
       cst_zero_active_ = static_cast<bool>(result) && mask != 0;
-      response->success = static_cast<bool>(result);
-      response->message = result.detail;
+      if (result && mask != 0) {
+        cst_zero_active_mask_ = mask;
+      }
+      if (!result) {
+        response->success = false;
+        response->message = result.detail;
+        return;
+      }
+      // 0x6060 要等周期线程写下去、驱动器再回 0x6061，所以在这里轮询读回。
+      // 每次只短暂持锁读锁存值，不碰邮箱，最长 1 秒。
+      std::string readback;
+      bool confirmed = false;
+      for (int attempt = 0; attempt < 20 && rclcpp::ok(); ++attempt) {
+        const auto status = transport_->cstZeroStatus(observe);
+        readback = status.detail;
+        if (status) {
+          confirmed = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      response->success = confirmed;
+      response->message = result.detail + "；" + (confirmed ? "" : "未确认：") + readback;
     });
   mit_hold_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/mit_hold",
