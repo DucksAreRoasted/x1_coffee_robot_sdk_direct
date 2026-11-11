@@ -311,6 +311,21 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = static_cast<bool>(result);
       response->message = result.detail.empty() ? std::string("已请求关断") : result.detail;
     });
+  // 只切 CST、目标力矩恒 0，不接 kp/kd；用来单独验证模式切换。
+  cst_zero_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/mit_zero_check",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      const std::uint16_t mask = cst_zero_active_ ? 0x0000 : 0x7F00;
+      const auto result = transport_ ? transport_->enterCstZeroTorque(mask) :
+        x1_coffee_hardware_core::Result::fail(
+          x1_coffee_hardware_core::CoreError::kTransportUnavailable, "传输层尚未创建");
+      cst_zero_active_ = static_cast<bool>(result) && mask != 0;
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
   mit_hold_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/mit_hold",
     [this](

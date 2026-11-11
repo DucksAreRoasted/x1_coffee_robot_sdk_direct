@@ -70,6 +70,9 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_torque_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr brake_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr mit_hold_service_;
+  // 零力矩 CST 验证开关：第一次调用切入，再调一次退回 CSP。
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cst_zero_service_;
+  bool cst_zero_active_{false};
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr mit_exit_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_calib_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_reset_service_;
