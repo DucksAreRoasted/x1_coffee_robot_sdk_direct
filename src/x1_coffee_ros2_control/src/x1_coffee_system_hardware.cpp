@@ -17,6 +17,7 @@
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "x1_coffee_hardware_core/coffee_axis_model.hpp"
+#include "x1_coffee_hardware_core/default_transport.hpp"
 #include "x1_coffee_hardware_core/pending_gtn_transport.hpp"
 #include "x1_coffee_hardware_core/soem_ethercat_transport.hpp"
 
@@ -540,8 +541,9 @@ bool X1CoffeeSystemHardware::createTransport()
   const std::string backend = iterator == info_.hardware_parameters.end() ?
     "ethercat" : iterator->second;
   // 旧参数名仍指这条网口主站，避免启动时再去打开固高库。
+  // 具体是哪家的主站由编译时的 X1_ETHERCAT_BACKEND 决定（SOEM 或 IgH）。
   if (backend == "ethercat" || backend == "gtn_ethercat") {
-    transport_ = std::make_unique<x1_coffee_hardware_core::SoemEthercatTransport>();
+    transport_ = x1_coffee_hardware_core::makeDefaultTransport();
     return true;
   }
   if (backend == "pending") {

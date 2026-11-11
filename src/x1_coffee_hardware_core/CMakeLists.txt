@@ -32,6 +32,7 @@ add_library(${PROJECT_NAME} SHARED
   src/soem_ethercat_transport.cpp
   src/urdf_gravity.cpp
   src/mit_controller.cpp
+  src/default_transport.cpp
 )
 if(X1_ETHERCAT_BACKEND_UPPER STREQUAL "IGH")
   find_path(IGH_INCLUDE_DIR ecrt.h
@@ -44,6 +45,8 @@ if(X1_ETHERCAT_BACKEND_UPPER STREQUAL "IGH")
   target_compile_definitions(${PROJECT_NAME} PRIVATE X1_ETHERCAT_BACKEND_IGH=1)
   target_include_directories(${PROJECT_NAME} PRIVATE ${IGH_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} PRIVATE ${IGH_LIBRARY})
+  # IgH 总线实现只在 IGH 构建里编译；SOEM 构建没有 ecrt.h。
+  target_sources(${PROJECT_NAME} PRIVATE src/igh_ethercat_link.cpp)
   add_executable(igh_init_probe src/igh_init_probe.c)
   target_include_directories(igh_init_probe PRIVATE ${IGH_INCLUDE_DIR})
   target_link_libraries(igh_init_probe PRIVATE ${IGH_LIBRARY})
