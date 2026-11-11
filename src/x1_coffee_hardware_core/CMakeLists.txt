@@ -23,6 +23,7 @@ add_library(${PROJECT_NAME} SHARED
   src/pending_gtn_transport.cpp
   src/soem_ethercat_transport.cpp
   src/urdf_gravity.cpp
+  src/mit_controller.cpp
 )
 target_include_directories(${PROJECT_NAME}
   PUBLIC
@@ -80,6 +81,9 @@ if(BUILD_TESTING)
     X1_CURRENT_BUNDLE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/test/data/current_bundle.txt"
     X1_GRAVITY_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../arm_describle/urdf/HRB3Q-LC.urdf")
   ament_add_gtest(urdf_gravity_test test/urdf_gravity_test.cpp)
+  target_link_libraries(urdf_gravity_test ${PROJECT_NAME})
+  ament_add_gtest(mit_controller_test test/mit_controller_test.cpp)
+  target_link_libraries(mit_controller_test ${PROJECT_NAME})
   target_link_libraries(urdf_gravity_test ${PROJECT_NAME})
   target_compile_definitions(urdf_gravity_test PRIVATE
     X1_CURRENT_BASIS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/test/data/current_basis.txt"
