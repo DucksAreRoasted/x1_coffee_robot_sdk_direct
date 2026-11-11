@@ -44,6 +44,10 @@ if(X1_ETHERCAT_BACKEND_UPPER STREQUAL "IGH")
   target_compile_definitions(${PROJECT_NAME} PRIVATE X1_ETHERCAT_BACKEND_IGH=1)
   target_include_directories(${PROJECT_NAME} PRIVATE ${IGH_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} PRIVATE ${IGH_LIBRARY})
+  add_executable(igh_init_probe src/igh_init_probe.c)
+  target_include_directories(igh_init_probe PRIVATE ${IGH_INCLUDE_DIR})
+  target_link_libraries(igh_init_probe PRIVATE ${IGH_LIBRARY})
+  install(TARGETS igh_init_probe DESTINATION lib/${PROJECT_NAME})
 endif()
 target_include_directories(${PROJECT_NAME}
   PUBLIC
