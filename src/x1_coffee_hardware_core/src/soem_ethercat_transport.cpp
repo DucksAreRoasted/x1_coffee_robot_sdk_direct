@@ -2579,13 +2579,17 @@ void SoemEthercatTransport::onCycle(
       zeroErrTorqueControlWord(item.status_word) :
       zeroErrCspControlWord(item.status_word);
     out.target_torque = 0;
-    // MIT 时位置目标始终贴着编码器，切回 CSP 才不会猛拉。扭矩由主站刚度律给出。
+    // MIT 和零力矩 CST 都把 0x607A 贴着编码器：切回 CSP 不会猛拉，也不会让驱动器
+    // 按进入时的旧目标累积位置误差。0x1288 就是这么被带出来的。
     const bool mit_axis = mit_active_ && (mit_mask_ & (1u << index)) != 0;
-    if (mit_axis && !torque_axis_[index] && item.valid && operation_enabled) {
+    if ((mit_axis || cst_zero) && !torque_axis_[index] && item.valid && operation_enabled) {
       held_pulse_[index] = item.actual_position;
       goal_pulse_[index] = item.actual_position;
       out.target_position = item.actual_position;
-      if (current_active_) {
+      if (!mit_axis) {
+        // 零力矩验证：目标力矩是常数偏置，第 4 步的小力矩也走这条路。
+        out.target_torque = static_cast<std::int16_t>(cst_zero_torque_permille_);
+      } else if (current_active_) {
         const int side = index >= 8 ? 1 : 0;
         const int slot = static_cast<int>(index) - (side == 1 ? 8 : 1);
         out.target_torque = static_cast<std::int16_t>(std::lround(current_previous_[side][slot]));
@@ -2718,7 +2722,8 @@ Result SoemEthercatTransport::updateMitHandfeel(int joint, double q_des, double 
   return Result{CoreError::kOk, "MIT参数已提交到实时线程"};
 }
 
-Result SoemEthercatTransport::enterCstZeroTorque(std::uint16_t axis_mask)
+Result SoemEthercatTransport::enterCstZeroTorque(
+  std::uint16_t axis_mask, std::int32_t torque_permille)
 {
   // 校验在锁内做完就放锁：IgH 的 requestDriveMode 是阻塞邮箱调用，
   // 持锁调用会把周期线程卡住，服务也会永远不返回。
@@ -2737,20 +2742,36 @@ Result SoemEthercatTransport::enterCstZeroTorque(std::uint16_t axis_mask)
         goal_pulse_[i] = latest_[i].actual_position;
       }
     } else {
+      // 第 4 步的小力矩只允许单轴，且不超过额定 5%（50‰）。多轴同时加力矩
+      // 在没人扶的条件下没有意义，也放大了力矩符号搞反的后果。
+      if (std::abs(torque_permille) > kCstZeroMaxPermille) {
+        return Result::fail(CoreError::kInvalidConfiguration, "小力矩超出额定 5%（±50‰）");
+      }
+      int axis_count = 0;
       for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
         if ((axis_mask & (1u << i)) == 0) {continue;}
+        ++axis_count;
         if (!latest_[i].valid || (latest_[i].status_word & 0x006F) != 0x0027) {
           return Result::fail(CoreError::kReadFailed, "目标轴未处于已使能状态，拒绝切 CST");
         }
       }
+      if (torque_permille != 0 && axis_count != 1) {
+        return Result::fail(CoreError::kInvalidConfiguration, "施加小力矩时掩码只能有一个轴");
+      }
     }
     cst_zero_mask_ = axis_mask;
+    cst_zero_torque_permille_ = axis_mask == 0 ? 0 : torque_permille;
   }
   if (axis_mask == 0) {
     link_->requestDriveMode(kZeroErrCyclicPositionMode, 0x7FFF);
     return Result{CoreError::kOk, "已请求回到周期同步位置"};
   }
   link_->requestDriveMode(kZeroErrCyclicTorqueMode, axis_mask);
+  if (torque_permille != 0) {
+    return Result{
+      CoreError::kOk, "已请求切 CST 并施加 " + std::to_string(torque_permille) +
+      "‰ 力矩，模式以 0x6061 读回为准"};
+  }
   return Result{CoreError::kOk, "已请求切 CST 且目标力矩恒 0，模式以 0x6061 读回为准"};
 }
 

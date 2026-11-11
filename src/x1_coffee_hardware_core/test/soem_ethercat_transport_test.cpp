@@ -891,14 +891,40 @@ TEST(SoemEthercatTransport, cst_zero_exit_relatches_target_to_measured)
   EXPECT_EQ(link->last[9].mode_of_operation, 0x08);
   EXPECT_TRUE(transport.cstZeroStatus(0x0100));
 
-  // CST 期间该轴被重力带偏 37 个脉冲；目标仍停在进入前的锁存值。
+  // CST 期间该轴被重力带偏 37 个脉冲：0x607A 必须跟着编码器走，
+  // 否则驱动器会按旧目标累积位置误差并报 0x1288。
   link->position_shift = 37;
   link->replay();
-  EXPECT_EQ(link->last[8].target_position, 9000);
+  EXPECT_EQ(link->last[8].target_position, 9037);
 
   ASSERT_TRUE(transport.enterCstZeroTorque(0));
   link->replay();link->replay();
   EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
   EXPECT_EQ(link->last[8].target_position, 9037);
   EXPECT_TRUE(transport.cstZeroStatus(0x0100));
+}
+
+TEST(SoemEthercatTransport, cst_zero_torque_offset_is_single_axis_and_bounded)
+{
+  // 第 4 步的小力矩：只允许单轴、限 ±5% 额定（±50‰），退出后清零。
+  auto owned = std::make_unique<FakeLink>();
+  auto * link = owned.get();
+  link->status = 0x1237;
+  SoemEthercatTransport transport(std::move(owned));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  for (int i = 0; i < 1002; ++i) {link->replay();}
+
+  EXPECT_FALSE(transport.enterCstZeroTorque(0x0300, 20));   // 两轴同时加力矩
+  EXPECT_FALSE(transport.enterCstZeroTorque(0x0100, 51));   // 超出 5% 额定
+  ASSERT_TRUE(transport.enterCstZeroTorque(0x0100, 20));
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[8].mode_of_operation, 0x0A);
+  EXPECT_EQ(link->last[8].target_torque, 20);
+  EXPECT_EQ(link->last[9].target_torque, 0);
+
+  ASSERT_TRUE(transport.enterCstZeroTorque(0));
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
+  EXPECT_EQ(link->last[8].target_torque, 0);
 }

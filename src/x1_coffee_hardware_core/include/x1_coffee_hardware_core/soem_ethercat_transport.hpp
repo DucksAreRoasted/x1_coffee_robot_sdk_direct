@@ -112,8 +112,8 @@ public:
   Result currentGravityHoldStatus();
   Result enterMitHold();
   Result enterMitHandfeel();
-  // 只切 CST 并把 0x6071 恒写 0，不接 kp/kd；传 0 表示退出并回到 CSP。
-  Result enterCstZeroTorque(std::uint16_t axis_mask) override;
+  // 只切 CST 并把 0x6071 写常数，不接 kp/kd；传 0 表示退出并回到 CSP。
+  Result enterCstZeroTorque(std::uint16_t axis_mask, std::int32_t torque_permille = 0) override;
   Result cstZeroStatus(std::uint16_t axis_mask) override;
   Result updateMitHandfeel(int joint, double q_des, double dq_des, double kp, double kd, double tau_ff);
   Result exitMitHold();
@@ -228,8 +228,12 @@ private:
   bool mit_zero_g_{false};
   // 单人调试只松开右臂 r1–r7，bit 8..14。左臂和腰保持周期同步位置。
   std::uint16_t mit_mask_{0x7F00};
-  // 零力矩 CST 验证的轴掩码，非 0 时这些轴按 CST 发、力矩恒 0。
+  // 零力矩 CST 验证的轴掩码，非 0 时这些轴按 CST 发，力矩为下面的常值偏置。
   std::uint16_t cst_zero_mask_{0};
+  // 第 4 步的小力矩，单位额定千分比，限 ±5%（±50‰），只作用于掩码内轴。
+  std::int32_t cst_zero_torque_permille_{0};
+  // 额定力矩的 5%。超过这个数就不是「小力矩验证」了。
+  static constexpr std::int32_t kCstZeroMaxPermille = 50;
   double mit_kp_{480.0};
   double mit_kd_{24.0};
   double mit_limit_{1000.0};

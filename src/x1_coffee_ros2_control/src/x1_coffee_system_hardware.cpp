@@ -212,6 +212,8 @@ bool X1CoffeeSystemHardware::startMotionService()
   // 零力矩 CST 验证的轴掩码。默认右臂 7 轴（文档 0x7F00）；实机第一次请先
   // ros2 param set /x1_coffee_system_hardware cst_zero_mask 16384 只切 r7 单轴。
   motion_node_->declare_parameter<std::int64_t>("cst_zero_mask", 0x7F00);
+  // 第 4 步的小力矩偏置，单位额定千分比。0 表示只验证模式切换。
+  motion_node_->declare_parameter<std::int64_t>("cst_zero_torque_permille", 0);
   // 自动采样的异常出口，服务成功仍须由调用方检查实际运动是否停止。
   cancel_pvt_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/cancel_pvt",
@@ -331,12 +333,17 @@ bool X1CoffeeSystemHardware::startMotionService()
         motion_node_->get_parameter("cst_zero_mask").as_int(), 0, 0x7FFF);
       const std::uint16_t mask = cst_zero_active_ ? 0x0000 :
         static_cast<std::uint16_t>(configured);
+      // 第 4 步的小力矩：默认 0，即纯模式切换；上限 ±50‰（额定 5%）由传输层再校验一次。
+      const std::int32_t torque_permille = mask == 0 ? 0 : static_cast<std::int32_t>(
+        std::clamp<std::int64_t>(
+          motion_node_->get_parameter("cst_zero_torque_permille").as_int(), -50, 50));
       // 退出后仍用进入时的掩码读回，确认这些轴都回到 CSP。
       const std::uint16_t observe = cst_zero_active_ ? cst_zero_active_mask_ : mask;
       RCLCPP_INFO(
-        motion_node_->get_logger(), "%s零力矩 CST 验证，掩码 0x%04x",
-        mask == 0 ? "退出" : "进入", static_cast<unsigned>(mask));
-      const auto result = transport_->enterCstZeroTorque(mask);
+        motion_node_->get_logger(), "%s零力矩 CST 验证，掩码 0x%04x，力矩 %d‰",
+        mask == 0 ? "退出" : "进入", static_cast<unsigned>(mask),
+        static_cast<int>(torque_permille));
+      const auto result = transport_->enterCstZeroTorque(mask, torque_permille);
       cst_zero_active_ = static_cast<bool>(result) && mask != 0;
       if (result && mask != 0) {
         cst_zero_active_mask_ = mask;

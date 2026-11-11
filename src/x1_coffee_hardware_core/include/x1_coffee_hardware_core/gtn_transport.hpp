@@ -43,7 +43,7 @@ public:
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   // 只把 mask 内的轴切到 CST 并把 0x6071 恒置 0，不接 kp/kd。
   // 用来把「模式切换」和「力矩输出」分开验证，见 docs/igh_mit_design.md 第八节。
-  virtual Result enterCstZeroTorque(std::uint16_t) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零力矩 CST 验证");}
+  virtual Result enterCstZeroTorque(std::uint16_t, std::int32_t = 0) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零力矩 CST 验证");}
   // 读回 mask 内各轴的 0x6061、状态字和 0x607A 目标与 0x6064 实际之差。
   // 只读周期线程的锁存值、不改输出；服务用它给验收判据留证据。
   virtual Result cstZeroStatus(std::uint16_t) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零力矩 CST 读回");}
