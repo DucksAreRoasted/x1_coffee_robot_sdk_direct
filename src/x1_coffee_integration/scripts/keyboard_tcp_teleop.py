@@ -1387,7 +1387,7 @@ def run_teleop() -> int:
                 setattr(node, field, 0.0)
                 node.motion_requested = False
                 service = "handfeel" if key in ("H", "M", "m") else "enter"
-                if key in ("H", "M") and not node.current_confirm(holding=True):
+                if key in ("H", "M", "m") and not node.current_confirm(holding=True):
                     print("\n未确认全轴CSP和测量停稳，未发送MIT进入请求。")
                     continue
                 if node.current_session.enter(lambda: node.current_query(service),
@@ -1396,7 +1396,7 @@ def run_teleop() -> int:
                         node.mit_editor.active = True; node.mit_editor.arm = "right"
                         for index, name in enumerate(RIGHT_JOINTS):
                             node.mit_editor.values["q_des"] = node.measured.get(name, 0.0) if index == node.mit_editor.joint else node.mit_editor.values["q_des"]
-                    print("\n右臂MIT实际模式已确认：使用 w/s 调参、[/]切参数、1-7选关节、Tab切臂；按n退出。" if key in ("H", "M") else "\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
+                    print("\n右臂MIT实际模式已确认：使用 w/s 调参、[/]切参数、1-7选关节、Tab切臂；按n退出。" if key in ("H", "M", "m") else "\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
                 else:
                     print(f"\n进入未确认：{node.current_query_detail}。正在请求退出并验证保持。")
                     node.leave_current()
