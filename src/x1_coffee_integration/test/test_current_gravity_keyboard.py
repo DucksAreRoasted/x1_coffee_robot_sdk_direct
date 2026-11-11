@@ -115,10 +115,12 @@ class SamplingEntryTest(unittest.TestCase):
         self.assertIs(node.sample_process,process)
 
 class MenuTest(unittest.TestCase):
-    def test_main_keeps_jog_but_removes_old_shortcuts(self):
+    def test_main_keeps_jog_and_opens_mit_menu(self):
         menu=NS['KeyboardMenu']()
         for key in '12wsadqeikjluo[]':self.assertEqual(menu.route(key),key)
-        for key in 'fmzvrcptx0':self.assertIsNone(menu.route(key))
+        for key in 'fzvrcptx0':self.assertIsNone(menu.route(key))
+        self.assertIsNone(menu.route('m'))
+        self.assertEqual(menu.route('M'), 'M')
 
     def test_menu_numbers_never_select_arm_or_jog(self):
         menu=NS['KeyboardMenu']()
