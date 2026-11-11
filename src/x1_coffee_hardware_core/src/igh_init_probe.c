@@ -57,7 +57,7 @@ int main(void)
   if (ecrt_master_activate(master)) {fprintf(stderr,"IgH: activate failed\n"); return 1;}
   data = ecrt_domain_data(domain); if (!data) {fprintf(stderr,"IgH: domain data failed\n"); return 1;}
   clock_gettime(CLOCK_MONOTONIC,&next);
-  const uint64_t app_start = EC_TIMEVAL2NANO(next);
+  const uint64_t app_start = ((uint64_t)next.tv_sec - 946684800ULL) * 1000000000ULL + (uint64_t)next.tv_nsec;
   printf("IgH probe: 15 slaves, 1 kHz, safe outputs\n");
   for (i=0; !stop && i<15000; ++i) {
     ecrt_master_application_time(master, app_start + (uint64_t)i*CYCLE_NS);
