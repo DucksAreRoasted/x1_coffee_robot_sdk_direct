@@ -8,6 +8,10 @@
 
 #include <ecrt.h>
 
+#include <pthread.h>
+#include <sched.h>
+#include <sys/mman.h>
+
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -37,6 +41,8 @@ constexpr unsigned int kExpectedWorkingCounter = static_cast<unsigned int>(kAxes
 constexpr int kOpenTimeoutSec = 60;
 // 退使能时多跑几十拍 0x0006，让驱动器先看到关机字再断主站。
 constexpr int kShutdownCycles = 50;
+// 与 SOEM 路径和启动脚本一致的 EtherCAT 专用核。
+constexpr int kBusCpu = 3;
 
 void say(const char * format, ...)
 {
@@ -170,6 +176,31 @@ struct IghEthercatLink::Impl
 
   void cycle()
   {
+    // 周期线程尽量独占 CPU 3 并提成 SCHED_FIFO。启动脚本可能只放开 CPU 2，
+    // 绑不上就留在继承的 CPU 上继续跑，不因此拒绝上电。
+    cpu_set_t allowed{};
+    if (pthread_getaffinity_np(pthread_self(), sizeof(allowed), &allowed) == 0 &&
+      CPU_ISSET(kBusCpu, &allowed) != 0)
+    {
+      cpu_set_t want{};
+      CPU_ZERO(&want);
+      CPU_SET(kBusCpu, &want);
+      if (pthread_setaffinity_np(pthread_self(), sizeof(want), &want) == 0) {
+        say("✓ IgH 周期线程已绑定 CPU %d", kBusCpu);
+      }
+    } else {
+      say("! 进程没有放开 CPU %d，IgH 周期线程留在继承的 CPU 上", kBusCpu);
+    }
+    sched_param priority{};
+    priority.sched_priority = 80;
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &priority) == 0) {
+      say("✓ IgH 周期线程已设为实时优先级 80");
+    } else {
+      say("! IgH 周期线程没能设为实时优先级，1 ms 节拍可能有抖动");
+    }
+    // 锁住已映射内存，避免上电阶段的缺页把 1 ms 节拍打断。
+    (void)mlockall(MCL_CURRENT | MCL_FUTURE);
+
     timespec next{};
     clock_gettime(CLOCK_MONOTONIC, &next);
     ec_domain_state_t ds{};
