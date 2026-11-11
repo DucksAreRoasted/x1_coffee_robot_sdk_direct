@@ -1383,7 +1383,12 @@ def run_teleop() -> int:
                     continue
                 now = time.monotonic()
                 field = "handfeel_confirm_until" if key in ("H", "M", "m") else "current_confirm_until"
-                if now > getattr(node, field):
+                # 从 MIT 子菜单再次按 M 时直接进入前置检查，避免三次按键。
+                from_mit_menu = key in ("M", "m") and node.menu.mode == "mit"
+                if from_mit_menu:
+                    node.menu.mode = "main"
+                    setattr(node, field, 0.0)
+                elif now > getattr(node, field):
                     setattr(node, field, now + 3.0)
                     print("\n再次选择 M：右臂MIT参数模式，松手有回正趋势；请准备急停。" if key in ("H", "M", "m") else
                           "\n再次选择 4：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
