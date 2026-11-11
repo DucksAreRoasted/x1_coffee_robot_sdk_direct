@@ -133,11 +133,14 @@ struct IghEthercatLink::Impl
 
   bool opened{false};
   bool activated{false};
+  // 周期线程没在限期内退出时不再释放主站，避免释放后仍被使用。
+  bool leaked{false};
 
   void clearRuntime()
   {
     stop.store(false);
     thread_done.store(false);
+    leaked = false;
     {
       std::lock_guard<std::mutex> lock(wait_mu);
       op_seen = false;
@@ -491,16 +494,31 @@ Result IghEthercatLink::shutdownToInit()
   Impl & s = *impl_;
   s.stop.store(true, std::memory_order_release);
   if (s.thread.joinable()) {
-    s.thread.join();
+    // 总线断开时周期线程可能正卡在收发里。最多等 2 秒，不无限阻塞退使能。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!s.thread_done.load(std::memory_order_acquire) &&
+      std::chrono::steady_clock::now() < deadline)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (s.thread_done.load(std::memory_order_acquire)) {
+      s.thread.join();
+    } else {
+      // 线程还活着就不能释放主站：释放后它再碰 ecrt_* 会直接崩。
+      // 宁可把主站留到进程退出，也不制造悬空指针。
+      s.thread.detach();
+      s.leaked = true;
+      say("! IgH 周期线程 2 秒内没有退出，保留主站不释放，请检查总线后重启控制栈");
+    }
   }
-  if (s.master != nullptr) {
+  if (s.master != nullptr && !s.leaked) {
     if (s.activated) {
       // 退到 PREOP，输出断开；不清故障，不写零点。
       ecrt_master_deactivate(s.master);
     }
     ecrt_release_master(s.master);
-    s.master = nullptr;
   }
+  s.master = nullptr;
   s.domain = nullptr;
   s.data = nullptr;
   s.activated = false;
