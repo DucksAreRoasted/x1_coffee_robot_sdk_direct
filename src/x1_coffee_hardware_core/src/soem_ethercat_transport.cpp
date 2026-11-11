@@ -2879,9 +2879,6 @@ void SoemEthercatTransport::updateCurrentGravity(
       if (q[i] < kJointMin[i] || q[i] > kJointMax[i]) {
         fault = 5; current_fault_joint_ = static_cast<int>(i); break;
       }
-      if (std::abs(current_velocity_[i]) > max_velocity_rad_s_[i]) {
-        fault = 6; current_fault_joint_ = static_cast<int>(i); break;
-      }
       const int side = i >= 8 ? 1 : 0;
       const int slot = static_cast<int>(i) - (side == 1 ? 8 : 1);
       if (slot >= 0 && slot < 7 && current_bundle_.present[side]) {
