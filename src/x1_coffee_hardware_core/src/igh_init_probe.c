@@ -36,10 +36,11 @@ int main(void)
       fprintf(stderr,"IgH: slave %d startup SDO config failed\n",i+1); return 1;
     }
     /* 驱动器 PDO 映射对象只读：保留从站默认映射，仅注册已确认的 entry。 */
-    const uint16_t entries[] = {0x607a, 0x60fe, 0x6040, 0x6064, 0x60fd, 0x6041};
+    const uint8_t sync[] = {2, 2, 2, 3, 3, 3};
+    const unsigned int entry_pos[] = {0, 1, 2, 0, 1, 2};
     for (unsigned int k = 0; k < 6; ++k) {
-      const int value = ecrt_slave_config_reg_pdo_entry(sc[i], entries[k], 0, domain, NULL);
-      if (value < 0) {fprintf(stderr,"IgH: slave %d entry 0x%04x registration failed\n",i+1,entries[k]); return 1;}
+      const int value = ecrt_slave_config_reg_pdo_entry_pos(sc[i], sync[k], 0, entry_pos[k], domain, NULL);
+      if (value < 0) {fprintf(stderr,"IgH: slave %d PDO position %u/%u registration failed\n",i+1,sync[k],entry_pos[k]); return 1;}
       off[i][k] = (unsigned int)value;
     }
     ecrt_slave_config_dc(sc[i], 0x0300, CYCLE_NS, 0, 0, 0);
