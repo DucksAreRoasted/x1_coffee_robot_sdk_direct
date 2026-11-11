@@ -827,12 +827,14 @@ class KeyboardMenu:
     """菜单数字只解释为菜单动作，不穿透到选臂和点动。"""
     ITEMS = {
         "gravity": {"1": "f", "2": "x", "3": "c", "4": "t", "5": "H"},
+        "mit": {"M": "M"},
         "home": {"1": "h", "2": "0"},
         "advanced": {"1": "m", "2": "v", "3": "g", "4": "r", "5": "p", "6": "z"},
     }
     TEXT = {
         "main": HELP,
         "gravity": "重力菜单：1 路径预览  2 自动采样并辨识  3 加载参数  4 进入补偿  5 右臂MIT手感\n2/4/5需连续选择两次；n取消/退出，Esc返回。选臂在主界面1/2完成。",
+        "mit": "MIT菜单：M 进入右臂 MIT 参数模式\n1-7 选择关节；[/]选择 q_des/dq_des/Kp/Kd/tau_ff；w/s 调整；+/-调整步长；n退出；Esc返回。",
         "home": "回零菜单：1 机械零位  2 URDF零位\n需连续选择两次；Esc返回。会移动15轴。",
         "advanced": "高级调试（旧流程，未经新PDO实机验证）：\n1 旧MIT  2 旧零重力  3 旧重力标定  4 重置旧参数  5 保存旧参数  6 零力矩\n需连续选择两次；n退出模式，Esc返回。",
     }
@@ -855,7 +857,7 @@ class KeyboardMenu:
             return None
         if self.mode != "main":
             return self.ITEMS[self.mode].get(key)
-        menus = {"g": "gravity", "h": "home", "`": "advanced"}
+        menus = {"g": "gravity", "h": "home", "`": "advanced", "M": "mit"}
         if key in menus:
             self.mode = menus[key]
             return None
