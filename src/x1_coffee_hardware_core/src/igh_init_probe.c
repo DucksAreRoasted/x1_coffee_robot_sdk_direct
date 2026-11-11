@@ -65,7 +65,8 @@ int main(void)
     for (int j=0;j<AXES;++j) {
       EC_WRITE_U32(data+off[j][0], 0);  /* 目标位置安全保持 */
       EC_WRITE_U32(data+off[j][1], 0);  /* 数字输出 */
-      EC_WRITE_U16(data+off[j][2], 0x0006);  /* CiA402 Shutdown */
+      const uint16_t cw = i < 400 ? 0x0006 : (i < 600 ? 0x0007 : 0x000F);
+      EC_WRITE_U16(data+off[j][2], cw);  /* CiA402 official sequence */
     }
     ecrt_domain_queue(domain);
     ecrt_master_send(master); sleep_cycle(&next);
