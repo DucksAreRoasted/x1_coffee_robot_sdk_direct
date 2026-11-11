@@ -34,6 +34,7 @@ public:
   void bindBusOperationalFlag(std::atomic<bool> * flag) override;
   void bindCyclicEnableFlag(std::atomic<bool> * flag) override;
   void bindOperationalHook(std::function<void()> hook) override;
+  void copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const override;
 
 private:
   struct Impl;

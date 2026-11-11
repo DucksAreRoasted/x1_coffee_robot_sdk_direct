@@ -140,6 +140,8 @@ struct IghEthercatLink::Impl
 
   bool opened{false};
   bool activated{false};
+  // MIT 力矩换算需要的额定力矩；读不到的轴保持 0，上层据此禁止进 MIT。
+  std::array<double, kAxes> rated_nm{};
   // 周期线程没在限期内退出时不再释放主站，避免释放后仍被使用。
   bool leaked{false};
 
@@ -465,6 +467,34 @@ Result IghEthercatLink::openAndReachOp(
     return Result::fail(CoreError::kEthercatNotReady, "IgH: 取过程数据指针失败");
   }
 
+  // 额定力矩 0x6076：MIT 的力矩换算依赖它。IgH 没有配置期读 SDO 的接口，
+  // 只能激活后用邮箱逐台读；读不到的轴保持 0，上层据此拒绝进入 MIT。
+  for (std::size_t i = 0; i < kAxes; ++i) {
+    std::uint8_t buffer[4]{};
+    std::size_t result_size = 0;
+    std::uint32_t abort_code = 0;
+    const int rc = ecrt_master_sdo_upload(
+      s.master, static_cast<std::uint16_t>(i), 0x6076, 0x00, buffer, sizeof(buffer),
+      &result_size, &abort_code);
+    if (rc == 0 && (result_size == 2 || result_size == 4)) {
+      std::uint32_t milli_nm = 0;
+      for (std::size_t b = 0; b < result_size; ++b) {
+        milli_nm |= static_cast<std::uint32_t>(buffer[b]) << (8u * b);
+      }
+      if (milli_nm > 0) {
+        s.rated_nm[i] = static_cast<double>(milli_nm) / 1000.0;
+      }
+    }
+    if (s.rated_nm[i] <= 0.0) {
+      say(
+        "! 轴 %zu 读不到额定力矩 0x6076（rc=%d abort=0x%08x size=%zu），该轴禁止进入 MIT",
+        i + 1, rc, abort_code, result_size);
+    }
+  }
+  say(
+    "● 额定力矩读取完成：右臂 %.2f ~ %.2f N·m",
+    s.rated_nm[kAxes - 7], s.rated_nm[kAxes - 1]);
+
   s.opened = true;
   s.thread = std::thread([&s]() {s.cycle();});
 
@@ -538,9 +568,33 @@ Result IghEthercatLink::shutdownToInit()
 
 void IghEthercatLink::requestDriveMode(std::uint8_t mode, std::uint16_t axis_mask)
 {
-  // 运行中切模式需要邮箱访问，阶段一不做；位置保持和 PVT 不依赖它。
-  if (axis_mask != 0) {
-    say("! IgH 后端暂不支持运行中切 0x6060=0x%02x 到 %u 台轴", mode, axis_mask);
+  Impl & s = *impl_;
+  if (s.master == nullptr || !s.activated || axis_mask == 0) {
+    return;
+  }
+  // 从调用方线程（服务回调）发 SDO，不占 1 ms 周期线程。IgH 把请求排给内核 OP 线程，
+  // 周期帧继续照发；这里阻塞的是服务线程，不是总线线程。
+  int applied = 0;
+  for (std::size_t i = 0; i < kAxes; ++i) {
+    if ((axis_mask & (1u << i)) == 0u) {
+      continue;
+    }
+    std::uint32_t abort_code = 0;
+    const int rc = ecrt_master_sdo_download(
+      s.master, static_cast<std::uint16_t>(i), 0x6060, 0x00, &mode, 1, &abort_code);
+    if (rc != 0) {
+      say("! 轴 %zu 切 0x6060=0x%02x 失败 rc=%d abort=0x%08x", i + 1, mode, rc, abort_code);
+      continue;
+    }
+    ++applied;
+  }
+  say("● 已请求 %d 台轴切到 0x6060=0x%02x，模式以 PDO 里的 0x6061 读回为准", applied, mode);
+}
+
+void IghEthercatLink::copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const
+{
+  if (out != nullptr) {
+    *out = impl_->rated_nm;
   }
 }
 
