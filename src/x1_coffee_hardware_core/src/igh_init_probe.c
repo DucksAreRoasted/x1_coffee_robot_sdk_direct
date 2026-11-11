@@ -36,16 +36,6 @@ int main(void)
         ecrt_slave_config_sdo8(sc[i], 0x60c2, 2, 0xfd)) {
       fprintf(stderr,"IgH: slave %d startup SDO config failed\n",i+1); return 1;
     }
-    if (ecrt_slave_config_sync_manager(sc[i], 2, EC_DIR_OUTPUT, EC_WD_ENABLE) ||
-        ecrt_slave_config_sync_manager(sc[i], 3, EC_DIR_INPUT, EC_WD_DISABLE)) {
-      fprintf(stderr,"IgH: slave %d sync manager config failed\n",i+1); return 1;
-    }
-    if (ecrt_slave_config_pdo_assign_clear(sc[i], 2) ||
-        ecrt_slave_config_pdo_assign_add(sc[i], 2, 0x1601) ||
-        ecrt_slave_config_pdo_assign_clear(sc[i], 3) ||
-        ecrt_slave_config_pdo_assign_add(sc[i], 3, 0x1a01)) {
-      fprintf(stderr,"IgH: slave %d PDO assignment failed\n",i+1); return 1;
-    }
     /* 驱动器 PDO 映射对象只读：保留从站默认映射，仅注册已确认的 entry。 */
     regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x607a,0, &off[i][0]};
     regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6040,0, &off[i][1]};
