@@ -76,6 +76,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_save_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_gravity_service_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr pvt_move_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr mit_command_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pvt_result_pub_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr motion_executor_;
   std::thread motion_spin_thread_;

@@ -2729,6 +2729,14 @@ Result SoemEthercatTransport::loadCurrentGravity(const std::string & path)
   return Result{CoreError::kOk, detail};
 }
 
+Result SoemEthercatTransport::updateMitHandfeel(int joint, double q_des, double dq_des, double kp, double kd, double tau_ff)
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!current_handfeel_ || !mit_active_) return Result::fail(CoreError::kWriteFailed, "MIT手感尚未进入");
+  if (!handfeel_.update(joint, q_des, dq_des, kp, kd, tau_ff)) return Result::fail(CoreError::kInvalidConfiguration, "MIT参数超出逐轴安全范围");
+  return Result{CoreError::kOk, "MIT参数已提交到实时线程"};
+}
+
 Result SoemEthercatTransport::enterMitHandfeel()
 {
   std::lock_guard<std::mutex> lock(sample_mu_);

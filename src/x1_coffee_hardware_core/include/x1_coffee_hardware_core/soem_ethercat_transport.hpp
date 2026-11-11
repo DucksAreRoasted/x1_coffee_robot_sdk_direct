@@ -113,6 +113,7 @@ public:
   Result currentGravityHoldStatus();
   Result enterMitHold();
   Result enterMitHandfeel();
+  Result updateMitHandfeel(int joint, double q_des, double dq_des, double kp, double kd, double tau_ff);
   Result exitMitHold();
   // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。
   Result enterZeroGravity();

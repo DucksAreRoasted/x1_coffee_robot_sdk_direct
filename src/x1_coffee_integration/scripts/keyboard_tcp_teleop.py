@@ -789,6 +789,26 @@ def sampling_command(tool_dir, urdf, side, output, execute=False):
     return command
 
 
+class MITKeyboardState:
+    """仅管理键盘参数快照；力矩计算留在实时控制线程。"""
+    FIELDS = ("q_des", "dq_des", "kp", "kd", "tau_ff")
+    STEPS = {"q_des": 0.01, "dq_des": 0.01, "kp": 1.0, "kd": 0.1, "tau_ff": 0.1}
+    BOUNDS = {"q_des": (-3.14, 3.14), "dq_des": (-2.0, 2.0), "kp": (0.0, 1000.0), "kd": (0.0, 300.0), "tau_ff": (-120.0, 120.0)}
+    def __init__(self):
+        self.active = False; self.arm = "left"; self.joint = 0; self.field = 0; self.step_scale = 1.0
+        self.values = {name: 0.0 for name in self.FIELDS}
+    @property
+    def selected(self): return self.FIELDS[self.field]
+    def select_joint(self, joint):
+        if 0 <= joint < 7: self.joint = joint
+    def switch_arm(self): self.arm = "right" if self.arm == "left" else "left"
+    def adjust_field(self, direction): self.field = (self.field + direction) % len(self.FIELDS)
+    def adjust(self, direction):
+        name = self.selected; low, high = self.BOUNDS[name]
+        self.values[name] = min(high, max(low, self.values[name] + direction * self.STEPS[name] * self.step_scale))
+    def snapshot(self): return [self.joint, self.values["q_des"], self.values["dq_des"], self.values["kp"], self.values["kd"], self.values["tau_ff"]]
+
+
 HELP = """
 日常点动
   1/2  选左/右臂       w/s a/d q/e  TCP沿全局XYZ平移
@@ -796,7 +816,7 @@ HELP = """
 功能菜单
   g  重力采样与补偿    h  回零    `  高级调试    ?  显示帮助
 通用操作
-  n  取消采样 / 退出补偿    b  关断抱闸
+  M  右臂MIT参数模式       n  取消采样 / 退出补偿    b  关断抱闸
   空格  不再追加目标（不会取消已发轨迹）
   Esc  菜单中返回；主界面退出程序
 先在下位机运行 start_real_hold.sh enp3s0，再在上位机运行 start_upper_moveit.sh。
@@ -840,7 +860,7 @@ class KeyboardMenu:
             self.mode = menus[key]
             return None
         # 旧顶层调试快捷键不再生效，避免无菜单提示时直接触发。
-        return key if key in "12wsadqeikjluo[]" else None
+        return key if key in "12wsadqeikjluo[]M+-" else None
 
 
 def run_teleop() -> int:
@@ -868,6 +888,7 @@ def run_teleop() -> int:
             self.sample_cancelled = False
             self.sample_confirm_until = 0.0
             self.current_session = CurrentGravitySession()
+            self.mit_editor = MITKeyboardState()
             self.current_confirm_until = 0.0
             self.current_check_at = 0.0
             self.current_enter_future = None
@@ -899,6 +920,7 @@ def run_teleop() -> int:
             self.joint_qos_logged = False
             self.create_subscription(String, "/x1/pvt_result", self._on_pvt_result, 10)
             self.pvt_pub = self.create_publisher(Float64MultiArray, "/x1/pvt_move", 10)
+            self.mit_command_pub = self.create_publisher(Float64MultiArray, "/x1/mit_command", 10)
             self.start_motion = self.create_client(Trigger, "/x1/start_motion")
             self.zero_torque_client = self.create_client(Trigger, "/x1/zero_torque")
             self.brake_client = self.create_client(Trigger, "/x1/brake_hold")
@@ -1288,7 +1310,7 @@ def run_teleop() -> int:
                 else:
                     print("\n采样期间锁定其他按键，按 n 取消。")
                 continue
-            key = node.menu.route(key, busy=node.current_session.locked)
+            key = node.menu.route(key, busy=node.current_session.locked and not node.mit_editor.active)
             # 换菜单、其他选择及帮助都会撤销上一次二次确认，不能跨菜单复用。
             for action, field in {
                 "h": "home_confirm_until", "0": "urdf_confirm_until",
@@ -1309,13 +1331,25 @@ def run_teleop() -> int:
                 break
             if key == "n" and node.current_session.locked:
                 node.leave_current()
+                node.mit_editor.active = False
                 continue
             if node.current_session.locked:
-                if key == "b":
+                if node.mit_editor.active and key in ("1", "2", "3", "4", "5", "6", "7", "[", "]", "+", "-", "w", "s", "\t"):
+                    if key.isdigit(): node.mit_editor.select_joint(int(key) - 1)
+                    elif key == "\t": print("\n当前 MIT 实时入口仅支持右臂；左臂参数接口尚未开放。")
+                    elif key == "[": node.mit_editor.adjust_field(-1)
+                    elif key == "]": node.mit_editor.adjust_field(1)
+                    elif key == "+": node.mit_editor.step_scale = min(10.0, node.mit_editor.step_scale * 2.0)
+                    elif key == "-": node.mit_editor.step_scale = max(.125, node.mit_editor.step_scale / 2.0)
+                    else: node.mit_editor.adjust(1 if key == "w" else -1)
+                    if node.mit_editor.arm == "right":
+                        node.mit_command_pub.publish(Float64MultiArray(data=node.mit_editor.snapshot()))
+                    print(f"\nMIT {node.mit_editor.arm} J{node.mit_editor.joint+1}: {node.mit_editor.selected}={node.mit_editor.values[node.mit_editor.selected]:.4g}, step×{node.mit_editor.step_scale:g}")
+                elif key == "b":
                     node.current_session.state = "unknown"
                     node.call_trigger(node.brake_client, "/x1/brake_hold")
                 else:
-                    print("\n电流补偿期间仅允许 n 退出、b 关断、Esc 退出程序。")
+                    print("\n补偿期间仅允许 MIT参数键、n退出、b关断、Esc退出程序。")
                 continue
             if key in ("f", "x"):
                 if node.mit_hold or node.zero_torque or pending_since is not None:
@@ -1333,29 +1367,33 @@ def run_teleop() -> int:
             if key == "c":
                 node.call_trigger(node.current_clients["load"], "/x1/current_gravity_load")
                 continue
-            if key in ("t", "H"):
-                if key == "H" and node.side != "right":
+            if key in ("t", "H", "M"):
+                if key in ("H", "M") and node.side != "right":
                     print("\n本版MIT手感仅支持右臂，请返回主界面按2选择右臂。")
                     continue
                 if node.mit_hold or node.zero_torque or pending_since is not None:
                     print("\n请先退出旧模式并等待位置运动结束。")
                     continue
                 now = time.monotonic()
-                field = "handfeel_confirm_until" if key == "H" else "current_confirm_until"
+                field = "handfeel_confirm_until" if key in ("H", "M") else "current_confirm_until"
                 if now > getattr(node, field):
                     setattr(node, field, now + 3.0)
-                    print("\n再次选择 5：右臂MIT弹簧阻尼手感试验，松手有回正趋势；每轴范围±8.6°，腰和左臂保持。请准备急停。" if key == "H" else
+                    print("\n再次选择 M：右臂MIT参数模式，松手有回正趋势；请准备急停。" if key in ("H", "M") else
                           "\n再次选择 4：进入参数指定手臂的电流补偿。请在现场准备好急停；当前模型仅供受控验证。")
                     continue
                 setattr(node, field, 0.0)
                 node.motion_requested = False
-                service = "handfeel" if key == "H" else "enter"
-                if key == "H" and not node.current_confirm(holding=True):
+                service = "handfeel" if key in ("H", "M") else "enter"
+                if key in ("H", "M") and not node.current_confirm(holding=True):
                     print("\n未确认全轴CSP和测量停稳，未发送MIT进入请求。")
                     continue
                 if node.current_session.enter(lambda: node.current_query(service),
                                               lambda: node.current_confirm()):
-                    print("\n右臂MIT手感实际模式已确认：弹簧回正+阻尼+进入时保持电流，按n退出。" if key == "H" else "\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
+                    if key in ("H", "M"):
+                        node.mit_editor.active = True; node.mit_editor.arm = "right"
+                        for index, name in enumerate(RIGHT_JOINTS):
+                            node.mit_editor.values["q_des"] = node.measured.get(name, 0.0) if index == node.mit_editor.joint else node.mit_editor.values["q_des"]
+                    print("\n右臂MIT实际模式已确认：使用 w/s 调参、[/]切参数、1-7选关节、Tab切臂；按n退出。" if key in ("H", "M") else "\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
                 else:
                     print(f"\n进入未确认：{node.current_query_detail}。正在请求退出并验证保持。")
                     node.leave_current()

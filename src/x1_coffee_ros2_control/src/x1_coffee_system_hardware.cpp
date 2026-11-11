@@ -223,6 +223,15 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });
+  // 键盘只提交参数快照；MIT 力矩仍在 EtherCAT 周期线程计算。
+  mit_command_sub_ = motion_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+    "/x1/mit_command", 10, [this](const std_msgs::msg::Float64MultiArray::SharedPtr message) {
+      if (!message || message->data.size() != 6) return;
+      auto * direct = dynamic_cast<x1_coffee_hardware_core::SoemEthercatTransport *>(transport_.get());
+      if (!direct) return;
+      const int joint = static_cast<int>(message->data[0]);
+      direct->updateMitHandfeel(joint, message->data[1], message->data[2], message->data[3], message->data[4], message->data[5]);
+    });
   // 独立入口，不复用旧的Nm标定/保存服务；加载不会启用扭矩控制。
   const std::array<std::string, 6> current_services{
     "/x1/current_gravity_load", "/x1/current_gravity_enter", "/x1/current_gravity_status",
