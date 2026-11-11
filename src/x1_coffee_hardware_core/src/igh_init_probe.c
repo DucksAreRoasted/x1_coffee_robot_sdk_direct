@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 
 #define AXES 15
@@ -34,6 +35,15 @@ static void sleep_cycle(struct timespec *next)
   clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL);
 }
 
+/* EtherLab 应用时间必须以 2000-01-01 为纪元、用实时时钟换算。
+ * 用 CLOCK_MONOTONIC 减纪元会得到负数并按无符号回绕，DC 从站直接报 0x001A。 */
+static uint64_t epoch_ns(void)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return ((uint64_t)ts.tv_sec - 946684800ULL) * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 int main(void)
 {
   ec_master_t *master = NULL; ec_domain_t *domain = NULL;
@@ -45,6 +55,10 @@ int main(void)
   const ec_sync_info_t syncs[] = {{0,EC_DIR_OUTPUT,0,NULL,EC_WD_DISABLE},{1,EC_DIR_INPUT,0,NULL,EC_WD_DISABLE},
     {2,EC_DIR_OUTPUT,1,&pdos[0],EC_WD_ENABLE},{3,EC_DIR_INPUT,1,&pdos[1],EC_WD_DISABLE},{0xff}};
   struct timespec next; int i;
+  /* 厂商 Gecat ENI 的 slave_dc：assignactive 0x300、SYNC0 1 ms、位移 100 µs。
+   * 现场可用 X1_IGH_DC_SHIFT_NS 在 0 / 100000 之间做对照。 */
+  const char *shift_env = getenv("X1_IGH_DC_SHIFT_NS");
+  const int32_t sync0_shift = shift_env ? (int32_t)atoi(shift_env) : 100000;
   signal(SIGINT,on_signal); signal(SIGTERM,on_signal);
   master = ecrt_request_master(0); if (!master) {fprintf(stderr,"IgH: request master failed\n"); return 1;}
   domain = ecrt_master_create_domain(master); if (!domain) {fprintf(stderr,"IgH: create domain failed\n"); return 1;}
@@ -68,12 +82,21 @@ int main(void)
       if (value < 0) {fprintf(stderr,"IgH: slave %d PDO position %u/%u registration failed\n",i+1,sync[k],entry_pos[k]); return 1;}
       off[i][k] = (unsigned int)value;
     }
-    /* 暂时关闭 DC，先隔离 PDO/Domain 状态。 */
+    /* 手册 8.2.28/8.2.29：驱动器必须显式进入 DC SYNC0。不写时 15 轴同步模式
+     * 互不一致，进 OP 时从站报 0x001B(sync manager watchdog) 并退回 SAFEOP。 */
+    if (ecrt_slave_config_sdo16(sc[i], 0x1c32, 0x01, 0x0002) ||
+        ecrt_slave_config_sdo16(sc[i], 0x1c33, 0x01, 0x0002)) {
+      fprintf(stderr,"IgH: slave %d DC sync mode SDO config failed\n",i+1); return 1;
+    }
+    /* 与厂商 ENI 一致：SYNC0 周期 1 ms、位移 100 µs，SYNC1 不用。 */
+    if (ecrt_slave_config_dc(sc[i], 0x0300, CYCLE_NS, sync0_shift, 0, 0)) {
+      fprintf(stderr,"IgH: slave %d DC configuration failed\n",i+1); return 1;
+    }
   }
   if (ecrt_master_activate(master)) {fprintf(stderr,"IgH: activate failed\n"); return 1;}
   data = ecrt_domain_data(domain); if (!data) {fprintf(stderr,"IgH: domain data failed\n"); return 1;}
   clock_gettime(CLOCK_MONOTONIC,&next);
-  printf("IgH probe: 15 slaves, 1 kHz, position hold; waiting 5 s before enable\n");
+  printf("IgH probe: 15 slaves, 1 kHz, DC SYNC0 shift %d ns; waiting 5 s before enable\n", (int)sync0_shift);
   int hold_latched = 0;
   int first_feedback_cycle = -1;
   int enable_started = 0;
@@ -81,6 +104,8 @@ int main(void)
   int enabled_count = 0;
   int result = 1;
   for (i=0; !stop; ++i) {
+    /* 应用时间每拍都要更新，DC 从站靠它算偏移和漂移。 */
+    ecrt_master_application_time(master, epoch_ns());
     ecrt_master_receive(master); ecrt_domain_process(domain); ecrt_domain_state(domain,&ds); ecrt_master_state(master,&ms);
     const int valid = ms.link_up && ms.al_states == EC_AL_STATE_OP &&
       ds.wc_state == EC_WC_COMPLETE && ds.working_counter == EXPECTED_WKC;
@@ -161,6 +186,9 @@ int main(void)
       break;
     }
 cycle_done:
+    /* 参考时钟分发给 DC 参考从站，再让各从站补偿漂移；不调用 0x092C 永远不收敛。 */
+    ecrt_master_sync_reference_clock(master);
+    ecrt_master_sync_slave_clocks(master);
     ecrt_domain_queue(domain);
     ecrt_master_send(master); sleep_cycle(&next);
     if (enable_fault) break;
@@ -169,10 +197,14 @@ cycle_done:
   if (stop || result != 0) {
     /* 失败或中断时仅下发 CiA-402 Shutdown，不自动复位驱动器故障。 */
     for (int n=0; n<100; ++n) {
+      /* 退使能阶段也要维持 DC，否则从站会在收尾时报同步错误。 */
+      ecrt_master_application_time(master, epoch_ns());
       ecrt_master_receive(master); ecrt_domain_process(domain);
       for (int j=0;j<AXES;++j) {
         EC_WRITE_U16(data+off[j][2], 0x0006);
       }
+      ecrt_master_sync_reference_clock(master);
+      ecrt_master_sync_slave_clocks(master);
       ecrt_domain_queue(domain); ecrt_master_send(master); sleep_cycle(&next);
     }
   }
