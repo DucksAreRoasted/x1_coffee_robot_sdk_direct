@@ -177,6 +177,8 @@ struct IghEthercatLink::Impl
     bool announced = false;
     int mixed_polls = 0;
     int shutdown_cycles = 0;
+    int wait_cycles = 0;
+    int link_down_cycles = 0;
 
     for (;;) {
       const bool stopping = stop.load(std::memory_order_acquire);
@@ -236,13 +238,40 @@ struct IghEthercatLink::Impl
         announced = true;
         say("✓ 15 台从站进入运行，工作计数 %u/%u", ds.working_counter, kExpectedWorkingCounter);
         markOperational();
-      } else if (!complete && !announced) {
-        // 启动阶段每 2 秒报一次进度，便于判断卡在哪一步。
-        static int wait_cycles = 0;
-        if (++wait_cycles % 2000 == 0) {
+      } else if (!announced) {
+        // 启动阶段每 2 秒报一次进度，直接说清是「没进 OP」还是「链路/从站掉了」。
+        if (++wait_cycles >= 2000) {
+          wait_cycles = 0;
+          int op_count = 0;
+          int online_count = 0;
+          for (std::size_t i = 0; i < kAxes; ++i) {
+            ec_slave_config_state_t state{};
+            if (ecrt_slave_config_state(sc[i], &state) != 0) {
+              continue;
+            }
+            if (state.online != 0u) {
+              ++online_count;
+            }
+            if (state.al_state == EC_AL_STATE_OP) {
+              ++op_count;
+            }
+          }
           say(
-            "… 等待 15 台进入运行：工作计数 %u/%u，AL 状态 0x%02x",
+            "… 等待运行：OP %d/%zu，在线 %d/%zu，工作计数 %u/%u，AL 位图 0x%02x",
+            op_count, kAxes, online_count, kAxes,
             ds.working_counter, kExpectedWorkingCounter, ms.al_states);
+          if (online_count < static_cast<int>(kAxes)) {
+            say("! 有从站离线，先查链路灯和网线，再查 dmesg 里的 AL 状态码");
+          }
+        }
+        // 链路断开超过 2 秒就没必要再等到超时，直接让上层拿到原因。
+        if (ms.link_up == 0u) {
+          if (++link_down_cycles >= 2000) {
+            reportFailure("IgH: 主站链路断开超过 2 秒，检查 EtherCAT 线缆和供电");
+            break;
+          }
+        } else {
+          link_down_cycles = 0;
         }
       }
 
