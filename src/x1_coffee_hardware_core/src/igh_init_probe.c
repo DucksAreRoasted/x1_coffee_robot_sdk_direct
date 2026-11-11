@@ -51,7 +51,7 @@ int main(void)
   for (i=0; !stop && i<15000; ++i) {
     ecrt_master_receive(master); ecrt_domain_process(domain); ecrt_domain_state(domain,&ds); ecrt_master_state(master,&ms);
     for (int j=0;j<AXES;++j) {EC_WRITE_U32(data+off[j][0],0); EC_WRITE_U32(data+off[j][1],0); EC_WRITE_U16(data+off[j][2],0);}
-    ecrt_domain_queue(domain); ecrt_master_application_time((uint64_t)i*CYCLE_NS); ecrt_master_send(master); sleep_cycle(&next);
+    ecrt_domain_queue(domain); ecrt_master_application_time(master, (uint64_t)i*CYCLE_NS); ecrt_master_send(master); sleep_cycle(&next);
   }
   printf("IgH probe done: master=%u domain=%u working_counter=%u\n",ms.al_states,ds.working_counter,ds.wc_state);
   ecrt_release_master(master); return 0;
