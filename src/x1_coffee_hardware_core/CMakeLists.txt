@@ -84,7 +84,6 @@ if(BUILD_TESTING)
   target_link_libraries(urdf_gravity_test ${PROJECT_NAME})
   ament_add_gtest(mit_controller_test test/mit_controller_test.cpp)
   target_link_libraries(mit_controller_test ${PROJECT_NAME})
-  target_link_libraries(urdf_gravity_test ${PROJECT_NAME})
   target_compile_definitions(urdf_gravity_test PRIVATE
     X1_CURRENT_BASIS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/test/data/current_basis.txt"
     X1_GRAVITY_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../arm_describle/urdf/HRB3Q-LC.urdf")
