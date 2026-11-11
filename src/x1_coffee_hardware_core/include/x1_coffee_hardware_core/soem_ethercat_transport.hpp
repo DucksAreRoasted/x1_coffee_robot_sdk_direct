@@ -216,7 +216,7 @@ private:
   bool current_active_{false};
   int current_mode_wait_{0};
   bool current_modes_confirmed_{false};
-  int current_fault_{0};  // 1反馈、2校准窗口/模型、3模式、4电流、5软限位、6速度。
+  int current_fault_{0};  // 1反馈、2校准窗口/模型、3模式、4电流、5软限位、6速度、7模型输出。
   int current_fault_joint_{-1};
   std::array<int, kCoffeeAxisCount> current_over_limit_cycles_{};
   std::chrono::steady_clock::time_point last_cycle_at_{};

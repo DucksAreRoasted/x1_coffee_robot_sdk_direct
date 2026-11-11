@@ -2814,7 +2814,8 @@ Result SoemEthercatTransport::currentGravityStatus()
       current_fault_ == 3 ? "实际模式丢失或切换确认超时" :
       current_fault_ == 4 ? "持续电流预算超限" :
       current_fault_ == 5 ? "关节软限位超限" :
-      current_fault_ == 6 ? "关节速度超限" : "未知故障";
+      current_fault_ == 6 ? "关节速度超限" :
+      current_fault_ == 7 ? "重力补偿输出预算或模型计算无效" : "未知故障";
     return Result::fail(CoreError::kWriteFailed,
       std::string("电流补偿保护退出：") + reason + "，故障码=" + std::to_string(current_fault_) +
       "，关节=" + std::to_string(current_fault_joint_ + 1));
@@ -2899,7 +2900,7 @@ void SoemEthercatTransport::updateCurrentGravity(
     !handfeel_.command(q,current_velocity_,current_previous_[1],kEthercatCycleSec,&next[1])) {fault=2; current_fault_joint_ = 8;}
   for (int side = 0; side < 2 && fault == 0 && !current_handfeel_; ++side) {
     if (current_bundle_.present[side] && !current_models_[side].command(gravity_, q,
-      current_velocity_, current_previous_[side], kEthercatCycleSec, &next[side])) {fault = 4; current_fault_joint_ = side == 1 ? 8 : 1;}
+      current_velocity_, current_previous_[side], kEthercatCycleSec, &next[side])) {fault = 7; current_fault_joint_ = side == 1 ? 8 : 1;}
   }
   if (fault != 0) {
     current_fault_ = fault;
