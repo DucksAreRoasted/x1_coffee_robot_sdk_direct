@@ -32,6 +32,22 @@ public:
   // AxisOff，弹簧抱闸锁住。用来退出零力矩。
   virtual Result engageBrakes() = 0;
   virtual Result requestEngageBrakes() = 0;
+  // 直连 EtherCAT 扩展服务。默认返回不支持，SOEM/IgH 后端按能力覆盖。
+  virtual Result cancelPvtHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 PVT 取消");}
+  virtual Result loadCurrentGravity(const std::string &) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
+  virtual Result enterCurrentGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
+  virtual Result currentGravityStatus() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
+  virtual Result exitCurrentGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
+  virtual Result currentGravityHoldStatus() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
+  virtual Result enterMitHandfeel() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT 手感");}
+  virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
+  virtual Result exitMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
+  virtual Result enterZeroGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零重力");}
+  virtual Result startRightArmGravityCalibration() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持重力标定");}
+  virtual Result resetRightArmGravityToUrdf() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持重力标定");}
+  virtual Result saveRightArmGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持重力标定");}
+  virtual Result updateMitHandfeel(int, double, double, double, double, double) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT 手感");}
+  virtual Result requestMovePvtSegments(const std::vector<std::array<double, kCoffeeAxisCount>> &, const std::vector<double> &) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持分段 PVT");}
   // 一次装入 15 轴 PVT 表再启动。waypoints 不含起点，起点用当前编码器。
   // 键盘线程调用，执行在控制周期里。
   virtual Result requestMovePvt(
