@@ -27,7 +27,7 @@ int main(void)
   const ec_pdo_entry_info_t tx[] = {{0x6064,0,32},{0x60fd,0,32},{0x6041,0,16}};
   const ec_pdo_info_t pdos[] = {{0x1600,3,rx},{0x1a00,3,tx}};
   const ec_sync_info_t syncs[] = {{0,EC_DIR_OUTPUT,0,NULL,EC_WD_DISABLE},{1,EC_DIR_INPUT,0,NULL,EC_WD_DISABLE},
-    {2,EC_DIR_OUTPUT,1,&pdos[0],EC_WD_DISABLE},{3,EC_DIR_INPUT,1,&pdos[1],EC_WD_DISABLE},{0xff}};
+    {2,EC_DIR_OUTPUT,1,&pdos[0],EC_WD_ENABLE},{3,EC_DIR_INPUT,1,&pdos[1],EC_WD_DISABLE},{0xff}};
   struct timespec next; int i;
   signal(SIGINT,on_signal); signal(SIGTERM,on_signal);
   master = ecrt_request_master(0); if (!master) {fprintf(stderr,"IgH: request master failed\n"); return 1;}
