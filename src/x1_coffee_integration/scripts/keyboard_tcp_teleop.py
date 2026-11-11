@@ -1314,6 +1314,7 @@ def run_teleop() -> int:
             # 换菜单、其他选择及帮助都会撤销上一次二次确认，不能跨菜单复用。
             for action, field in {
                 "h": "home_confirm_until", "0": "urdf_confirm_until",
+                "M": "handfeel_confirm_until",
                 "x": "sample_confirm_until", "t": "current_confirm_until", "H": "handfeel_confirm_until",
                 "z": "zero_confirm_until", "m": "mit_confirm_until",
                 "v": "zero_g_confirm_until", "g": "gravity_confirm_until",
