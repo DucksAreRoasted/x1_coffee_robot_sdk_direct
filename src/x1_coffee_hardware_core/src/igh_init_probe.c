@@ -62,7 +62,11 @@ int main(void)
   for (i=0; !stop && i<15000; ++i) {
     (void)app_start;
     ecrt_master_receive(master); ecrt_domain_process(domain); ecrt_domain_state(domain,&ds); ecrt_master_state(master,&ms);
-    for (int j=0;j<AXES;++j) {EC_WRITE_U32(data+off[j][0],0); EC_WRITE_U32(data+off[j][1],0); EC_WRITE_U16(data+off[j][2],0);}
+    for (int j=0;j<AXES;++j) {
+      EC_WRITE_U32(data+off[j][0], 0);  /* 目标位置安全保持 */
+      EC_WRITE_U32(data+off[j][1], 0);  /* 数字输出 */
+      EC_WRITE_U16(data+off[j][2], 0x0006);  /* CiA402 Shutdown */
+    }
     ecrt_domain_queue(domain);
     ecrt_master_send(master); sleep_cycle(&next);
   }
