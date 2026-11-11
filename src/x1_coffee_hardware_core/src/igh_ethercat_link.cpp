@@ -467,8 +467,9 @@ Result IghEthercatLink::openAndReachOp(
     return Result::fail(CoreError::kEthercatNotReady, "IgH: 取过程数据指针失败");
   }
 
-  // 额定力矩 0x6076：MIT 的力矩换算依赖它。IgH 没有配置期读 SDO 的接口，
-  // 只能激活后用邮箱逐台读；读不到的轴保持 0，上层据此拒绝进入 MIT。
+  // 额定力矩 0x6076：MIT 的力矩换算依赖它。必须等周期线程起来之后再读，
+  // 否则邮箱读取期间总线没有过程数据，已进 SAFEOP 的从站会触发 SM 看门狗。
+  const auto read_rated_torque = [&s]() {
   for (std::size_t i = 0; i < kAxes; ++i) {
     std::uint8_t buffer[4]{};
     std::size_t result_size = 0;
@@ -494,9 +495,12 @@ Result IghEthercatLink::openAndReachOp(
   say(
     "● 额定力矩读取完成：右臂 %.2f ~ %.2f N·m",
     s.rated_nm[kAxes - 7], s.rated_nm[kAxes - 1]);
+  };
 
   s.opened = true;
   s.thread = std::thread([&s]() {s.cycle();});
+  // 周期线程先跑起来保住总线，再在主线程做邮箱读取。
+  read_rated_torque();
 
   const auto deadline = std::chrono::steady_clock::now() +
     std::chrono::seconds(kOpenTimeoutSec);
