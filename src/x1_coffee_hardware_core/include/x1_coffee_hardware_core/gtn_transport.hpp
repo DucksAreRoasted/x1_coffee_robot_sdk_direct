@@ -41,6 +41,9 @@ public:
   virtual Result currentGravityHoldStatus() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
   virtual Result enterMitHandfeel() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT 手感");}
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
+  // 只把 mask 内的轴切到 CST 并把 0x6071 恒置 0，不接 kp/kd。
+  // 用来把「模式切换」和「力矩输出」分开验证，见 docs/igh_mit_design.md 第八节。
+  virtual Result enterCstZeroTorque(std::uint16_t) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零力矩 CST 验证");}
   virtual Result exitMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   virtual Result enterZeroGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零重力");}
   virtual Result startRightArmGravityCalibration() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持重力标定");}
