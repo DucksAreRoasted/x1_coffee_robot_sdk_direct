@@ -2042,8 +2042,6 @@ Result SoemEthercatTransport::activate()
     // 上一轮可能已经锁过位置、走过接通节拍。重开前清掉，避免沿用失败那次的状态。
     cyclic_enable_.store(false, std::memory_order_release);
     shutdown_outputs_ = false;
-    tcp_speed_guard_ = TcpSpeedGuard{};
-    tcp_speed_fault_ = false;
     current_active_ = false;
     mit_active_ = false;
     motion_armed_ = false;
@@ -2264,7 +2262,7 @@ Result SoemEthercatTransport::startMotion()
     return Result::fail(CoreError::kWriteFailed, "MIT 占用中，先退出再允许位置运动");
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
-  if (tcp_speed_fault_ || shutdown_outputs_) {
+  if (shutdown_outputs_) {
     return Result::fail(CoreError::kWriteFailed, "关断已锁存，禁止重新允许运动；需检查原因后重新初始化");
   }
   // 只打开跟随。目标仍是锁存位置，下一次 write 才把 MoveIt 的位置写进 0x607A。
@@ -2441,30 +2439,6 @@ void SoemEthercatTransport::onCycle(
   }
   std::lock_guard<std::mutex> lock(sample_mu_);
   last_cycle_at_ = std::chrono::steady_clock::now();
-  // 全局速度保护先于位置插补和力矩更新，所有运行模式共用关断路径。
-  if (gravity_ready_ && drives_enabled_ && all_enabled_logged_ && official_enable_step_ > kOfficialEnableEnd &&
-    !shutdown_outputs_ && !tcp_speed_fault_)
-  {
-    std::array<double, kCoffeeAxisCount> q{};
-    bool valid = true;
-    for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
-      valid = valid && feedback[i].valid && (feedback[i].status_word & 0x006F) == 0x0027;
-      q[i] = pulseToPosition(i, feedback[i].actual_position);
-    }
-    std::array<UrdfGravity::TcpPose, 2> poses{};
-    const double now = std::chrono::duration<double>(last_cycle_at_.time_since_epoch()).count();
-    if (!valid || !gravity_.tcpPoses(q, &poses) || !tcp_speed_guard_.update(poses, now)) {
-      tcp_speed_fault_ = true;
-      shutdown_outputs_ = true;
-      motion_armed_ = false;
-      path_active_ = false;
-      std::fprintf(stderr,
-        "[x1-tcp-guard] 全轴关断抱闸锁存：TCP超速或反馈/时间无效；"
-        "left=%.4fm/s %.4frad/s right=%.4fm/s %.4frad/s；阈值0.50m/s 0.5rad/s\n",
-        tcp_speed_guard_.linear[0], tcp_speed_guard_.angular[0],
-        tcp_speed_guard_.linear[1], tcp_speed_guard_.angular[1]);
-    }
-  }
   if (current_active_) {updateCurrentGravity(feedback);}
   // 15 轴共用同一个时刻。本周期的目标是插补点，速度上限只防止单周期跳变。
   if (mit_active_ && !current_active_ && gravity_ready_) {
@@ -2740,16 +2714,11 @@ Result SoemEthercatTransport::updateMitHandfeel(int joint, double q_des, double 
 Result SoemEthercatTransport::enterMitHandfeel()
 {
   std::lock_guard<std::mutex> lock(sample_mu_);
-  if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ || tcp_speed_fault_ ||
+  if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ ||
     !bus_operational_.load() || official_enable_step_ <= kOfficialEnableEnd ||
     mit_active_ || path_active_ || motion_armed_ || gravity_calib_running_.load() ||
     std::chrono::steady_clock::now()-last_cycle_at_ > std::chrono::milliseconds(100))
   {return Result::fail(CoreError::kWriteFailed, "MIT手感试验需要新鲜CSP保持且无其他运动占用");}
-  for (int side=0;side<2;++side) {
-    if (tcp_speed_guard_.linear[side]>.02 || tcp_speed_guard_.angular[side]>.1) {
-      return Result::fail(CoreError::kWriteFailed, "末端仍在移动，拒绝进入MIT手感");
-    }
-  }
   CurrentGravity::Pose q{};CurrentGravity::Arm bias{};
   for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
     if (torque_axis_[i] || !latest_[i].valid || (latest_[i].status_word & 0x006F)!=0x0027 ||
@@ -2828,18 +2797,6 @@ Result SoemEthercatTransport::enterCurrentGravity()
 Result SoemEthercatTransport::currentGravityStatus()
 {
   std::lock_guard<std::mutex> lock(sample_mu_);
-  if (tcp_speed_fault_) {
-    // 全局关断优先于补偿的二次反馈故障，保留触发时的测量值。
-    const bool overspeed = tcp_speed_guard_.linear[0] > .50 || tcp_speed_guard_.linear[1] > .50 ||
-      tcp_speed_guard_.angular[0] > .5 || tcp_speed_guard_.angular[1] > .5;
-    return Result::fail(CoreError::kWriteFailed,
-      std::string(overspeed ? "TCP超速保护" : "TCP反馈/采样时间保护") +
-      "已请求全轴关断并锁存；左臂=" + std::to_string(tcp_speed_guard_.linear[0]) +
-      "m/s " + std::to_string(tcp_speed_guard_.angular[0]) + "rad/s，右臂=" +
-      std::to_string(tcp_speed_guard_.linear[1]) + "m/s " +
-      std::to_string(tcp_speed_guard_.angular[1]) +
-      "rad/s；阈值0.50m/s、0.5rad/s。关断不等于CSP保持，检查原因后重新初始化");
-  }
   if (current_fault_ != 0) {
     // 状态服务提供退出类别；不能把模型保护退出统称为模式丢失。
     const char * reason = current_fault_ == 1 ? "反馈/使能失效或收到关断请求" :

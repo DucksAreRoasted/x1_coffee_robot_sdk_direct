@@ -915,36 +915,6 @@ TEST(SoemEthercatTransport, current_gravity_mode_timeout_does_not_claim_success)
   EXPECT_FALSE(transport.enterCurrentGravity());
 }
 
-TEST(SoemEthercatTransport, tcp_overspeed_shuts_down_all_axes_in_csp_and_cst)
-{
-  for (bool torque : {false, true}) {
-    auto owned = std::make_unique<FakeLink>();auto * link = owned.get();
-    link->status = 0x1237;link->actual_current = 0;
-    SoemEthercatTransport transport(std::move(owned));
-    auto config = parameters(true);config["gravity_urdf"] = X1_GRAVITY_URDF;
-    int axis = 0;
-    for (const auto & descriptor : coffeeAxisDescriptors()) {
-      config["model_zero." + std::string(descriptor.joint_name)] = std::to_string(-(++axis));
-    }
-    ASSERT_TRUE(transport.configure(config));ASSERT_TRUE(transport.activate());
-    for (int i = 0; i < 1002; ++i) {link->replay();}
-    if (torque) {
-      ASSERT_TRUE(transport.loadCurrentGravity(X1_CURRENT_BUNDLE_FIXTURE));
-      ASSERT_TRUE(transport.enterCurrentGravity());link->replay();link->replay();
-    }
-    link->position_shift = 40;link->replay();
-    const auto status = transport.currentGravityStatus();
-    EXPECT_FALSE(status);
-    EXPECT_NE(status.detail.find("TCP超速保护"), std::string::npos);
-    EXPECT_NE(status.detail.find("关断不等于CSP保持"), std::string::npos);
-    for (const auto & command : link->last) {
-      EXPECT_EQ(command.control_word, 0x0006);EXPECT_EQ(command.target_torque, 0);
-    }
-    EXPECT_FALSE(transport.startMotion());
-    link->replay();
-    for (const auto & command : link->last) {EXPECT_EQ(command.control_word, 0x0006);}
-  }
-}
 
 TEST(SoemEthercatTransport, handfeel_needs_no_candidate_and_confirms_actual_mode_and_exit)
 {
