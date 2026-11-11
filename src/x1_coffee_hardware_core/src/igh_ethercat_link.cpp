@@ -106,6 +106,13 @@ const ec_sync_info_t kSyncs[] = {
 constexpr std::size_t kRxCount = sizeof(kRxEntries) / sizeof(kRxEntries[0]);
 constexpr std::size_t kTxCount = sizeof(kTxEntries) / sizeof(kTxEntries[0]);
 
+// PDO 位数必须和 zeroerr_drive.hpp 的结构体逐字节对应，否则整帧过程数据会错位，
+// 位置能读出来但控制字和模式会落到错误字节上。改结构体时这里会直接编译失败。
+constexpr std::size_t kRxBits = 16 + 32 + 16 + 8 + 8;
+constexpr std::size_t kTxBits = 16 + 32 + 32 + 16 + 16 + 8 + 8;
+static_assert(kRxBits == sizeof(ZeroErrOutput) * 8, "Rx PDO 位数与 ZeroErrOutput 不一致");
+static_assert(kTxBits == sizeof(ZeroErrInput) * 8, "Tx PDO 位数与 ZeroErrInput 不一致");
+
 }  // namespace
 
 struct IghEthercatLink::Impl
