@@ -855,6 +855,10 @@ class KeyboardMenu:
                 return key
             self.mode = "main"
             return None
+        # MIT 是全局入口，避免用户先从其他菜单返回主界面。
+        if key in ("M", "m"):
+            self.mode = "mit"
+            return None if key == "M" else "M"
         if self.mode != "main":
             return self.ITEMS[self.mode].get(key)
         menus = {"g": "gravity", "h": "home", "`": "advanced", "M": "mit", "m": "mit"}
