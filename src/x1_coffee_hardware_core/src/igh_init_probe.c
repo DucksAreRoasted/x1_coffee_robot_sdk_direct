@@ -23,7 +23,6 @@ int main(void)
   ec_master_t *master = NULL; ec_domain_t *domain = NULL;
   ec_slave_config_t *sc[AXES] = {0}; unsigned int off[AXES][6];
   uint8_t *data; ec_master_state_t ms = {}; ec_domain_state_t ds = {};
-  ec_pdo_entry_reg_t regs[AXES * 6 + 1] = {}; unsigned int r = 0;
   struct timespec next; int i;
   signal(SIGINT,on_signal); signal(SIGTERM,on_signal);
   master = ecrt_request_master(0); if (!master) {fprintf(stderr,"IgH: request master failed\n"); return 1;}
@@ -37,14 +36,14 @@ int main(void)
       fprintf(stderr,"IgH: slave %d startup SDO config failed\n",i+1); return 1;
     }
     /* 驱动器 PDO 映射对象只读：保留从站默认映射，仅注册已确认的 entry。 */
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x607a,0, &off[i][0]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6040,0, &off[i][1]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6064,0, &off[i][2]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x60fd,0, &off[i][3]};
-    regs[r++] = (ec_pdo_entry_reg_t){0, (uint16_t)i, VENDOR, PRODUCT, 0x6041,0, &off[i][4]};
+    const uint16_t entries[] = {0x607a, 0x60fe, 0x6040, 0x6064, 0x60fd, 0x6041};
+    for (unsigned int k = 0; k < 6; ++k) {
+      const int value = ecrt_slave_config_reg_pdo_entry(sc[i], entries[k], 0, domain, NULL);
+      if (value < 0) {fprintf(stderr,"IgH: slave %d entry 0x%04x registration failed\n",i+1,entries[k]); return 1;}
+      off[i][k] = (unsigned int)value;
+    }
     ecrt_slave_config_dc(sc[i], 0x0300, CYCLE_NS, 0, 0, 0);
   }
-  if (ecrt_domain_reg_pdo_entry_list(domain, regs)) {fprintf(stderr,"IgH: PDO registration failed\n"); return 1;}
   if (ecrt_master_activate(master)) {fprintf(stderr,"IgH: activate failed\n"); return 1;}
   data = ecrt_domain_data(domain); if (!data) {fprintf(stderr,"IgH: domain data failed\n"); return 1;}
   clock_gettime(CLOCK_MONOTONIC,&next); printf("IgH probe: 15 slaves, 1 kHz, safe outputs\n");
