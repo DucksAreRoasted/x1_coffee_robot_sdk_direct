@@ -31,6 +31,11 @@ int main(void)
   for (i=0;i<AXES;++i) {
     sc[i] = ecrt_master_slave_config(master, 0, (uint16_t)i, VENDOR, PRODUCT);
     if (!sc[i]) {fprintf(stderr,"IgH: slave %d config failed\n",i+1); return 1;}
+    if (ecrt_slave_config_sdo8(sc[i], 0x6060, 0, 0x08) ||
+        ecrt_slave_config_sdo8(sc[i], 0x60c2, 1, 0x01) ||
+        ecrt_slave_config_sdo8(sc[i], 0x60c2, 2, 0xfd)) {
+      fprintf(stderr,"IgH: slave %d startup SDO config failed\n",i+1); return 1;
+    }
     if (ecrt_slave_config_sync_manager(sc[i], 2, EC_DIR_OUTPUT, EC_WD_ENABLE) ||
         ecrt_slave_config_sync_manager(sc[i], 3, EC_DIR_INPUT, EC_WD_DISABLE)) {
       fprintf(stderr,"IgH: slave %d sync manager config failed\n",i+1); return 1;
