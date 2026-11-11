@@ -2005,6 +2005,12 @@ bool bringupShouldRetry(const Result & opened)
     return false;
   }
   const std::string & detail = opened.detail;
+  // 原始 EtherCAT 网口没有 root 权限时，重试不会改变权限，必须立即停止并提示启动方式。
+  if (detail.find("原始网口需要 root") != std::string::npos ||
+    detail.find("需要 root") != std::string::npos)
+  {
+    return false;
+  }
   if (detail.find("收到中断") != std::string::npos ||
     detail.find("过程数据长度不符") != std::string::npos ||
     detail.find("周期线程未退出") != std::string::npos)
