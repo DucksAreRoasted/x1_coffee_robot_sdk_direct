@@ -28,16 +28,19 @@ public:
     if (!out) {return false;} *out={};
     if (!ready_ || !std::isfinite(dt) || dt<=0 || dt>.02) {return false;}
     for (int i=0;i<15;++i) {
-      if (!std::isfinite(q[i]) || !std::isfinite(dq[i]) ||
-          std::abs(q[i]-seed_[i]) > (i>=8 ? .15 : .02)) {return false;}
+      // MIT 手感模式允许在工作空间内拖动；位置安全边界由传输层的真实关节软限位检查负责。
+      // 这里不再把进入时姿态附近的小窗口误当成全局安全边界。
+      if (!std::isfinite(q[i]) || !std::isfinite(dq[i])) {return false;}
     }
     Arm next{};
     for (int j=0;j<7;++j) {
       const double desired=bias_[j]+(custom_[j] ? kp_[j]*(qdes_[j]-q[8+j])+kd_[j]*(dqdes_[j]-dq[8+j])+ff_[j] : kp[j]*(seed_[8+j]-q[8+j])-kd[j]*dq[8+j]);
       if (!std::isfinite(previous[j]) || std::abs(previous[j])>limits[j] ||
-          !std::isfinite(desired) || std::abs(desired)>limits[j]) {return false;}
+          !std::isfinite(desired)) {return false;}
       // 总目标电流限斜率；超过预算退出，不用饱和掩盖支撑不足。
-      next[j]=previous[j]+std::clamp(desired-previous[j],-limits[j]*dt,limits[j]*dt);
+      // MIT 弹簧被拖到远处时只限幅输出，不因目标力矩达到预算而退出拖动。
+      const double bounded = std::clamp(desired, -limits[j], limits[j]);
+      next[j]=previous[j]+std::clamp(bounded-previous[j],-limits[j]*dt,limits[j]*dt);
     }
     *out=next;return true;
   }

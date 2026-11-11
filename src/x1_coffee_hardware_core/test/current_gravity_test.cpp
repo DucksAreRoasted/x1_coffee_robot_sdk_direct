@@ -142,8 +142,9 @@ TEST(MitHandfeel, startsAtMeasuredCurrentAndRestoresPositionWithDamping)
   ASSERT_TRUE(model.command(q,dq,bias,.01,&out));EXPECT_LT(out[5],bias[5]);
   q[13]=0;dq[13]=.02;
   ASSERT_TRUE(model.command(q,dq,bias,.01,&out));EXPECT_LT(out[5],bias[5]);
-  q[13]=.151;EXPECT_FALSE(model.command(q,dq,bias,.001,&out));
-  q[13]=0;q[0]=.021;EXPECT_FALSE(model.command(q,dq,bias,.001,&out));
+  // MIT 手感不再用进入时姿态的 ±0.15 rad 临时窗口限制拖动范围。
+  q[13]=.151;EXPECT_TRUE(model.command(q,dq,bias,.001,&out));
+  q[13]=0;q[0]=.021;EXPECT_TRUE(model.command(q,dq,bias,.001,&out));
   q.fill(0);bias[5]=251;EXPECT_FALSE(model.configure(q,bias));
 }
 TEST(MitHandfeel, rejectsNonfiniteAndBudgetExhaustion)

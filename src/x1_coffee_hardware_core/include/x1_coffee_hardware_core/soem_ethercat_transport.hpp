@@ -216,7 +216,7 @@ private:
   bool current_active_{false};
   int current_mode_wait_{0};
   bool current_modes_confirmed_{false};
-  int current_fault_{0};  // 1反馈、2校准窗口/模型、3模式、4电流、5软限位、6速度、7模型输出。
+  int current_fault_{0};  // 1反馈、2MIT控制器、3模式、4电流、5软限位、6速度、7模型输出。
   int current_fault_joint_{-1};
   std::array<int, kCoffeeAxisCount> current_over_limit_cycles_{};
   std::chrono::steady_clock::time_point last_cycle_at_{};
@@ -231,7 +231,7 @@ private:
   // URDF 静重力，单位 N·m。换成 0x6071 时只除以该轴读到的 0x6076。
   MitHandfeel handfeel_;
   bool current_handfeel_{false};
-  // 正式零重力允许离开采样姿态；MIT手感试验仍使用局部姿态窗口。
+  // 正式零重力和 MIT 手感均允许离开进入时姿态；安全边界由轴级保护负责。
   bool current_zero_gravity_{false};
   UrdfGravity gravity_;
   bool gravity_ready_{false};

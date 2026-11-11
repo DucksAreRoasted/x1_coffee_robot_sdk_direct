@@ -2740,7 +2740,7 @@ Result SoemEthercatTransport::enterMitHandfeel()
     held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
   }
   link_->requestDriveMode(kZeroErrCyclicTorqueMode,mit_mask_);
-  return Result{CoreError::kOk, "已请求右臂MIT阻抗手感，等待实际模式；进入姿态弹簧回正，范围±0.15rad，腰和左臂CSP"};
+  return Result{CoreError::kOk, "已请求右臂MIT阻抗手感，等待实际模式；全工作空间弹簧回正，腰和左臂CSP"};
 }
 
 Result SoemEthercatTransport::enterCurrentGravity()
@@ -2810,7 +2810,7 @@ Result SoemEthercatTransport::currentGravityStatus()
   if (current_fault_ != 0) {
     // 状态服务提供退出类别；不能把模型保护退出统称为模式丢失。
     const char * reason = current_fault_ == 1 ? "反馈/使能失效或收到关断请求" :
-      current_fault_ == 2 ? (current_handfeel_ ? "MIT校准姿态窗口或控制器预算" : "重力模型计算或校准模型故障") :
+      current_fault_ == 2 ? (current_handfeel_ ? "MIT控制器输入或保持电流预算" : "重力模型计算或校准模型故障") :
       current_fault_ == 3 ? "实际模式丢失或切换确认超时" :
       current_fault_ == 4 ? "持续电流预算超限" :
       current_fault_ == 5 ? "关节软限位超限" :
@@ -2865,7 +2865,7 @@ void SoemEthercatTransport::updateCurrentGravity(
   current_previous_q_ = q;
   if (!modes_ready && (current_modes_confirmed_ || ++current_mode_wait_ > 1000)) {fault = 3;}
   if (modes_ready) {current_mode_wait_ = 0; current_modes_confirmed_ = true;}
-  // 正式零重力使用真实关节软限位和速度上限；校准手感仍由自身局部窗口保护。
+  // 两种拖动模式都使用真实关节软限位和速度上限，不使用进入时姿态窗口。
   static constexpr double kJointMin[kCoffeeAxisCount] = {
     -6.2831852,-3.1415926,-0.15,-3.1415926,-1.5707963,-3.1415926,-1.7453292,-6.2831853,
     -3.1415926,-3.1415926,-3.1415926,-2.0943951,-3.1415926,-1.7453292,-6.2831853};
