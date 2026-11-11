@@ -52,13 +52,15 @@ int main(void)
       if (value < 0) {fprintf(stderr,"IgH: slave %d PDO position %u/%u registration failed\n",i+1,sync[k],entry_pos[k]); return 1;}
       off[i][k] = (unsigned int)value;
     }
-    ecrt_slave_config_dc(sc[i], 0x0300, CYCLE_NS, 0, 0, 0);
+    ecrt_slave_config_dc(sc[i], 0x0300, CYCLE_NS, 100000, 0, 0);
   }
   if (ecrt_master_activate(master)) {fprintf(stderr,"IgH: activate failed\n"); return 1;}
   data = ecrt_domain_data(domain); if (!data) {fprintf(stderr,"IgH: domain data failed\n"); return 1;}
-  clock_gettime(CLOCK_MONOTONIC,&next); printf("IgH probe: 15 slaves, 1 kHz, safe outputs\n");
+  clock_gettime(CLOCK_MONOTONIC,&next);
+  const uint64_t app_start = EC_TIMEVAL2NANO(next);
+  printf("IgH probe: 15 slaves, 1 kHz, safe outputs\n");
   for (i=0; !stop && i<15000; ++i) {
-    ecrt_master_application_time(master, (uint64_t)i*CYCLE_NS);
+    ecrt_master_application_time(master, app_start + (uint64_t)i*CYCLE_NS);
     ecrt_master_receive(master); ecrt_domain_process(domain); ecrt_domain_state(domain,&ds); ecrt_master_state(master,&ms);
     for (int j=0;j<AXES;++j) {EC_WRITE_U32(data+off[j][0],0); EC_WRITE_U32(data+off[j][1],0); EC_WRITE_U16(data+off[j][2],0);}
     ecrt_domain_queue(domain); ecrt_master_sync_reference_clock(master); ecrt_master_sync_slave_clocks(master);
