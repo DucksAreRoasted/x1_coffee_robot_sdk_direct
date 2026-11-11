@@ -48,9 +48,11 @@ int main(void)
   data = ecrt_domain_data(domain); if (!data) {fprintf(stderr,"IgH: domain data failed\n"); return 1;}
   clock_gettime(CLOCK_MONOTONIC,&next); printf("IgH probe: 15 slaves, 1 kHz, safe outputs\n");
   for (i=0; !stop && i<15000; ++i) {
+    ecrt_master_application_time(master, (uint64_t)i*CYCLE_NS);
     ecrt_master_receive(master); ecrt_domain_process(domain); ecrt_domain_state(domain,&ds); ecrt_master_state(master,&ms);
     for (int j=0;j<AXES;++j) {EC_WRITE_U32(data+off[j][0],0); EC_WRITE_U32(data+off[j][1],0); EC_WRITE_U16(data+off[j][2],0);}
-    ecrt_domain_queue(domain); ecrt_master_application_time(master, (uint64_t)i*CYCLE_NS); ecrt_master_send(master); sleep_cycle(&next);
+    ecrt_domain_queue(domain); ecrt_master_sync_reference_clock(master); ecrt_master_sync_slave_clocks(master);
+    ecrt_master_send(master); sleep_cycle(&next);
   }
   printf("IgH probe done: master=%u domain=%u working_counter=%u\n",ms.al_states,ds.working_counter,ds.wc_state);
   ecrt_release_master(master); return 0;
