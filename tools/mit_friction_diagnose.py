@@ -338,6 +338,8 @@ def mode_breakaway(bench: Bench, args) -> int:
                         print("  轴已关断，停止本次辨识；请重新走一遍使能序列")
                         RESULTS["breakaway"] = results
                         return 2
+                    # 保持电流要在 CSP 下测：进入 MIT 后读到的是带偏置的 CST 值。
+                    run_hold = bench.hold_current(0.4).get(RIGHT_JOINTS[joint], float("nan"))
                     if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff):
                         print("参数下发失败")
                         return 2
@@ -353,7 +355,6 @@ def mode_breakaway(bench: Bench, args) -> int:
                         continue
                     bench.spin(args.dwell)
                     start_pose = bench.measured[RIGHT_JOINTS[joint]]
-                    run_hold = bench.hold_current(0.4).get(RIGHT_JOINTS[joint], float("nan"))
                     try:
                         result = bench.breakaway(joint, rate * direction, args.kp, args.kd,
                                                  args.limit_ratio, args.settle, args.max_seconds)
@@ -379,7 +380,7 @@ def mode_breakaway(bench: Bench, args) -> int:
                               f"{result['reason']}")
                     else:
                         print(f"  r{joint + 1} {rate:>4.0f} {result['direction']:<8} "
-                              f"{hold:>8.1f} {result['ramp_at_first_motion']:>8.0f} "
+                              f"{run_hold:>8.1f} {result['ramp_at_first_motion']:>8.0f} "
                               f"{result['ramp_at_confirm']:>8.0f} "
                               f"{result['first_motion_s']:>6.2f}/{result['confirm_s']:>5.2f}s  "
                               f"{result['total']:>6.0f} {result['headroom_at_breakaway']:>7.0f}  "
@@ -405,12 +406,15 @@ def summarize_breakaway(results: List[dict]) -> None:
             down = statistics.median(item["total"] for item in minus)
             midpoint = (up + down) / 2.0
             halfwidth = (up - down) / 2.0
-            values = [item["total"] for item in plus + minus]
-            median = statistics.median(values)
-            spread = statistics.pstdev(values) / abs(median) if median else float("inf")
-            verdict = "可用" if spread < 0.15 else ("勉强" if spread < 0.3 else "不可用")
+            spreads = []
+            for group in (plus, minus):
+                totals = [item["total"] for item in group]
+                median = statistics.median(totals)
+                spreads.append(statistics.pstdev(totals) / abs(median) if median else float("inf"))
+            worst = max(spreads)
+            verdict = "可用" if worst < 0.15 else ("勉强" if worst < 0.3 else "不可用")
             print(f"  r{joint:<2} {rate:>4.0f} {midpoint:>9.1f} {halfwidth:>8.1f}  "
-                  f"离散度 {spread * 100:>4.0f}% → {verdict}；"
+                  f"离散度 正{spreads[0] * 100:>3.0f}%/反{spreads[1] * 100:>3.0f}% → {verdict}；"
                   f"中点≠重力电流，半宽≠双向统一摩擦")
             print(f"        重力电流只落在这个区间内：{down:+.0f} ‰ ≤ u_g ≤ {up:+.0f} ‰")
     print("\n[不可确认] 本轮实验不能确定：重力电流 u_g（含静摩擦分担）、"
