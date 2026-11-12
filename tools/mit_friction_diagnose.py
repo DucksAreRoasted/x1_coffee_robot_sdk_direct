@@ -578,121 +578,93 @@ def mode_motion(bench: Bench, args) -> int:
 
 
 def mode_sweep(bench: Bench, args) -> int:
-    """慢速往返扫描：同位置的 u+ 与 u- 平均就是重力，差就是摩擦。
+    """逐点停住采样的重力曲线：位置模式走到每个点、等停稳、读稳态力矩。
 
-    比一个姿态一个姿态地摆省事，而且 u_g(q) 是一整条曲线，可以直接判模型。
+    PVT 执行器不按我们给的时长匀速走，靠等速采样拿不到足够行程；
+    改成「走一步、停住、测稳态」，正反两个方向各走一遍，
+    同一位置的正反向平均是重力项、差是摩擦。
     """
     if not check_enabled(bench):
         return 2
     import numpy as np
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    records = []
+    results = []
     for joint in args.joints:
         name = RIGHT_JOINTS[joint]
         center = bench.measured[name]
         low = center - args.swing
         high = center + args.swing
-        duration = max(1.5, 2 * args.swing / args.sweep_speed)
-        for direction in (1.0, -1.0):
-            start = [bench.measured[item] for item in JOINTS_ALL]
-            index = JOINTS_ALL.index(name)
-            start[index] = low if direction > 0 else high
-            if not bench.move(start, max(0.8, abs(start[index] - center) / args.sweep_speed)):
-                print(f"  r{joint + 1} 预定位失败，跳过该方向")
-                continue
-            bench.spin(0.4)
-            target = list(start)
-            target[index] = high if direction > 0 else low
-            if not bench.move(target, duration):
-                print(f"  r{joint + 1} 扫描指令失败")
-                continue
-            samples = bench.sweep(joint, target[index], duration, LIMIT_BUDGET[joint])
-            path = out / f"sweep_j{joint + 1}_{direction:+.0f}.csv"
-            with path.open("w", encoding="utf-8") as handle:
-                handle.write("t,q,dq,u\n")
-                for row in samples:
-                    handle.write(f"{row[0]:.6f},{row[1]:.6f},{row[2]:.6f},{row[3]:.3f}\n")
-            records.append({"joint": joint + 1, "direction": direction,
-                            "samples": samples, "csv": str(path)})
-
-        plus = [item for item in records if item["joint"] == joint + 1 and item["direction"] > 0]
-        minus = [item for item in records if item["joint"] == joint + 1 and item["direction"] < 0]
-        if not plus or not minus:
-            continue
-        # 只取中段、速度稳定、未饱和的样本，再按位置分箱配对。
-        def clean(samples, sign):
-            keep = []
-            low_i, high_i = int(len(samples) * 0.2), int(len(samples) * 0.8)
-            for _, q, velocity, torque in samples[low_i:high_i]:
-                if sign * velocity < 0.5 * args.sweep_speed:
-                    continue
-                if abs(torque) > LIMIT_BUDGET[joint] * 0.95:
-                    continue
-                keep.append((q, torque))
-            return keep
-
-        up = clean(plus[0]["samples"], +1.0)
-        down = clean(minus[0]["samples"], -1.0)
-        if len(up) < 20 or len(down) < 20:
-            print(f"  r{joint + 1} 有效样本不足（正 {len(up)} / 反 {len(down)}），"
-                  f"降低 --sweep-speed 或加大 --swing")
-            continue
-        up.sort()
-        down.sort()
-        poses = [q for q, _ in up]
-        torques_up = [u for _, u in up]
-        grid = [poses[int(len(poses) * frac)] for frac in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        steps = max(3, args.steps)
+        positions = [low + (high - low) * index / (steps - 1) for index in range(steps)]
+        index = JOINTS_ALL.index(name)
         table = []
-        for q in grid:
-            near_up = [u for qq, u in up if abs(qq - q) < 0.01]
-            near_down = [u for qq, u in down if abs(qq - q) < 0.01]
-            if not near_up or not near_down:
-                continue
-            mean_up = sum(near_up) / len(near_up)
-            mean_down = sum(near_down) / len(near_down)
-            table.append((q, (mean_up + mean_down) / 2, (mean_up - mean_down) / 2,
-                          len(near_up) + len(near_down)))
-        if len(table) < 3:
-            print(f"  r{joint + 1} 正反向位置交叠不足，配对失败")
+        for direction in (1, -1):
+            order = positions if direction > 0 else list(reversed(positions))
+            for q in order:
+                pose = [bench.measured[item] for item in JOINTS_ALL]
+                pose[index] = q
+                if not bench.move(pose, max(0.8, abs(pose[index] - bench.measured[name]) / 0.1)):
+                    print(f"  r{joint + 1} 走到 {q:+.3f} 失败")
+                    continue
+                bench.spin(args.dwell)
+                values = []
+                end = time.monotonic() + 0.4
+                while time.monotonic() < end:
+                    bench.rclpy.spin_once(bench.node, timeout_sec=0.02)
+                    state = bench.motors.get(name)
+                    if state is not None and state.torque_valid:
+                        values.append(float(state.torque_permille))
+                if not values:
+                    continue
+                table.append({"direction": direction, "q": bench.measured[name],
+                              "torque": sum(values) / len(values),
+                              "spread": max(values) - min(values), "n": len(values)})
+        if not table:
             continue
-        qs = np.array([row[0] for row in table])
-        gravity = np.array([row[1] for row in table])
-        friction = np.array([row[2] for row in table])
-        # 窗口窄时 sin/cos/1 几乎线性相关，系数会爆掉；按窗口宽度选基函数。
+        rows = []
+        for item in table:
+            if item["direction"] > 0:
+                continue
+            partner = min((other for other in table if other["direction"] > 0),
+                          key=lambda other: abs(other["q"] - item["q"]), default=None)
+            if partner is None or abs(partner["q"] - item["q"]) > 0.02:
+                continue
+            # 停住时正反向的差来自位置环落点误差（静摩擦让关节停得偏一点），
+            # 不是摩擦；这里只作为方向差记录，不叫 friction。
+            rows.append({"q": (item["q"] + partner["q"]) / 2,
+                         "gravity": (item["torque"] + partner["torque"]) / 2,
+                         "spread": (partner["torque"] - item["torque"]) / 2,
+                         "up": partner["torque"], "down": item["torque"]})
+        if len(rows) < 3:
+            print(f"  r{joint + 1} 正反向位置没配上，测到的点太少")
+            continue
+        rows.sort(key=lambda item: item["q"])
+        qs = np.array([item["q"] for item in rows])
+        gravity = np.array([item["gravity"] for item in rows])
+        spread = np.array([item["spread"] for item in rows])
         width = float(qs.max() - qs.min())
-        if width < 1.0:
-            basis = np.column_stack([qs - qs.mean(), np.ones_like(qs)])
-            label = "线性（窗口 %.2f rad 太窄，不用三角函数）" % width
-        else:
-            basis = np.column_stack([np.sin(qs), np.cos(qs), np.ones_like(qs)])
-            label = "sin/cos + 常数"
+        basis = np.column_stack([qs - qs.mean(), np.ones_like(qs)])
         coefficients, *_ = np.linalg.lstsq(basis, gravity, rcond=None)
-        predicted = basis @ coefficients
-        rms = float(np.sqrt(np.mean((predicted - gravity) ** 2)))
-        print(f"\n  r{joint + 1} 扫描 {low:+.3f}~{high:+.3f} rad（{args.sweep_speed} rad/s）")
-        print("    位置      重力(‰)   摩擦(‰)   样本")
-        for q, g, f, n in table:
-            print(f"    {q:+.4f} {g:>9.1f} {f:>9.1f} {n:>6}")
+        rms = float(np.sqrt(np.mean((basis @ coefficients - gravity) ** 2)))
         span = float(gravity.max() - gravity.min())
-        if width < 1.0:
-            print(f"    拟合 u_g(q) = {coefficients[0]:+.0f}·(q−{qs.mean():+.3f}) "
-                  f"{coefficients[1]:+.1f}，基函数{label}，RMS {rms:.1f}‰")
-        else:
-            print(f"    拟合 u_g(q) = {coefficients[0]:+.1f}·sin q {coefficients[1]:+.1f}·cos q "
-                  f"{coefficients[2]:+.1f}，基函数{label}，RMS {rms:.1f}‰")
-        print(f"    窗口内重力变化 {span:.1f}‰，摩擦 {float(friction.min()):.1f}"
-              f"~{float(friction.max()):.1f}‰")
+        print(f"\n  r{joint + 1} 姿态 {low:+.3f}~{high:+.3f} rad，{len(rows)} 个配对点")
+        print("    位置      重力(‰)  方向差(‰)   正向    反向")
+        for item in rows:
+            print(f"    {item['q']:+.4f} {item['gravity']:>9.1f} {item['spread']:>9.1f} "
+                  f"{item['up']:>8.1f} {item['down']:>8.1f}")
+        print(f"    线性拟合 u_g(q) = {coefficients[0]:+.0f}‰/rad ·(q−{qs.mean():+.3f}) "
+              f"{coefficients[1]:+.1f}，RMS {rms:.1f}‰；窗口内变化 {span:.1f}‰")
+        print(f"    方向差 {float(spread.min()):+.1f}~{float(spread.max()):+.1f}‰"
+              f"（位置环落点差异，不是摩擦）")
         if span < 0.1 * abs(float(gravity.mean())):
-            print("    → 重力在这个窗口内近似常数，前馈可以用一个常数，不需要模型")
-        elif rms > 0.15 * max(abs(gravity).max(), 1.0):
-            print("    ⚠ 拟合残差超过重力幅值的 15%，这个区间需要更高阶的模型")
-        RESULTS.setdefault("sweep", []).append({
-            "joint": joint + 1, "table": table, "rms": rms,
-            "coefficients": coefficients.tolist()})
-    print("\n[不可确认] 扫描得到的是该关节在其余关节固定时的 u_g(q)，"
-          "不能外推到其他手臂姿态，也不是惯量或质量参数。")
-    return 0 if RESULTS.get("sweep") else 2
+            print("    → 重力在这个区间近似常数，前馈可以用一个常数")
+        results.append({"joint": joint + 1, "rows": rows, "rms": rms,
+                        "slope": coefficients[0], "intercept": coefficients[1]})
+        RESULTS.setdefault("sweep", []).append(results[-1])
+    print("\n[不可确认] 这是其余关节固定时的 u_g(q)，不能外推到其他手臂姿态，"
+          "也不是惯量或质量参数。")
+    return 0 if results else 2
 
 
 def main() -> int:
@@ -713,7 +685,7 @@ def main() -> int:
     parser.add_argument("--ff", type=float, default=1.0)
     parser.add_argument("--settle", type=float, default=0.5)
     parser.add_argument("--swing", type=float, default=0.15, help="sweep 模式的单边行程 rad")
-    parser.add_argument("--sweep-speed", type=float, default=0.05, help="sweep 模式的扫描速度 rad/s")
+    parser.add_argument("--steps", type=int, default=5, help="sweep 模式每个方向测几个点")
     parser.add_argument("--dwell", type=float, default=0.8,
                         help="进入 MIT 并确认模式后，再等多久才开始加力")
     parser.add_argument("--return-kp", type=float, default=400.0,
