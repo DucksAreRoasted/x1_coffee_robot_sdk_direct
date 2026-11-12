@@ -36,8 +36,66 @@ RATED_TORQUE = [52.0, 52.0, 21.0, 21.0, 10.0, 5.4, 5.4]
 LIMIT_BUDGET = [250, 150, 200, 400, 120, 250, 120]   # 单轴输出电流预算（‰）
 # CST 斜坡辨识的起动电流（‰）。摩擦死区 = 该值/kp，用来判断刚度够不够。
 FRICTION_EST = [41.4, 42.9, 41.7, 47.1, 24.9, 74.4, 39.7]
+JOINT_LIMITS = {
+    "Joint_r1": (-3.1415926, 3.1415926), "Joint_r2": (-3.1415926, 0.15),
+    "Joint_r3": (-3.1415926, 3.1415926), "Joint_r4": (-2.0943951, 1.5707963),
+    "Joint_r5": (-3.1415926, 3.1415926), "Joint_r6": (-1.7453292, 1.7453292),
+    "Joint_r7": (-6.2831853, 6.2831853),
+}
+
+
+def _joint_limits(name: str):
+    return JOINT_LIMITS.get(name, (-1.0, 1.0))
+
+
 KP_LIMIT = 1000.0      # MitHandfeel::update 的硬上限（‰）
 KD_LIMIT = 300.0
+
+
+class PinBackend:
+    """Pinocchio 后端：CRBA 惯量、重力项、多姿态扫描。
+
+    手写的 effective_inertia() 和它数值一致（实测相对差 1e-15），保留是为了
+    没装 pin 时也能用；有 pin 时优先走这里，因为它还能给重力项和姿态扫描。
+    """
+
+    def __init__(self, urdf: str, gripper_kg: float = 1.0) -> None:
+        import numpy as np
+        import pinocchio as pin
+        self.np = np
+        self.pin = pin
+        self.model = pin.buildModelFromUrdf(urdf)
+        self.data = self.model.createData()
+        self.index = {name: self.model.joints[self.model.getJointId(name)].idx_q
+                      for name in JOINTS_ALL}
+        if gripper_kg > 0:
+            # 把夹爪作为刚体挂到 TCP 帧上：质量放在帧原点、惯量张量未知按 0 处理。
+            for frame_name in ("left_gripper_tcp", "right_gripper_tcp"):
+                fid = self.model.getFrameId(frame_name)
+                if fid >= len(self.model.frames):
+                    continue
+                frame = self.model.frames[fid]
+                body = pin.Inertia(float(gripper_kg), np.zeros(3), np.zeros((3, 3)))
+                self.model.appendBodyToJoint(frame.parentJoint, body, frame.placement)
+            self.data = self.model.createData()
+
+    def q_vector(self, q: Sequence[float]):
+        vector = self.pin.neutral(self.model)
+        for name, value in zip(JOINTS_ALL, q):
+            vector[self.index[name]] = value
+        return vector
+
+    def inertia(self, q: Sequence[float]) -> List[float]:
+        vector = self.q_vector(q)
+        matrix = self.pin.crba(self.model, self.data, vector)
+        return [float(matrix[self.index[f"Joint_r{i}"], self.index[f"Joint_r{i}"]])
+                for i in range(1, 8)]
+
+    def gravity(self, q: Sequence[float]) -> List[float]:
+        """重力力矩 N·m（右臂 r1..r7），给零重力/前馈用。"""
+        vector = self.q_vector(q)
+        torque = self.pin.computeGeneralizedGravity(self.model, self.data, vector)
+        return [float(torque[self.index[f"Joint_r{i}"]]) for i in range(1, 8)]
 
 
 def effective_inertia(model, q: Sequence[float]) -> List[float]:
@@ -249,6 +307,9 @@ def main() -> int:
     parser.add_argument("--wn", default="6.0",
                         help="设计固有频率 rad/s；用逗号给多个值可以并排比较")
     parser.add_argument("--zeta", type=float, default=1.0, help="设计阻尼比")
+    parser.add_argument("--gravity", action="store_true", help="同时打印当前姿态的重力力矩")
+    parser.add_argument("--sweep", type=int, default=0,
+                        help="随机采样 N 个姿态，报每轴惯量的最小/最大值（不动机器人）")
     parser.add_argument("--rotor-j", default="",
                         help="转子惯量 kg·m²（7 个逗号分隔值，或 1 个通用值）；不填算 0")
     parser.add_argument("--gear", default="",
@@ -264,8 +325,14 @@ def main() -> int:
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
-    from gravity_identification.model import Model
-    model = Model(args.urdf, (args.gripper_kg, args.gripper_kg))
+    backend = None
+    try:
+        backend = PinBackend(args.urdf, args.gripper_kg)
+        print("惯量后端：pinocchio")
+    except Exception as error:                       # 没装 pin 时退回手写公式
+        print(f"pinocchio 不可用（{error}），改用内置 URDF 公式")
+        from gravity_identification.model import Model
+        model = Model(args.urdf, (args.gripper_kg, args.gripper_kg))
 
     if args.q:
         q = [float(v) for v in args.q.replace(" ", "").split(",")]
@@ -294,7 +361,7 @@ def main() -> int:
         for name in RIGHT_JOINTS:
             print(f"  {name}: {q[JOINTS_ALL.index(name)]:+.4f}")
 
-    inertia = effective_inertia(model, q)
+    inertia = backend.inertia(q) if backend else effective_inertia(model, q)
     # 转子惯量经减速比折算到输出侧：J_rotor_out = N²·J_rotor。URDF 里没有这一项，
     # 零差资料给了各型号转子惯量时补上，腕部尤其重要（连杆模型会把它们算成接近 0）。
     if args.rotor_j:
@@ -309,10 +376,31 @@ def main() -> int:
             return 2
         inertia = [j + (n * n) * jr for j, jr, n in zip(inertia, rotors, gears)]
         print("已计入转子惯量 N²·J_rotor")
+    if backend and args.gravity:
+        torques = backend.gravity(q)
+        print("当前姿态重力力矩（N·m）：" +
+              "  ".join(f"r{i + 1}={value:+.2f}" for i, value in enumerate(torques)))
     weak = [index + 1 for index, value in enumerate(inertia) if value < 0.01]
     if weak:
         print(f"⚠ 关节 {weak} 的模型惯量 <0.01 kg·m²，连杆质量几乎都落在转轴上，"
               "结果会严重偏软；请补 --rotor-j/--gear 或改用实验值")
+    if args.sweep and backend:
+        import random
+        random.seed(0)
+        samples = []
+        for _ in range(args.sweep):
+            pose = list(q)
+            for index in range(8, 15):
+                low, high = _joint_limits(JOINTS_ALL[index])
+                pose[index] = random.uniform(low, high)
+            samples.append(backend.inertia(pose))
+        print(f"\n{args.sweep} 个随机姿态下的惯量范围（kg·m²）：")
+        print("关节    最小      最大      倍数")
+        for joint in range(7):
+            values = [sample[joint] for sample in samples]
+            low, high = min(values), max(values)
+            print(f"  r{joint + 1:<2} {low:>9.4f} {high:>9.4f} {high / max(low, 1e-9):>6.1f}×")
+
     wn_values = [float(item) for item in str(args.wn).split(",") if item.strip()]
     candidates = []
     for wn in wn_values:
