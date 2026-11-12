@@ -16,6 +16,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
@@ -37,8 +38,8 @@ class Drag(Node):
         super().__init__("mit_drag_identify")
         self.q = {}
         self.tau = {}
-        self.create_subscription(JointState, "/joint_states", self._on_js, 20)
-        self.create_subscription(MotorStateArray, "/x1/motor_states", self._on_ms, 20)
+        self.create_subscription(JointState, "/joint_states", self._on_js, qos_profile_sensor_data)
+        self.create_subscription(MotorStateArray, "/x1/motor_states", self._on_ms, qos_profile_sensor_data)
         self.pub = self.create_publisher(Float64MultiArray, "/x1/pvt_move", 10)
         self.seq = 0
 
