@@ -214,6 +214,12 @@ bool X1CoffeeSystemHardware::startMotionService()
   motion_node_->declare_parameter<std::int64_t>("cst_zero_mask", 0);
   // 第 4 步的小力矩偏置，单位额定千分比。0 表示只验证模式切换。
   motion_node_->declare_parameter<std::int64_t>("cst_zero_torque_permille", 0);
+  // MIT 保持的可调参数：掩码、刚度、阻尼、重力前馈倍率。
+  // 默认掩码 0（必须显式指定单轴），前馈默认 1（保持原有行为）。
+  motion_node_->declare_parameter<std::int64_t>("mit_mask", 0);
+  motion_node_->declare_parameter<double>("mit_kp", 480.0);
+  motion_node_->declare_parameter<double>("mit_kd", 24.0);
+  motion_node_->declare_parameter<double>("mit_ff_scale", 1.0);
   // 自动采样的异常出口，服务成功仍须由调用方检查实际运动是否停止。
   cancel_pvt_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/cancel_pvt",
@@ -388,7 +394,21 @@ bool X1CoffeeSystemHardware::startMotionService()
         response->message = "当前传输层没有 MIT";
         return;
       }
-      const auto result = transport->enterMitHold();
+      const auto mask_param = std::clamp<std::int64_t>(
+        motion_node_->get_parameter("mit_mask").as_int(), 0, 0x7FFF);
+      if (mask_param == 0) {
+        response->success = false;
+        response->message = "mit_mask 为 0，拒绝进入；先用 ros2 param set 指定单轴（例如 r7 = 16384）";
+        return;
+      }
+      const double kp = motion_node_->get_parameter("mit_kp").as_double();
+      const double kd = motion_node_->get_parameter("mit_kd").as_double();
+      const double ff = std::clamp(motion_node_->get_parameter("mit_ff_scale").as_double(), 0.0, 1.0);
+      RCLCPP_INFO(
+        motion_node_->get_logger(), "MIT 保持：掩码 0x%04x kp=%.1f‰/rad kd=%.1f‰/(rad·s) ff=%.2f",
+        static_cast<unsigned>(mask_param), kp, kd, ff);
+      const auto result = transport->enterMitHoldEx(
+        static_cast<std::uint16_t>(mask_param), kp, kd, ff);
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });

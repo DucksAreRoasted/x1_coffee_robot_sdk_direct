@@ -223,6 +223,11 @@ struct IghEthercatLink::Impl
     int shutdown_cycles = 0;
     int wait_cycles = 0;
     int link_down_cycles = 0;
+    // 最近一次完整帧。单帧丢失继续沿用上一帧，不立刻把 15 轴判无效：
+    // 驱动器 SM 看门狗是 100 ms，容忍 20 ms 不会让它掉使能，但足以躲过偶发丢帧。
+    static constexpr int kIncompleteToleranceCycles = 20;
+    std::array<SlaveFeedback, kAxes> last_feedback{};
+    int incomplete_cycles = 0;
 
     for (;;) {
       const bool stopping = stop.load(std::memory_order_acquire);
@@ -240,20 +245,35 @@ struct IghEthercatLink::Impl
         ds.working_counter == kExpectedWorkingCounter;
       const bool all_op = ms.al_states == static_cast<unsigned int>(EC_AL_STATE_OP);
 
-      std::array<SlaveFeedback, kAxes> feedback{};
-      for (std::size_t i = 0; i < kAxes; ++i) {
-        SlaveFeedback & item = feedback[i];
+      if (complete) {
+        incomplete_cycles = 0;
         // 整个域只有一个 LRW 数据报，要么整帧有效，要么整帧作废。
-        item.valid = complete;
-        if (!complete) {
-          continue;
+        for (std::size_t i = 0; i < kAxes; ++i) {
+          SlaveFeedback & item = last_feedback[i];
+          item.valid = true;
+          item.status_word = EC_READ_U16(data + tx_offset[i][0]);
+          item.actual_position = EC_READ_S32(data + tx_offset[i][1]);
+          item.actual_torque = EC_READ_S16(data + tx_offset[i][3]);
+          item.actual_current = EC_READ_S16(data + tx_offset[i][4]);
+          item.mode_of_operation = EC_READ_U8(data + tx_offset[i][5]);
         }
-        item.status_word = EC_READ_U16(data + tx_offset[i][0]);
-        item.actual_position = EC_READ_S32(data + tx_offset[i][1]);
-        item.actual_torque = EC_READ_S16(data + tx_offset[i][3]);
-        item.actual_current = EC_READ_S16(data + tx_offset[i][4]);
-        item.mode_of_operation = EC_READ_U8(data + tx_offset[i][5]);
+      } else {
+        ++incomplete_cycles;
+        if (incomplete_cycles == 1) {
+          // 第一次丢帧就把真实原因打出来，别只在上层看到"反馈无效"。
+          say(
+            "! IgH 单帧不完整：link_up=%d wc_state=%u WKC=%u/%u；%d 帧内沿用上一帧",
+            ms.link_up ? 1 : 0, static_cast<unsigned>(ds.wc_state),
+            static_cast<unsigned>(ds.working_counter),
+            static_cast<unsigned>(kExpectedWorkingCounter), kIncompleteToleranceCycles);
+        }
+        if (incomplete_cycles > kIncompleteToleranceCycles) {
+          for (auto & item : last_feedback) {
+            item.valid = false;
+          }
+        }
       }
+      const auto & feedback = last_feedback;
 
       std::array<SlaveCommand, kAxes> command{};
       if (on_cycle) {

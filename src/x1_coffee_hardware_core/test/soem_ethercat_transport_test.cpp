@@ -928,3 +928,37 @@ TEST(SoemEthercatTransport, cst_zero_torque_offset_is_single_axis_and_bounded)
   EXPECT_EQ(link->last[8].mode_of_operation, 0x08);
   EXPECT_EQ(link->last[8].target_torque, 0);
 }
+
+TEST(SoemEthercatTransport, mit_hold_ex_uses_mask_and_pure_pd_when_ff_disabled)
+{
+  // 纯 PD 手感试验：单轴掩码、可调 kp/kd、ff_scale=0 时不加重力前馈。
+  auto owned = std::make_unique<FakeLink>();
+  auto * link = owned.get();
+  link->status = 0x1237;
+  SoemEthercatTransport transport(std::move(owned));
+  auto config = parameters(true);
+  config["gravity_urdf"] = X1_GRAVITY_URDF;
+  ASSERT_TRUE(transport.configure(config));
+  ASSERT_TRUE(transport.activate());
+  for (int i = 0; i < 1002; ++i) {link->replay();}
+
+  EXPECT_FALSE(transport.enterMitHoldEx(0, 100.0, 10.0, 0.0));
+  EXPECT_FALSE(transport.enterMitHoldEx(0x00FE, 100.0, 10.0, 0.0));   // 左臂
+  EXPECT_FALSE(transport.enterMitHoldEx(0x4000, 5000.0, 10.0, 0.0));  // kp 越界
+  EXPECT_FALSE(transport.enterMitHoldEx(0x4000, 100.0, 10.0, 2.0));   // ff 越界
+
+  ASSERT_TRUE(transport.enterMitHoldEx(0x4000, 0.0, 0.0, 0.0));
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[14].mode_of_operation, 0x0A);
+  EXPECT_EQ(link->last[14].target_torque, 0);
+  EXPECT_EQ(link->last[13].mode_of_operation, 0x08);
+  ASSERT_TRUE(transport.exitMitHold());
+
+  // kp=200‰/rad，拨出 0.05 rad 后目标力矩应为 -10‰（纯弹簧，无前馈）。
+  ASSERT_TRUE(transport.enterMitHoldEx(0x4000, 200.0, 0.0, 0.0));
+  link->position_shift = 50;
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[14].target_torque, -10);
+  link->position_shift = 0;
+  ASSERT_TRUE(transport.exitMitHold());
+}

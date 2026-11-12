@@ -3068,8 +3068,9 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
     const double kd_nm = slot >= 4 ? kSoftKdNm[slot] : 0.0;
     command = torquePermilleFromNm(gravity_nm - kd_nm * mit_velocity_[index], rated);
   } else {
+    // mit_ff_scale_ = 0 时就是纯 PD：重力模型完全不参与，手感只由 kp/kd 决定。
     command = mit_kp_ * error - mit_kd_ * mit_velocity_[index] +
-      torquePermilleFromNm(gravity_nm, rated);
+      torquePermilleFromNm(gravity_nm * mit_ff_scale_, rated);
   }
   if (slot >= 0) {
     mit_balance_ok_[static_cast<std::size_t>(slot)] = std::abs(command) < mit_limit_ - 0.5;
@@ -3085,7 +3086,18 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
 
 Result SoemEthercatTransport::enterMitHold()
 {
-  return beginRightArmTorque(false);
+  return beginRightArmTorque(0x7F00, mit_kp_, mit_kd_, 1.0, false);
+}
+
+Result SoemEthercatTransport::enterMitHoldEx(
+  std::uint16_t mask, double kp_permille, double kd_permille, double ff_scale)
+{
+  // 纯 PD 试验不需要重力模型；要加前馈就必须先有模型，否则会静默变成纯 PD。
+  if (ff_scale > 0.0 && !gravity_ready_) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration, "没有 URDF 重力模型，只能做 ff_scale=0 的纯 PD 试验");
+  }
+  return beginRightArmTorque(mask, kp_permille, kd_permille, ff_scale, false);
 }
 
 bool SoemEthercatTransport::rightArmRatedTorqueReady(std::string * missing) const
@@ -3122,10 +3134,12 @@ Result SoemEthercatTransport::enterZeroGravity()
       CoreError::kInvalidConfiguration,
       "右臂没有读到额定力矩 0x6076，不能把牛·米换成驱动器千分比：" + missing);
   }
-  return beginRightArmTorque(true);
+  return beginRightArmTorque(0x7F00, 0.0, mit_kd_, 1.0, true);
 }
 
-Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
+Result SoemEthercatTransport::beginRightArmTorque(
+  std::uint16_t mask, double kp_permille, double kd_permille, double ff_scale,
+  bool zero_gravity)
 {
   if (!active_ || link_ == nullptr) {
     return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
@@ -3135,7 +3149,18 @@ Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
       return Result::fail(CoreError::kInvalidConfiguration, "已有轴用纯扭矩映射启动，不能再切 MIT");
     }
   }
-  const std::uint16_t mask = 0x7F00;
+  // 只允许右臂 r1–r7。左臂和腰没有 MIT 力矩通路，误配掩码会变成"以为在调右臂"。
+  if (mask == 0 || (mask & ~0x7F00u) != 0) {
+    return Result::fail(CoreError::kInvalidConfiguration, "MIT 掩码必须非空且只包含右臂 bit8..14");
+  }
+  if (!std::isfinite(kp_permille) || !std::isfinite(kd_permille) || !std::isfinite(ff_scale) ||
+    kp_permille < 0.0 || kp_permille > 2000.0 || kd_permille < 0.0 || kd_permille > 200.0 ||
+    ff_scale < 0.0 || ff_scale > 1.0)
+  {
+    return Result::fail(
+      CoreError::kInvalidConfiguration,
+      "MIT 参数越界：kp 0..2000‰/rad，kd 0..200‰/(rad·s)，ff_scale 0..1");
+  }
   // 校验和状态准备都在锁内完成；requestDriveMode 在 IgH 上是阻塞邮箱调用，
   // 必须放锁后再发，否则会和等锁的周期线程互锁（服务无响应）。
   {
@@ -3145,6 +3170,9 @@ Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
     }
     if (mit_active_) {return Result::fail(CoreError::kWriteFailed, "已有扭矩模式占用，请先退出");}
     mit_mask_ = mask;
+    mit_kp_ = kp_permille;
+    mit_kd_ = kd_permille;
+    mit_ff_scale_ = ff_scale;
     const auto & descriptors = coffeeAxisDescriptors();
     for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
       const SlaveFeedback & item = latest_[index];
@@ -3373,7 +3401,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     }
   } leave{this, false};
 
-  const Result entered = beginRightArmTorque(false);
+  const Result entered = beginRightArmTorque(0x7F00, mit_kp_, mit_kd_, 1.0, false);
   if (!entered) {
     say("✗ 右臂不能进入周期同步扭矩：%s", entered.detail.c_str());
     return;

@@ -111,6 +111,7 @@ public:
   Result currentGravityStatus();
   Result currentGravityHoldStatus();
   Result enterMitHold();
+  Result enterMitHoldEx(std::uint16_t mask, double kp, double kd, double ff_scale) override;
   Result enterMitHandfeel();
   // 只切 CST 并把 0x6071 写常数，不接 kp/kd；传 0 表示退出并回到 CSP。
   Result enterCstZeroTorque(std::uint16_t axis_mask, std::int32_t torque_permille = 0) override;
@@ -236,6 +237,8 @@ private:
   static constexpr std::int32_t kCstZeroMaxPermille = 50;
   double mit_kp_{480.0};
   double mit_kd_{24.0};
+  // 重力前馈倍率：0 = 纯 PD 手感试验，1 = 正常前馈。
+  double mit_ff_scale_{1.0};
   double mit_limit_{1000.0};
   // URDF 静重力，单位 N·m。换成 0x6071 时只除以该轴读到的 0x6076。
   MitHandfeel handfeel_;
@@ -261,7 +264,10 @@ private:
   void rememberRightArmCorrection(
     const std::array<double, 7> & mass_scale,
     const std::array<std::array<double, 3>, 7> & com_delta);
-  Result beginRightArmTorque(bool zero_gravity);
+  // 参数化入口：mask/kp/kd/ff_scale 由调用方给定，zero_gravity 时忽略 kp（只用前馈+阻尼）。
+  Result beginRightArmTorque(
+    std::uint16_t mask, double kp_permille, double kd_permille, double ff_scale,
+    bool zero_gravity);
   std::atomic<bool> gravity_calib_stop_{false};
   std::atomic<bool> gravity_calib_running_{false};
   std::thread gravity_calib_thread_;
