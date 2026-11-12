@@ -44,6 +44,15 @@ constexpr int kShutdownCycles = 50;
 // 与 SOEM 路径和启动脚本一致的 EtherCAT 专用核。
 constexpr int kBusCpu = 3;
 
+// 周期线程的阶段标记。退出超时里打出来，能直接区分"卡在总线收发"和"卡在策略层"。
+enum : int
+{
+  kPhaseSleep = 0,   // 在等下一个 1 ms 节拍
+  kPhaseReceive = 1, // 在 ecrt_master_receive / domain_process
+  kPhaseStrategy = 2,// 在策略层 on_cycle（持有 sample_mu_）
+  kPhaseSend = 3,    // 在 domain_queue / master_send
+};
+
 void say(const char * format, ...)
 {
   std::va_list args;
@@ -144,6 +153,13 @@ struct IghEthercatLink::Impl
   std::array<double, kAxes> rated_nm{};
   // 周期线程没在限期内退出时不再释放主站，避免释放后仍被使用。
   bool leaked{false};
+  // 周期线程当前停在哪一步（见 kPhase*）。退出超时时打出来，直接看清卡在收发、
+  // 策略层还是睡眠，不用再靠内核 journal 猜。
+  std::atomic<int> phase{0};
+  // 已经跑过的完整周期数，用来判断线程到底是"停了"还是"根本没起来"。
+  std::atomic<std::uint64_t> cycle_count{0};
+  // 模式切换请求计数，只用于日志，避免每次进 MIT 都以为真的发了 SDO。
+  std::atomic<int> mode_request_count{0};
 
   void clearRuntime()
   {
@@ -236,6 +252,7 @@ struct IghEthercatLink::Impl
       }
 
       ecrt_master_application_time(master, epochNs());
+      phase.store(kPhaseReceive, std::memory_order_relaxed);
       ecrt_master_receive(master);
       ecrt_domain_process(domain);
       ecrt_domain_state(domain, &ds);
@@ -277,7 +294,9 @@ struct IghEthercatLink::Impl
 
       std::array<SlaveCommand, kAxes> command{};
       if (on_cycle) {
+        phase.store(kPhaseStrategy, std::memory_order_relaxed);
         on_cycle(feedback, &command);
+        phase.store(kPhaseReceive, std::memory_order_relaxed);
       }
       if (stopping) {
         // 退使能：所有轴只发 CiA-402 Shutdown，不再接受任何新目标。
@@ -296,6 +315,7 @@ struct IghEthercatLink::Impl
       ecrt_master_sync_reference_clock(master);
       ecrt_master_sync_slave_clocks(master);
       ecrt_domain_queue(domain);
+      phase.store(kPhaseSend, std::memory_order_relaxed);
       ecrt_master_send(master);
 
       if (!announced && complete && all_op) {
@@ -357,6 +377,8 @@ struct IghEthercatLink::Impl
         }
       }
 
+      cycle_count.fetch_add(1, std::memory_order_relaxed);
+      phase.store(kPhaseSleep, std::memory_order_relaxed);
       sleepCycle(&next);
     }
     thread_done.store(true, std::memory_order_release);
@@ -371,6 +393,11 @@ IghEthercatLink::IghEthercatLink()
 IghEthercatLink::~IghEthercatLink()
 {
   shutdownToInit();
+  // 周期线程没退出时是 detach 状态，它还在读 Impl 里的 phase/cycle_count。
+  // 这里放掉所有权不析构，否则那根线程会踩已释放的内存（表现为退出时莫名崩溃）。
+  if (impl_ && impl_->leaked) {
+    (void)impl_.release();
+  }
 }
 
 Result IghEthercatLink::openAndReachOp(
@@ -573,7 +600,18 @@ Result IghEthercatLink::shutdownToInit()
       // 宁可把主站留到进程退出，也不制造悬空指针。
       s.thread.detach();
       s.leaked = true;
-      say("! IgH 周期线程 2 秒内没有退出，保留主站不释放，请检查总线后重启控制栈");
+      const char * where = "未知";
+      switch (s.phase.load(std::memory_order_relaxed)) {
+        case kPhaseSleep: where = "等 1 ms 节拍"; break;
+        case kPhaseReceive: where = "ecrt_master_receive 收帧"; break;
+        case kPhaseStrategy: where = "策略层 onCycle（持 sample_mu_）"; break;
+        case kPhaseSend: where = "ecrt_master_send 发帧"; break;
+        default: break;
+      }
+      say(
+        "! IgH 周期线程 2 秒内没有退出：已完成 %llu 拍，停在「%s」。"
+        "保留主站不释放；进程通常杀不掉，需要重启下位机后再启动",
+        static_cast<unsigned long long>(s.cycle_count.load(std::memory_order_relaxed)), where);
     }
   }
   if (s.master != nullptr && !s.leaked) {
@@ -600,23 +638,19 @@ void IghEthercatLink::requestDriveMode(std::uint8_t mode, std::uint16_t axis_mas
   if (s.master == nullptr || !s.activated || axis_mask == 0) {
     return;
   }
-  // 从调用方线程（服务回调）发 SDO，不占 1 ms 周期线程。IgH 把请求排给内核 OP 线程，
-  // 周期帧继续照发；这里阻塞的是服务线程，不是总线线程。
-  int applied = 0;
-  for (std::size_t i = 0; i < kAxes; ++i) {
-    if ((axis_mask & (1u << i)) == 0u) {
-      continue;
-    }
-    std::uint32_t abort_code = 0;
-    const int rc = ecrt_master_sdo_download(
-      s.master, static_cast<std::uint16_t>(i), 0x6060, 0x00, &mode, 1, &abort_code);
-    if (rc != 0) {
-      say("! 轴 %zu 切 0x6060=0x%02x 失败 rc=%d abort=0x%08x", i + 1, mode, rc, abort_code);
-      continue;
-    }
-    ++applied;
-  }
-  say("● 已请求 %d 台轴切到 0x6060=0x%02x，模式以 PDO 里的 0x6061 读回为准", applied, mode);
+  // 0x6060 本身就在 RxPDO 0x1600 里，策略层每个周期按 mit_mask_/cst_zero_mask_ 写它，
+  // 驱动器的模式切换只看过程数据（SOEM 那条路的 requestDriveMode 也只是记一条日志）。
+  //
+  // 这里原来还补一次 ecrt_master_sdo_download，属于重复通道，并且实测会永久卡死：
+  // 内核 journal 里是 ecrt_master_sdo_download → schedule，D 状态等一个永远不来的
+  // 邮箱应答，SIGKILL 都杀不掉，只能重启下位机。调用点还包括 1 ms 周期线程里的
+  // MIT 故障退出，一旦命中整个控制栈就一起停住，Ctrl-C 也退不出去。
+  // 所以这里彻底不再碰邮箱：切换由周期帧完成，以 PDO 里的 0x6061 读回为准。
+  auto & counts = s.mode_request_count;
+  const int seen = ++counts;
+  say(
+    "● 模式切换走周期 PDO：0x6060=0x%02x，mask=0x%04x（第 %d 次请求，不再发阻塞 SDO），"
+    "以 0x6061 读回为准", mode, axis_mask, seen);
 }
 
 void IghEthercatLink::copyRatedTorqueNm(std::array<double, kCoffeeAxisCount> * out) const

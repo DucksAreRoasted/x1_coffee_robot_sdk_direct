@@ -1803,6 +1803,22 @@ static void advanceToward(std::int32_t * current, std::int32_t goal, int step)
     static_cast<std::int64_t>(*current) + (delta > 0 ? applied : -applied));
 }
 
+// 取采样锁，最多等 20 ms。总线周期线程正常时这把锁每 1 ms 只被占几微秒；
+// 一直拿不到就说明它卡在收发或邮箱里，宁可让上层报错停机，也不无声挂死。
+static bool lockSampleFor(std::unique_lock<std::mutex> * lock)
+{
+  if (lock == nullptr) {
+    return false;
+  }
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    if (lock->try_lock()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return false;
+}
+
 SoemEthercatTransport::SoemEthercatTransport()
 : SoemEthercatTransport(std::make_unique<SoemLink>())
 {
@@ -2139,7 +2155,16 @@ Result SoemEthercatTransport::read(HardwareSnapshot * snapshot)
   std::array<SlaveFeedback, kCoffeeAxisCount> feedback{};
   std::array<bool, kCoffeeAxisCount> held{};
   {
-    std::lock_guard<std::mutex> lock(sample_mu_);
+    // 周期线程正常时这把锁每 1 ms 只被占用几微秒。用带超时的 try_lock：
+    // 一旦总线线程卡在收发或邮箱里（IgH 上是 D 状态），ros2_control 的读循环
+    // 会一直阻塞、界面看着像"控制栈卡住"。这里改成 20 ms 拿不到就报错，
+    // 让上层走正常的 stop → ERROR 流程，而不是无声挂死。
+    std::unique_lock<std::mutex> lock(sample_mu_, std::defer_lock);
+    if (!lockSampleFor(&lock)) {
+      return Result::fail(
+        CoreError::kReadFailed,
+        "EtherCAT 周期线程 20 ms 内没有释放采样锁，总线线程可能卡在收发或邮箱");
+    }
     feedback = latest_;
     held = held_;
   }
@@ -2197,7 +2222,13 @@ Result SoemEthercatTransport::write(const PositionCommandFrame & command)
   if (!drives_enabled_) {
     return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能下发位置目标");
   }
-  std::lock_guard<std::mutex> lock(sample_mu_);
+  std::unique_lock<std::mutex> lock(sample_mu_, std::defer_lock);
+  if (!lockSampleFor(&lock)) {
+    // 同 read()：宁可报错让上层停机，也不让写循环无声挂死。
+    return Result::fail(
+      CoreError::kWriteFailed,
+      "EtherCAT 周期线程 20 ms 内没有释放采样锁，总线线程可能卡在收发或邮箱");
+  }
   if (mit_active_) {
     return Result::ok();
   }
@@ -2761,8 +2792,8 @@ Result SoemEthercatTransport::updateMitHandfeel(int joint, double q_des, double 
 Result SoemEthercatTransport::enterCstZeroTorque(
   std::uint16_t axis_mask, std::int32_t torque_permille)
 {
-  // 校验在锁内做完就放锁：IgH 的 requestDriveMode 是阻塞邮箱调用，
-  // 持锁调用会把周期线程卡住，服务也会永远不返回。
+  // 校验在锁内做完就放锁：requestDriveMode 现在只记一条日志，但保持"不在锁内
+  // 调链路"的规矩，避免以后有人往里加慢操作又踩一遍互锁。
   {
     std::lock_guard<std::mutex> lock(sample_mu_);
     if (!active_ || !drives_enabled_ || !bus_operational_.load() || shutdown_outputs_ ||
@@ -2966,7 +2997,7 @@ Result SoemEthercatTransport::enterMitHandfeelEx(
       held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
     }
   }
-  // requestDriveMode 在 IgH 上是阻塞邮箱调用，放锁后再发，避免和周期线程互锁。
+  // 放锁后再发：requestDriveMode 不碰邮箱，但保持不在锁内调链路的写法。
   link_->requestDriveMode(kZeroErrCyclicTorqueMode,mit_mask_);
   return Result{CoreError::kOk, "已请求右臂MIT阻抗手感，等待实际模式；全工作空间弹簧回正，腰和左臂CSP"};
 }
@@ -3028,7 +3059,7 @@ Result SoemEthercatTransport::enterCurrentGravity()
   for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
     held_pulse_[i] = goal_pulse_[i] = latest_[i].actual_position;
   }
-  // 阻塞 SDO 放到锁外：周期线程也在等这把锁，持锁调用会把整个控制环卡死。
+  // 链路调用放到锁外：周期线程也在等这把锁，以后这里若加重活也不会卡住控制环。
   lock.unlock();
   link_->requestDriveMode(kZeroErrCyclicTorqueMode, mask);
   return Result{CoreError::kOk, "已请求电流重力补偿，等待0x6061确认；腰和未选手臂保持位置"};
@@ -3139,7 +3170,8 @@ void SoemEthercatTransport::updateCurrentGravity(
     for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
       if (feedback[i].valid) {held_pulse_[i] = goal_pulse_[i] = feedback[i].actual_position;}
     }
-    link_->requestDriveMode(kZeroErrCyclicPositionMode, mit_mask_);
+    // 这里在 1 ms 周期线程里，绝不能调任何会进邮箱的东西：mit_active_ 一清，
+    // 下一个周期帧的 0x6060 就回 CSP，模式切换不需要再单独请求。
     return;
   }
   if (modes_ready) {current_previous_ = next;}
@@ -3300,8 +3332,8 @@ Result SoemEthercatTransport::beginRightArmTorque(
   if (!std::isfinite(ff_scale) || ff_scale < 0.0 || ff_scale > 1.0) {
     return Result::fail(CoreError::kInvalidConfiguration, "ff_scale 必须在 0..1");
   }
-  // 校验和状态准备都在锁内完成；requestDriveMode 在 IgH 上是阻塞邮箱调用，
-  // 必须放锁后再发，否则会和等锁的周期线程互锁（服务无响应）。
+  // 校验和状态准备都在锁内完成；链路调用一律放锁后再发，
+  // 免得以后有人把慢操作加进去又和等锁的周期线程互锁。
   {
     std::lock_guard<std::mutex> lock(sample_mu_);
     if (!drives_enabled_) {
@@ -3382,7 +3414,7 @@ Result SoemEthercatTransport::exitMitHold()
       goal_pulse_[index] = latest_[index].actual_position;
     }
   }
-  // 同上：阻塞 SDO 放到锁外，周期线程才能继续跑。
+  // 同上：链路调用放到锁外，周期线程才能继续跑。
   link_->requestDriveMode(kZeroErrCyclicPositionMode, mit_mask_);
   return Result{CoreError::kOk, "已请求退出扭矩模式并锁存当前位置；需确认CSP反馈和停稳"};
 }
