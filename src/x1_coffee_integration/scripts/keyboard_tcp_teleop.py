@@ -803,11 +803,26 @@ class MITKeyboardState:
     BOUNDS = {"q_des": (-3.14, 3.14), "dq_des": (-2.0, 2.0), "kp": (0.0, 1000.0), "kd": (0.0, 300.0), "tau_ff": (-120.0, 120.0)}
     def __init__(self):
         self.active = False; self.arm = "left"; self.joint = 0; self.field = 0; self.step_scale = 1.0
-        self.values = {name: 0.0 for name in self.FIELDS}
+        # 逐关节一份快照：切换关节不能把上一个关节的 q_des/kp 带过去。
+        # 初值取键盘顶部的 MIT_KP/MIT_KD，进入前会把同一组值下发给硬件节点。
+        self.per_joint = [
+            {"q_des": 0.0, "dq_des": 0.0, "kp": MIT_KP[index], "kd": MIT_KD[index], "tau_ff": 0.0}
+            for index in range(7)]
+    @property
+    def values(self): return self.per_joint[self.joint]
     @property
     def selected(self): return self.FIELDS[self.field]
     def select_joint(self, joint):
         if 0 <= joint < 7: self.joint = joint
+    def seed(self, measured, joints) -> None:
+        """进入 MIT 时用实测角播种 q_des；否则第一次按 w/s 会把该关节拉向 0 弧度。"""
+        for index, name in enumerate(joints):
+            values = self.per_joint[index]
+            values["q_des"] = measured.get(name, values["q_des"])
+            values["dq_des"] = 0.0
+            values["kp"] = MIT_KP[index]
+            values["kd"] = MIT_KD[index]
+            values["tau_ff"] = 0.0
     def switch_arm(self): self.arm = "right" if self.arm == "left" else "left"
     def adjust_field(self, direction): self.field = (self.field + direction) % len(self.FIELDS)
     def adjust(self, direction):
@@ -980,6 +995,7 @@ def run_teleop() -> int:
             self.mit_hold_client = self.create_client(Trigger, "/x1/mit_hold")
             self.mit_params_client = self.create_client(
                 SetParameters, "/x1_coffee_system_hardware/set_parameters")
+            self.mit_get_params_client = None
             self.mit_exit_client = self.create_client(Trigger, "/x1/mit_exit")
             self.gravity_calib_client = self.create_client(Trigger, "/x1/right_arm_gravity_calib")
             self.gravity_reset_client = self.create_client(Trigger, "/x1/right_arm_gravity_reset")
@@ -1105,7 +1121,39 @@ def run_teleop() -> int:
             if result is None or not all(item.successful for item in result.results):
                 print("\nMIT 参数下发失败")
                 return False
+            # 回读节点上的实际值。只相信返回值不够，界面显示的必须和硬件真正用的一致。
+            applied = self.read_mit_params()
+            if applied is None:
+                print("\nMIT 参数已下发，但回读失败，请检查节点是否重启过")
+                return False
+            mask, kp, kd, ff = applied
+            print(
+                f"\nMIT 参数已下发并回读：掩码 0x{mask:04x} "
+                f"kp=[{' '.join(f'{item:.0f}' for item in kp)}] "
+                f"kd=[{' '.join(f'{item:.0f}' for item in kd)}] ff={ff:.2f}")
             return True
+
+        def read_mit_params(self):
+            """读回硬件节点当前的 MIT 参数，返回 (掩码, kp, kd, ff)。"""
+            from rcl_interfaces.srv import GetParameters
+
+            if self.mit_get_params_client is None:
+                self.mit_get_params_client = self.create_client(
+                    GetParameters, "/x1_coffee_system_hardware/get_parameters")
+            if not self.mit_get_params_client.wait_for_service(timeout_sec=3.0):
+                return None
+            request = GetParameters.Request()
+            request.names = ["mit_mask", "mit_kp", "mit_kd", "mit_ff_scale"]
+            future = self.mit_get_params_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            answer = future.result() if future.done() else None
+            if answer is None or len(answer.values) != 4:
+                return None
+            return (
+                answer.values[0].integer_value,
+                list(answer.values[1].double_array_value),
+                list(answer.values[2].double_array_value),
+                answer.values[3].double_value)
 
         def start_sample(self, execute):
             from ament_index_python.packages import get_package_share_directory
@@ -1425,7 +1473,12 @@ def run_teleop() -> int:
                 continue
             if node.current_session.locked:
                 if node.mit_editor.active and key in ("1", "2", "3", "4", "5", "6", "7", "[", "]", "+", "-", "w", "s", "\t"):
-                    if key.isdigit(): node.mit_editor.select_joint(int(key) - 1)
+                    if key.isdigit():
+                        node.mit_editor.select_joint(int(key) - 1)
+                        # 切关节时把该关节的 q_des 对到当前实测角，避免一键拉向旧目标。
+                        name = RIGHT_JOINTS[node.mit_editor.joint]
+                        node.mit_editor.values["q_des"] = node.measured.get(
+                            name, node.mit_editor.values["q_des"])
                     elif key == "\t": print("\n当前 MIT 实时入口仅支持右臂；左臂参数接口尚未开放。")
                     elif key == "[": node.mit_editor.adjust_field(-1)
                     elif key == "]": node.mit_editor.adjust_field(1)
@@ -1482,12 +1535,14 @@ def run_teleop() -> int:
                 if key in ("H", "M", "m") and not node.current_confirm(holding=True):
                     print("\n未确认全轴CSP和测量停稳，未发送MIT进入请求。")
                     continue
+                # 硬件节点在进入那一刻读 mit_kp/mit_kd/mit_ff_scale，所以必须先进参数再进模式。
+                if key in ("H", "M", "m") and not node.apply_mit_params():
+                    continue
                 if node.current_session.enter(lambda: node.current_query(service),
                                               lambda: node.current_confirm()):
                     if key in ("H", "M", "m"):
                         node.mit_editor.active = True; node.mit_editor.arm = "right"
-                        for index, name in enumerate(RIGHT_JOINTS):
-                            node.mit_editor.values["q_des"] = node.measured.get(name, 0.0) if index == node.mit_editor.joint else node.mit_editor.values["q_des"]
+                        node.mit_editor.seed(node.measured, RIGHT_JOINTS)
                     print("\n右臂MIT实际模式已确认：使用 w/s 调参、[/]切参数、1-7选关节、Tab切臂；按n退出。" if key in ("H", "M", "m") else "\n电流补偿实际模式已确认，腰保持 CSP。按 n 退出。")
                 else:
                     print(f"\n进入未确认：{node.current_query_detail}。正在请求退出并验证保持。")

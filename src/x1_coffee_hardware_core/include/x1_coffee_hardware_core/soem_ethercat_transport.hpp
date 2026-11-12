@@ -117,6 +117,8 @@ public:
     std::uint16_t mask, const std::array<double, 7> & kp, const std::array<double, 7> & kd,
     double ff_scale) override;
   Result enterMitHandfeel();
+  Result enterMitHandfeelEx(
+    const std::array<double, 7> & kp, const std::array<double, 7> & kd, double ff_scale) override;
   // 只切 CST 并把 0x6071 写常数，不接 kp/kd；传 0 表示退出并回到 CSP。
   Result enterCstZeroTorque(std::uint16_t axis_mask, std::int32_t torque_permille = 0) override;
   Result cstZeroStatus(std::uint16_t axis_mask) override;

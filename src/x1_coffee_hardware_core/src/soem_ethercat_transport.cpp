@@ -2928,6 +2928,13 @@ Result SoemEthercatTransport::cstZeroRampStatus()
 
 Result SoemEthercatTransport::enterMitHandfeel()
 {
+  // 没给增益时用头文件里的兜底表，等价于旧行为。
+  return enterMitHandfeelEx(MitHandfeel::kp, MitHandfeel::kd, 1.0);
+}
+
+Result SoemEthercatTransport::enterMitHandfeelEx(
+  const std::array<double, 7> & kp, const std::array<double, 7> & kd, double ff_scale)
+{
   {
     std::lock_guard<std::mutex> lock(sample_mu_);
     if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ ||
@@ -2943,8 +2950,11 @@ Result SoemEthercatTransport::enterMitHandfeel()
       q[i]=pulseToPosition(i,latest_[i].actual_position);
       if (i>=8) {bias[i-8]=latest_[i].actual_current;}
     }
-    if (!handfeel_.configure(q,bias)) {
-      return Result::fail(CoreError::kWriteFailed, "保持电流超过手感试验预算，拒绝进入");
+    // 增益来自节点参数；范围在 configure() 里校验，越界就拒绝进入，不静默截断。
+    if (!handfeel_.configure(q,bias,kp,kd,ff_scale)) {
+      return Result::fail(
+        CoreError::kWriteFailed,
+        "保持电流超过手感试验预算，或 kp/kd/ff_scale 超出范围（kp 0~1000，kd 0~300，ff 0~1）");
     }
     current_previous_[1]=bias;current_previous_q_=q;current_velocity_.fill(0.0);
     current_mode_wait_=0;current_modes_confirmed_=false;current_fault_=0;

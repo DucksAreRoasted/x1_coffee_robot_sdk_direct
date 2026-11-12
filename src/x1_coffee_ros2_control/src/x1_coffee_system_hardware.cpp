@@ -281,7 +281,29 @@ bool X1CoffeeSystemHardware::startMotionService()
         } else if (i == 2) {result = direct->currentGravityStatus();
         } else if (i == 3) {result = direct->exitMitHold();
         } else if (i == 4) {result = direct->currentGravityHoldStatus();
-        } else {result = direct->enterMitHandfeel();}
+        } else {
+          // 手感增益走节点参数：键盘顶部常量、ros2 param set 都能改，改完不用重编译。
+          const auto kp_vec = motion_node_->get_parameter("mit_kp").as_double_array();
+          const auto kd_vec = motion_node_->get_parameter("mit_kd").as_double_array();
+          if (kp_vec.size() != 7 || kd_vec.size() != 7) {
+            response->success = false;
+            response->message = "mit_kp / mit_kd 必须是 7 个值（r1..r7）";
+            return;
+          }
+          std::array<double, 7> kp{};
+          std::array<double, 7> kd{};
+          for (std::size_t j = 0; j < 7; ++j) {
+            kp[j] = kp_vec[j];
+            kd[j] = kd_vec[j];
+          }
+          const double ff = std::clamp(motion_node_->get_parameter("mit_ff_scale").as_double(), 0.0, 1.0);
+          RCLCPP_INFO(
+            motion_node_->get_logger(),
+            "MIT 手感：kp=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] kd=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] ff=%.2f",
+            kp[0], kp[1], kp[2], kp[3], kp[4], kp[5], kp[6],
+            kd[0], kd[1], kd[2], kd[3], kd[4], kd[5], kd[6], ff);
+          result = direct->enterMitHandfeelEx(kp, kd, ff);
+        }
         response->success = static_cast<bool>(result);
         response->message = result.detail;
       });

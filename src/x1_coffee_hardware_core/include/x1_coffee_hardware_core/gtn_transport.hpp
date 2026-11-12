@@ -40,6 +40,10 @@ public:
   virtual Result exitCurrentGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
   virtual Result currentGravityHoldStatus() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持电流补偿");}
   virtual Result enterMitHandfeel() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT 手感");}
+  // 参数化 MIT 手感：kp/kd 用额定千分比，ff_scale 给 0 就是纯 PD（不拿保持电流抵消重力）。
+  virtual Result enterMitHandfeelEx(
+    const std::array<double, 7> &, const std::array<double, 7> &, double)
+  {return enterMitHandfeel();}
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   // 参数化 MIT 保持：mask 指定轴（必须非空），kp/kd 用额定千分比单位，
   // ff_scale 是重力前馈倍率，0 表示纯 PD、不加重力前馈。
