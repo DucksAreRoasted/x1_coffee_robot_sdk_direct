@@ -1,22 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
-  <transport_descriptors>
-    <transport_descriptor>
-      <transport_id>udp</transport_id>
-      <type>UDPv4</type>
-      <!-- 只走机器人这张有线网。每台机器只用自己有的那个地址。 -->
-      <interfaceWhiteList>
-        <address>192.168.2.1</address>
-        <address>192.168.2.230</address>
-      </interfaceWhiteList>
-    </transport_descriptor>
-  </transport_descriptors>
+  <!-- 2026-11-12：不再用自定义 UDP 传输。
+       原因：useBuiltinTransports=false 会让同一台机器上的所有参与者共用同一个 UDP 端口，
+       服务请求是单播，可能被投递给错误的进程。表现就是「图里能看到节点和服务，
+       但 spawn_controllers / 键盘程序永远等不到服务」。
+       改用内置传输后，每个参与者按域号分到独立端口；同用户进程走 SHM，跨机走 UDP。
+       发现仍用下面两个地址做初始对端，避免跑到无关网卡上。 -->
   <participant profile_name="udp_participant" is_default_profile="true">
     <rtps>
-      <userTransports>
-        <transport_id>udp</transport_id>
-      </userTransports>
-      <useBuiltinTransports>false</useBuiltinTransports>
       <builtin>
         <initialPeersList>
           <locator>
@@ -33,7 +24,8 @@
       </builtin>
     </rtps>
   </participant>
-  <!-- 关掉共享内存。上电进程是 root 时，桌面用户的 RViz 打不开 root 的段，/robot_description 和 /tf_static 都收不到。 -->
+  <!-- 关掉数据共享（不是 SHM 传输）：root 写的段桌面用户打不开，/robot_description 和
+       /tf_static 会收不到。 -->
   <data_writer profile_name="no_data_sharing_writer" is_default_profile="true">
     <qos>
       <data_sharing>
