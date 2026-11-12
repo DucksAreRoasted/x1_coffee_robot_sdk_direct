@@ -50,6 +50,18 @@ RATED_TORQUE = [52.0, 52.0, 21.0, 21.0, 10.0, 5.4, 5.4]
 LIMIT_BUDGET = [250, 150, 200, 400, 120, 250, 120]
 MOTION_SPEEDS = [0.02, 0.05, 0.10]
 MOTION_SWING = 0.10
+JOINT_LIMITS = {
+    "Joint_r1": (-3.1415926, 3.1415926), "Joint_r2": (-3.1415926, 0.15),
+    "Joint_r3": (-3.1415926, 3.1415926), "Joint_r4": (-2.0943951, 1.5707963),
+    "Joint_r5": (-3.1415926, 3.1415926), "Joint_r6": (-1.7453292, 1.7453292),
+    "Joint_r7": (-6.2831853, 6.2831853),
+}
+
+
+def _joint_limits(name: str):
+    return JOINT_LIMITS.get(name, (-3.0, 3.0))
+
+
 FIRST_MOTION_RAD = 0.02
 CONFIRM_VELOCITY = 0.01
 
