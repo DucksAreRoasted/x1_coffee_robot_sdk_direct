@@ -210,7 +210,11 @@ bool X1CoffeeSystemHardware::startMotionService()
     "x1_coffee_system_hardware", rclcpp::NodeOptions().use_global_arguments(false));
   debugf("startMotionService node created");
   // 零力矩 CST 验证的轴掩码。默认 0：误调用不会切任何轴，必须显式指定。
-  // 实机第一次请先 ros2 param set /x1_coffee_system_hardware cst_zero_mask 16384 只切 r7。
+  // 实机第一次请先设掩码，例如只切 r7（bit14 = 16384）。注意 ros2 param set 在这台
+  // 机器上会报 Node not found（这个子节点不进 ros2 node list），要直接调参数服务：
+  //   ros2 service call /x1_coffee_system_hardware/set_parameters \
+  //     rcl_interfaces/srv/SetParameters \
+  //     "{parameters: [{name: cst_zero_mask, value: {type: 2, integer_value: 16384}}]}"
   motion_node_->declare_parameter<std::int64_t>("cst_zero_mask", 0);
   // 第 4 步的小力矩偏置，单位额定千分比。0 表示只验证模式切换。
   motion_node_->declare_parameter<std::int64_t>("cst_zero_torque_permille", 0);
