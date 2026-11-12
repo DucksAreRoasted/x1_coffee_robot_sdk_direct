@@ -388,9 +388,26 @@ def mode_breakaway(bench: Bench, args) -> int:
                               f"{result['first_motion_s']:>6.2f}/{result['confirm_s']:>5.2f}s  "
                               f"{result['total']:>6.0f} {result['headroom_at_breakaway']:>7.0f}  "
                               f"{result['reason']}")
+    pose_report(results)
     summarize_breakaway(results)
     RESULTS["breakaway"] = results
     return 0 if results else 2
+
+
+def pose_report(results: List[dict]) -> None:
+    """每次尝试的起点姿态和送回残差：判断离散度里有多少来自姿态漂移。"""
+    for joint in sorted({item["joint"] for item in results}):
+        items = [item for item in results if item["joint"] == joint]
+        poses = [item["start_pose"] for item in items if "start_pose" in item]
+        drifts = [item["return_drift"] for item in items if item.get("return_drift") is not None]
+        if not poses:
+            continue
+        span = max(poses) - min(poses)
+        text = (f"  r{joint} 起点姿态 {min(poses):+.3f}~{max(poses):+.3f} rad"
+                f"（跨度 {span * 1000:.1f} mrad）")
+        if drifts:
+            text += f"，送回残差最大 {max(drifts) * 1000:.1f} mrad"
+        print(text)
 
 
 def summarize_breakaway(results: List[dict]) -> None:
