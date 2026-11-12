@@ -304,24 +304,39 @@ class Identifier:
                 q0 = self.measured[name]
                 if self.args.mode == "torque":
                     # 力 = 起动电流 + 余量，且不超过该轴预算的 80%。
-                    torque = min(LIMIT_BUDGET[joint] * 0.8,
-                                 FRICTION_EST[joint] + self.args.torque_margin)
+                    if self.args.pulse > 0:
+                        # 脉冲要甩得比摩擦死区大得多，才看得到自由衰减，直接顶到预算。
+                        torque = LIMIT_BUDGET[joint] * 0.8
+                    else:
+                        torque = min(LIMIT_BUDGET[joint] * 0.8,
+                                     FRICTION_EST[joint] + self.args.torque_margin)
                     if self.args.torque > 0:
                         # 显式给值就按它来，只受该轴预算的 80% 限制。
                         torque = min(LIMIT_BUDGET[joint] * 0.8, self.args.torque)
-                    # 先把 q_des 固定在当前角，让该轴切到自定义律，再单独加力矩。
+                    # 先把 q_des 固定在当前角，让该轴切到自定义律。
                     self.publish_command(joint, q0, kp[joint], kd[joint], 0.0)
                     self.spin(0.4)
                     start = self.measured[name]
-                    print(f"\n=== J{joint + 1} {name}: {start:.4f} rad，力矩阶跃 {torque:.0f}‰ "
-                          f"= {torque / 1000 * RATED_TORQUE[joint]:.2f} N·m")
-                    self.publish_command(joint, start, kp[joint], kd[joint], torque)
-                    times, values = self.record(self.args.settle)
-                    self.publish_command(joint, start, kp[joint], kd[joint], 0.0)
+                    if self.args.pulse > 0:
+                        # 脉冲：先推出去，再撤力让它自由衰减。阶跃会停在摩擦带里，
+                        # 曲线是单调的，量不出阻尼比。
+                        print(f"\n=== J{joint + 1} {name}: {start:.4f} rad，力脉冲 {torque:.0f}‰ × "
+                              f"{self.args.pulse:.2f}s = {torque / 1000 * RATED_TORQUE[joint]:.2f} N·m")
+                        self.publish_command(joint, start, kp[joint], kd[joint], torque)
+                        self.spin(self.args.pulse)
+                        self.publish_command(joint, start, kp[joint], kd[joint], 0.0)
+                        times, values = self.record(self.args.settle)
+                    else:
+                        print(f"\n=== J{joint + 1} {name}: {start:.4f} rad，力矩阶跃 {torque:.0f}‰ "
+                              f"= {torque / 1000 * RATED_TORQUE[joint]:.2f} N·m")
+                        self.publish_command(joint, start, kp[joint], kd[joint], torque)
+                        times, values = self.record(self.args.settle)
+                        self.publish_command(joint, start, kp[joint], kd[joint], 0.0)
                     self.spin(0.8)
                     q0 = start
-                    applied_torque = torque
-                    kind = f"torque {torque:.0f}"
+                    applied_torque = torque if self.args.pulse <= 0 else None
+                    kind = f"pulse {torque:.0f}x{self.args.pulse:.2f}" if self.args.pulse > 0 \
+                        else f"torque {torque:.0f}"
                 else:
                     direction = 1.0
                     if q0 + self.args.step > high - 0.02:
@@ -386,6 +401,15 @@ class Identifier:
         tail = values[int(len(values) * 0.75):]
         q_end = sum(tail) / len(tail)
         y = [value - q_end for value in values]
+        # 一次符号反转都没有说明曲线是单调爬升：关节停在摩擦带里，
+        # 二阶欠阻尼模型根本不适用，硬拟合出来的 ζ 是噪声，不能输出。
+        crossings = sum(1 for a, b in zip(y, y[1:]) if a * b < 0)
+        if crossings < 2:
+            print(f"   ✗ 响应单调（回摆 {crossings} 次），ζ 无法辨识；"
+                  "加大激励或减小 kp/kd 后重测")
+            return {
+                "joint": joint + 1, "name": name, "valid": False, "travel": travel,
+                "kind": kind, "report": "单调响应", "crossings": crossings, "csv": str(csv)}
         fit = fit_second_order(times, y)
         if not fit:
             print("   拟合失败")
@@ -399,7 +423,7 @@ class Identifier:
         d_cmd = self.args.kd[joint] / 1000.0 * RATED_TORQUE[joint]
         d_eff = 2.0 * fit["zeta"] * fit["wn"] * j_eff
         d_fric = max(0.0, d_eff - d_cmd)
-        d_target = 0.7 * 2.0 * math.sqrt(k_eff * j_eff)
+        d_target = self.args.target_zeta * 2.0 * math.sqrt(k_eff * j_eff)
         kd_need = (d_target - d_fric) / RATED_TORQUE[joint] * 1000.0
         # 静摩擦：平衡时 力矩阶跃 = kp·(q_end − q0) + 摩擦，全部用‰表示。
         friction = None
@@ -409,17 +433,19 @@ class Identifier:
             "joint": joint + 1, "name": name, "valid": True, "kind": kind,
             "travel": travel, "zeta": fit["zeta"], "wn": fit["wn"],
             "rms": fit["rms"], "j_eff": j_eff, "zeta_urdf": zeta_urdf,
+            "crossings": crossings,
             "kd_for_zeta_0_7": kd_need, "d_eff": d_eff, "d_fric": d_fric,
             "q_start": q0, "q_end": q_end,
             "friction_permille": friction, "csv": str(csv),
         }
 
     def report(self, results: List[dict], out_dir: Path) -> None:
-        print("\n关节   ζ实测  ω_n(rad/s)  J_eff    ζ理论   kd@ζ0.7*  行程     摩擦‰")
+        print(f"\n关节   ζ实测  ω_n(rad/s)  J_eff    ζ理论   kd@ζ{self.args.target_zeta:.1f}*  行程     摩擦‰")
         print("      (*已扣除摩擦等效阻尼；0 表示当前 kd 已经过阻尼)")
         for item in results:
             if not item.get("valid"):
-                print(f"  r{item['joint']:<2} —— 无效：行程 {item['travel']:.4f} rad，静摩擦没克服")
+                print(f"  r{item['joint']:<2} —— 无效：{item.get('report', '数据不足')}"
+                      f"（行程 {item['travel']:.4f} rad）")
                 continue
             friction = item.get("friction_permille")
             friction_text = f"{friction:>6.1f}" if friction is not None else "     -"
@@ -436,7 +462,7 @@ class Identifier:
             print("! 标 kd 的几轴需要超过 300‰ 才能到 ζ=0.7，超出上限："
                   "要么减小 kp，要么接受更低的 ζ")
         print(f"\n结果写入 {path}")
-        print("说明：ζ 是在当前 kp/kd 下测到的。kd@ζ0.7 用实测 J_eff 反推，"
+        print(f"说明：ζ 是在当前 kp/kd 下测到的。kd@ζ{self.args.target_zeta:.1f} 用实测 J_eff 反推，"
               "可以直接写回键盘的 MIT_KD。")
 
 
@@ -461,7 +487,7 @@ def selftest() -> int:
     return 0 if worst < 0.06 else 1
 
 
-def report_saved(path: Path) -> int:
+def report_saved(path: Path, target_zeta: float = 0.7) -> int:
     """从已有的 damping.json 重新算表，不碰硬件。"""
     data = json.loads(path.read_text(encoding="utf-8"))
     kp = data.get("kp", 0.0)
@@ -469,7 +495,7 @@ def report_saved(path: Path) -> int:
     kp = kp if isinstance(kp, list) else [float(kp)] * 7
     kd = kd if isinstance(kd, list) else [float(kd)] * 7
     print(f"{path}：kp={kp} kd={kd}")
-    print("\n关节   ζ实测  ω_n(rad/s)  J_eff    kd@ζ0.7*  行程     摩擦‰")
+    print(f"\n关节   ζ实测  ω_n(rad/s)  J_eff    kd@ζ{target_zeta:.1f}*  行程     摩擦‰")
     for item in data["joints"]:
         if not item.get("valid", True):
             print(f"  r{item['joint']:<2} —— 无效：行程 {item['travel']:.4f} rad")
@@ -480,7 +506,7 @@ def report_saved(path: Path) -> int:
         d_cmd = kd[joint] / 1000.0 * rated
         d_eff = 2.0 * item["zeta"] * item["wn"] * item["j_eff"]
         d_fric = max(0.0, d_eff - d_cmd)
-        d_target = 0.7 * 2.0 * math.sqrt(k_eff * item["j_eff"])
+        d_target = target_zeta * 2.0 * math.sqrt(k_eff * item["j_eff"])
         kd_need = max(0.0, (d_target - d_fric) / rated * 1000.0)
         friction = item.get("friction_permille")
         friction_text = f"{friction:>6.1f}" if friction is not None else "     -"
@@ -510,10 +536,14 @@ def main() -> int:
     parser.add_argument("--settle", type=float, default=2.0, help="每次阶跃记录时长（秒）")
     parser.add_argument("--mode", choices=("torque", "position"), default="torque",
                         help="torque=力矩阶跃（默认，能克服静摩擦）；position=q_des 位置阶跃")
+    parser.add_argument("--pulse", type=float, default=0.35,
+                        help="力矩脉冲宽度（秒）；0 表示用持续阶跃（会在摩擦带里停住，测不出 ζ）")
     parser.add_argument("--torque", type=float, default=0.0,
                         help="力矩阶跃大小（‰），0 表示按起动电流自动取")
     parser.add_argument("--torque-margin", type=float, default=80.0,
                         help="自动取值时在起动电流上加多少‰；太小则行程不足、拟合噪声大")
+    parser.add_argument("--target-zeta", type=float, default=0.7,
+                        help="kd 建议按这个阻尼比推算（默认 0.7，偏好更稳就用 0.9）")
     parser.add_argument("--ff", type=float, default=1.0,
                         help="mit_ff_scale：1=用进入时的保持电流抵重力（默认，响应更线性），0=纯 PD")
     parser.add_argument("--kp", type=gain_list, default=[600.0] * 7,
@@ -536,7 +566,7 @@ def main() -> int:
         print("--joints 只能是 1~7")
         return 2
     if args.report_from:
-        return report_saved(Path(args.report_from))
+        return report_saved(Path(args.report_from), args.target_zeta)
     if args.selftest:
         return selftest()
     if args.dry_run:
