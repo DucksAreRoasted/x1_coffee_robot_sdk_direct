@@ -659,7 +659,14 @@ def mode_sweep(bench: Bench, args) -> int:
         qs = np.array([row[0] for row in table])
         gravity = np.array([row[1] for row in table])
         friction = np.array([row[2] for row in table])
-        basis = np.column_stack([np.sin(qs), np.cos(qs), np.ones_like(qs)])
+        # 窗口窄时 sin/cos/1 几乎线性相关，系数会爆掉；按窗口宽度选基函数。
+        width = float(qs.max() - qs.min())
+        if width < 1.0:
+            basis = np.column_stack([qs - qs.mean(), np.ones_like(qs)])
+            label = "线性（窗口 %.2f rad 太窄，不用三角函数）" % width
+        else:
+            basis = np.column_stack([np.sin(qs), np.cos(qs), np.ones_like(qs)])
+            label = "sin/cos + 常数"
         coefficients, *_ = np.linalg.lstsq(basis, gravity, rcond=None)
         predicted = basis @ coefficients
         rms = float(np.sqrt(np.mean((predicted - gravity) ** 2)))
@@ -667,10 +674,19 @@ def mode_sweep(bench: Bench, args) -> int:
         print("    位置      重力(‰)   摩擦(‰)   样本")
         for q, g, f, n in table:
             print(f"    {q:+.4f} {g:>9.1f} {f:>9.1f} {n:>6}")
-        print(f"    拟合 u_g(q) = {coefficients[0]:+.1f}·sin q {coefficients[1]:+.1f}·cos q "
-              f"{coefficients[2]:+.1f}，残差 RMS {rms:.1f}‰")
-        if rms > 0.15 * max(abs(gravity).max(), 1.0):
-            print("    ⚠ 拟合残差超过重力幅值的 15%，这个姿态区间不能用一个正弦项描述")
+        span = float(gravity.max() - gravity.min())
+        if width < 1.0:
+            print(f"    拟合 u_g(q) = {coefficients[0]:+.0f}·(q−{qs.mean():+.3f}) "
+                  f"{coefficients[1]:+.1f}，基函数{label}，RMS {rms:.1f}‰")
+        else:
+            print(f"    拟合 u_g(q) = {coefficients[0]:+.1f}·sin q {coefficients[1]:+.1f}·cos q "
+                  f"{coefficients[2]:+.1f}，基函数{label}，RMS {rms:.1f}‰")
+        print(f"    窗口内重力变化 {span:.1f}‰，摩擦 {float(friction.min()):.1f}"
+              f"~{float(friction.max()):.1f}‰")
+        if span < 0.1 * abs(float(gravity.mean())):
+            print("    → 重力在这个窗口内近似常数，前馈可以用一个常数，不需要模型")
+        elif rms > 0.15 * max(abs(gravity).max(), 1.0):
+            print("    ⚠ 拟合残差超过重力幅值的 15%，这个区间需要更高阶的模型")
         RESULTS.setdefault("sweep", []).append({
             "joint": joint + 1, "table": table, "rms": rms,
             "coefficients": coefficients.tolist()})
