@@ -637,6 +637,12 @@ def mode_poses(bench: Bench, args) -> int:
                 continue
             bench.spin(args.dwell)
             start_pose = bench.measured[name]
+            # PVT 只回了「接受」，不代表真的到位；偏差超过 10 mrad 说明姿态没摆到，
+            # 这时测出来的 u_g 会被记成另一个角度，必须拦住。
+            if abs(start_pose - angle) > 0.01:
+                print(f"  r{joint + 1} 目标 {angle:+.3f} rad，实际停在 {start_pose:+.3f} rad，"
+                      f"偏差 {abs(start_pose - angle) * 1000:.0f} mrad，跳过该姿态")
+                continue
             per_speed = {}
             for speed in speeds:
                 for direction in (1.0, -1.0):
