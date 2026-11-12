@@ -84,6 +84,9 @@ class Bench:
             SetParameters, "/x1_coffee_system_hardware/set_parameters")
         self.enter_client = self.node.create_client(Trigger, "/x1/current_gravity_handfeel")
         self.exit_client = self.node.create_client(Trigger, "/x1/current_gravity_exit")
+        # 进入/退出都要等实际模式确认，不能一进就加力、一退就换下一次。
+        self.status_client = self.node.create_client(Trigger, "/x1/current_gravity_status")
+        self.hold_client = self.node.create_client(Trigger, "/x1/current_gravity_hold_status")
 
     def _on_joint(self, message) -> None:
         for name, position in zip(message.name, message.position):
@@ -142,6 +145,28 @@ class Bench:
         result = future.result() if future.done() else None
         return result is not None and all(item.successful for item in result.results)
 
+    def wait_ok(self, client, label: str, timeout: float = 2.5) -> tuple:
+        """轮询服务直到成功或超时，用来确认模式真的切好了。"""
+        end = time.monotonic() + timeout
+        detail = ""
+        while time.monotonic() < end:
+            ok, detail = self.trigger(client, label)
+            if ok:
+                return True, detail
+            self.spin(0.2)
+        return False, detail
+
+    def return_to(self, joint: int, target: float, kp: float, timeout: float = 3.0) -> float:
+        """用有界弹簧把关节送回起点，避免每轮实验后手臂逐步漂移。"""
+        name = RIGHT_JOINTS[joint]
+        self.publish(joint, target, kp, 80.0, 0.0)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.02)
+            if abs(self.measured[name] - target) < 0.005:
+                break
+        return abs(self.measured[name] - target)
+
     def hold_current(self, duration: float = 1.0) -> Dict[str, float]:
         samples: Dict[str, List[float]] = {name: [] for name in RIGHT_JOINTS}
         end = time.monotonic() + duration
@@ -168,7 +193,8 @@ class Bench:
         ceiling = budget * limit_ratio
         q_start = self.measured[name]
         ramp = 0.0
-        step = max(0.5, abs(rate) * 0.05)
+        # 0.05‰ 对应 1‰/s 的下限；之前写 0.5 会把 rate=8 悄悄变成 10‰/s。
+        step = max(0.05, abs(rate) * 0.05)
         started_at = time.monotonic()
         first = None            # (time, ramp, displacement)
         confirmed = None        # (time, ramp)
@@ -291,15 +317,27 @@ def mode_breakaway(bench: Bench, args) -> int:
     if not check_enabled(bench):
         return 2
     rates = [float(value) for value in str(args.rates).split(",") if value.strip()]
+    for joint in args.joints:
+        for rate in rates:
+            needed = LIMIT_BUDGET[joint] * args.limit_ratio / max(rate, 1e-6) + 3.0
+            if needed > args.max_seconds:
+                print(f"⚠ r{joint + 1} @ {rate}‰/s 要走到预算的 {args.limit_ratio:.0%} 需要 "
+                      f"{needed:.0f}s，超过当前 --max-seconds {args.max_seconds:.0f}s；"
+                      f"到点会报 timeout，不会给出阈值。")
     print(f"\n起动辨识：速率 {rates} ‰/s，每方向重复 {args.repeat} 次，"
           f"单次最长 {args.max_seconds:.0f}s，记录保持端电流")
     print("[测量量] 关节 速率 方向 保持电流 首动斜坡 确认斜坡 首动/确认时刻 总命令 起动余量 状态")
     results = []
     for joint in args.joints:
         hold = bench.hold_current(0.8).get(RIGHT_JOINTS[joint], float("nan"))
-        for rate in rates:
-            for direction in (1.0, -1.0):
-                for attempt in range(args.repeat):
+        first_pose = bench.measured[RIGHT_JOINTS[joint]]
+        for attempt in range(args.repeat):
+            for rate in rates:
+                for direction in (1.0, -1.0):
+                    if not check_enabled(bench):
+                        print("  轴已关断，停止本次辨识；请重新走一遍使能序列")
+                        RESULTS["breakaway"] = results
+                        return 2
                     if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff):
                         print("参数下发失败")
                         return 2
@@ -307,15 +345,29 @@ def mode_breakaway(bench: Bench, args) -> int:
                     if not ok:
                         print(f"  r{joint + 1} 进入 MIT 失败：{detail}")
                         break
+                    confirmed, detail = bench.wait_ok(bench.status_client, "CST 模式确认")
+                    if not confirmed:
+                        print(f"  r{joint + 1} 模式未确认（{detail}），本轮跳过，不加力")
+                        bench.trigger(bench.exit_client, "/x1/current_gravity_exit")
+                        bench.wait_ok(bench.hold_client, "CSP 确认")
+                        continue
+                    bench.spin(args.dwell)
+                    start_pose = bench.measured[RIGHT_JOINTS[joint]]
+                    run_hold = bench.hold_current(0.4).get(RIGHT_JOINTS[joint], float("nan"))
                     try:
                         result = bench.breakaway(joint, rate * direction, args.kp, args.kd,
                                                  args.limit_ratio, args.settle, args.max_seconds)
+                        drift = bench.return_to(joint, start_pose, args.return_kp)
+                        result["return_drift"] = drift
                     finally:
                         bench.trigger(bench.exit_client, "/x1/current_gravity_exit")
+                        bench.wait_ok(bench.hold_client, "CSP 确认")
                     result.update({"joint": joint + 1, "attempt": attempt + 1,
-                                   "hold_current": hold})
+                                   "hold_current": run_hold, "start_pose": start_pose,
+                                   "pose_span": start_pose - first_pose})
                     if result["ramp_at_confirm"] is not None:
-                        result["total"] = hold + result["ramp_at_confirm"]
+                        # 用本次尝试前实测的保持电流，而不是整个关节的第一次读数。
+                        result["total"] = run_hold + result["ramp_at_confirm"]
                         result["headroom_at_breakaway"] = result["budget"] - result["total"]
                     else:
                         result["total"] = None
@@ -353,7 +405,12 @@ def summarize_breakaway(results: List[dict]) -> None:
             down = statistics.median(item["total"] for item in minus)
             midpoint = (up + down) / 2.0
             halfwidth = (up - down) / 2.0
+            values = [item["total"] for item in plus + minus]
+            median = statistics.median(values)
+            spread = statistics.pstdev(values) / abs(median) if median else float("inf")
+            verdict = "可用" if spread < 0.15 else ("勉强" if spread < 0.3 else "不可用")
             print(f"  r{joint:<2} {rate:>4.0f} {midpoint:>9.1f} {halfwidth:>8.1f}  "
+                  f"离散度 {spread * 100:>4.0f}% → {verdict}；"
                   f"中点≠重力电流，半宽≠双向统一摩擦")
             print(f"        重力电流只落在这个区间内：{down:+.0f} ‰ ≤ u_g ≤ {up:+.0f} ‰")
     print("\n[不可确认] 本轮实验不能确定：重力电流 u_g（含静摩擦分担）、"
@@ -458,6 +515,10 @@ def main() -> int:
     parser.add_argument("--kd", type=float, default=80.0)
     parser.add_argument("--ff", type=float, default=1.0)
     parser.add_argument("--settle", type=float, default=0.5)
+    parser.add_argument("--dwell", type=float, default=0.8,
+                        help="进入 MIT 并确认模式后，再等多久才开始加力")
+    parser.add_argument("--return-kp", type=float, default=400.0,
+                        help="每轮结束后用于把关节送回起点的有界弹簧（‰）")
     parser.add_argument("--out", default=f"log/mit_friction_{time.strftime('%Y%m%d_%H%M%S')}")
     args = parser.parse_args()
 
