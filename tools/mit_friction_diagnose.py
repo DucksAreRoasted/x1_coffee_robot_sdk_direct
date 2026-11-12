@@ -266,7 +266,19 @@ class Bench:
             "displacement": displacement,
         }
 
-    def move(self, target: List[float], duration: float) -> bool:
+    def wait_arrival(self, target: Sequence[float], timeout: float) -> bool:
+        """等 15 轴都走到目标附近。PVT 只回复接受，不等它走完会连发指令互相打架。"""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.02)
+            deviation = max(abs(self.measured[name] - value)
+                            for name, value in zip(JOINTS_ALL, target)
+                            if name in self.measured)
+            if deviation < 0.005:
+                return True
+        return False
+
+    def move(self, target: List[float], duration: float, wait: bool = True) -> bool:
         from std_msgs.msg import Float64MultiArray
         self.pvt_seq += 1
         self.pvt_result = None
@@ -301,7 +313,7 @@ class Bench:
                 except (ValueError, IndexError):
                     same = False
                 if same and len(parts) > 1 and parts[1] == "ok":
-                    return True
+                    return self.wait_arrival(target, duration + 3.0) if wait else True
                 if same:
                     print(f"位置目标失败: {self.pvt_result}")
                     return False
