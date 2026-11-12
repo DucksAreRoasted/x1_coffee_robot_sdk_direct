@@ -30,6 +30,11 @@ ALL_JOINTS = ["Joint_Body", *[f"Joint_l{index}" for index in range(1, 8)], *RIGH
 RATED_TORQUE = [52.0, 52.0, 21.0, 21.0, 10.0, 5.4, 5.4]
 # URDF 在标定姿态下的折算惯量，只用来给理论阻尼比做对照。
 URDF_INERTIA = [0.330, 0.198, 0.300, 0.215, 0.087, 0.132, 0.0013]
+# mit_handfeel.hpp 里每轴的输出电流预算（‰），力矩阶跃不能超过它的 80%。
+LIMIT_BUDGET = [250, 150, 200, 400, 120, 250, 120]
+# CST 斜坡辨识得到的起动电流（‰）。r6 有 74.4‰，位置阶跃根本推不动它，
+# 所以默认改成力矩阶跃：力的大小和位置误差无关。
+FRICTION_EST = [41.4, 42.9, 41.7, 47.1, 24.9, 74.4, 39.7]
 JOINT_LIMITS = {
     "Joint_r1": (-3.1415926, 3.1415926),
     "Joint_r2": (-3.1415926, 0.15),
@@ -281,13 +286,13 @@ class Identifier:
             return 2
         kp = [self.args.kp] * 7
         kd = [self.args.kd] * 7
-        if not self.push_params(kp, kd, 0.0):
+        if not self.push_params(kp, kd, self.args.ff):
             return 2
         ok, detail = self.trigger(self.handfeel_client, "/x1/current_gravity_handfeel")
         if not ok:
             print(f"进入 MIT 失败：{detail}")
             return 2
-        print(f"已进入 MIT 手感：kp={self.args.kp} kd={self.args.kd} ff=0")
+        print(f"已进入 MIT 手感：kp={self.args.kp} kd={self.args.kd} ff={self.args.ff}")
         results: List[dict] = []
         out_dir = Path(self.args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -297,27 +302,51 @@ class Identifier:
                 name = RIGHT_JOINTS[joint]
                 low, high = JOINT_LIMITS[name]
                 q0 = self.measured[name]
-                direction = 1.0
-                if q0 + self.args.step > high - 0.02:
-                    direction = -1.0
-                if q0 + direction * self.args.step < low + 0.02:
-                    print(f"\n{name} 离限位太近（{q0:.3f}），跳过")
-                    continue
-                target = q0 + direction * self.args.step
-                print(f"\n=== J{joint + 1} {name}: {q0:.4f} → {target:.4f} rad")
-                self.publish_command(joint, target, kp[joint], kd[joint])
-                times, values = self.record(self.args.settle)
-                self.publish_command(joint, q0, kp[joint], kd[joint])
-                self.spin(0.8)
+                if self.args.mode == "torque":
+                    # 力 = 起动电流 + 余量，且不超过该轴预算的 80%。
+                    torque = min(LIMIT_BUDGET[joint] * 0.8,
+                                 FRICTION_EST[joint] + self.args.torque_margin)
+                    if self.args.torque > 0:
+                        # 显式给值就按它来，只受该轴预算的 80% 限制。
+                        torque = min(LIMIT_BUDGET[joint] * 0.8, self.args.torque)
+                    # 先把 q_des 固定在当前角，让该轴切到自定义律，再单独加力矩。
+                    self.publish_command(joint, q0, kp[joint], kd[joint], 0.0)
+                    self.spin(0.4)
+                    start = self.measured[name]
+                    print(f"\n=== J{joint + 1} {name}: {start:.4f} rad，力矩阶跃 {torque:.0f}‰ "
+                          f"= {torque / 1000 * RATED_TORQUE[joint]:.2f} N·m")
+                    self.publish_command(joint, start, kp[joint], kd[joint], torque)
+                    times, values = self.record(self.args.settle)
+                    self.publish_command(joint, start, kp[joint], kd[joint], 0.0)
+                    self.spin(0.8)
+                    q0 = start
+                    applied_torque = torque
+                    kind = f"torque {torque:.0f}"
+                else:
+                    direction = 1.0
+                    if q0 + self.args.step > high - 0.02:
+                        direction = -1.0
+                    if q0 + direction * self.args.step < low + 0.02:
+                        print(f"\n{name} 离限位太近（{q0:.3f}），跳过")
+                        continue
+                    target = q0 + direction * self.args.step
+                    print(f"\n=== J{joint + 1} {name}: {q0:.4f} → {target:.4f} rad")
+                    self.publish_command(joint, target, kp[joint], kd[joint], 0.0)
+                    times, values = self.record(self.args.settle)
+                    self.publish_command(joint, q0, kp[joint], kd[joint], 0.0)
+                    self.spin(0.8)
+                    applied_torque = None
+                    kind = f"step {self.args.step}"
                 deviation = max(abs(v - q0) for v in values if not math.isnan(v)) if values else 0.0
                 if deviation > MAX_DEVIATION_RAD:
                     print(f"跟随偏差 {deviation:.3f} rad 超过上限，停止测试")
                     break
-                result = self.analyze(joint, times, values, target, out_dir)
+                result = self.analyze(joint, times, values, q0, out_dir, kind, applied_torque)
                 if result:
                     results.append(result)
-                    print(f"    ζ={result['zeta']:.2f}  ω_n={result['wn']:.2f} rad/s  "
-                          f"J_eff={result['j_eff']:.3f} kg·m²")
+                    if result["valid"]:
+                        print(f"    ζ={result['zeta']:.2f}  ω_n={result['wn']:.2f} rad/s  "
+                              f"J_eff={result['j_eff']:.3f} kg·m²  行程 {result['travel']:.4f} rad")
         finally:
             ok, detail = self.trigger(self.exit_client, "/x1/current_gravity_exit")
             print(f"\n退出 MIT：{'成功' if ok else '失败 ' + detail}")
@@ -325,14 +354,16 @@ class Identifier:
             self.report(results, out_dir)
         return 0
 
-    def publish_command(self, joint: int, q_des: float, kp: float, kd: float) -> None:
+    def publish_command(self, joint: int, q_des: float, kp: float, kd: float,
+                        tau_ff: float = 0.0) -> None:
         from std_msgs.msg import Float64MultiArray
         message = Float64MultiArray()
-        message.data = [float(joint), float(q_des), 0.0, float(kp), float(kd), 0.0]
+        message.data = [float(joint), float(q_des), 0.0, float(kp), float(kd), float(tau_ff)]
         self.mit_command_pub.publish(message)
 
     def analyze(self, joint: int, times: List[float], values: List[float],
-                target: float, out_dir: Path) -> Optional[dict]:
+                q0: float, out_dir: Path, kind: str,
+                applied_torque: Optional[float] = None) -> Optional[dict]:
         if len(times) < 20:
             print("   采样太少，跳过")
             return None
@@ -342,6 +373,15 @@ class Identifier:
             handle.write("t,q\n")
             for stamp, value in zip(times, values):
                 handle.write(f"{stamp - times[0]:.6f},{value:.6f}\n")
+        # 行程决定这次数据有没有意义：静摩擦没被克服时曲线只是一条平线，
+        # 拟合出来的 ζ 是噪声，不能拿去做调参依据。
+        travel = max(abs(value - q0) for value in values)
+        limit = max(0.005, 0.2 * self.args.step) if self.args.mode == "position" else 0.005
+        if travel < limit:
+            print(f"   ✗ 关节只动了 {travel:.4f} rad，静摩擦没克服，本次无效")
+            return {
+                "joint": joint + 1, "name": name, "valid": False, "travel": travel,
+                "kind": kind, "report": "没动起来", "csv": str(csv)}
         # 终值取最后 25% 的均值，然后整体减去它，只拟合瞬态部分。
         tail = values[int(len(values) * 0.75):]
         q_end = sum(tail) / len(tail)
@@ -354,25 +394,47 @@ class Identifier:
         j_eff = k_eff / (fit["wn"] ** 2) if fit["wn"] > 0 else float("nan")
         zeta_urdf = ((self.args.kd / 1000.0 * RATED_TORQUE[joint])
                      / (2 * math.sqrt(k_eff * URDF_INERTIA[joint])))
-        # ζ 目标值 0.7 需要的 kd。
-        kd_need = (0.7 * 2 * math.sqrt(k_eff * j_eff)) / RATED_TORQUE[joint] * 1000.0
+        # 实测总阻尼 = 2ζω_n·J；减去指令 kd 贡献，剩下的就是摩擦等带来的等效阻尼。
+        # 只按「ζ=0.7 需要多少粘性阻尼」算会把 kd 高估好几倍，因为摩擦本来就贡献了大量阻尼。
+        d_cmd = self.args.kd / 1000.0 * RATED_TORQUE[joint]
+        d_eff = 2.0 * fit["zeta"] * fit["wn"] * j_eff
+        d_fric = max(0.0, d_eff - d_cmd)
+        d_target = 0.7 * 2.0 * math.sqrt(k_eff * j_eff)
+        kd_need = (d_target - d_fric) / RATED_TORQUE[joint] * 1000.0
+        # 静摩擦：平衡时 力矩阶跃 = kp·(q_end − q0) + 摩擦，全部用‰表示。
+        friction = None
+        if applied_torque is not None:
+            friction = applied_torque - self.args.kp * (q_end - q0)
         return {
-            "joint": joint + 1, "name": name, "zeta": fit["zeta"], "wn": fit["wn"],
+            "joint": joint + 1, "name": name, "valid": True, "kind": kind,
+            "travel": travel, "zeta": fit["zeta"], "wn": fit["wn"],
             "rms": fit["rms"], "j_eff": j_eff, "zeta_urdf": zeta_urdf,
-            "kd_for_zeta_0_7": kd_need, "q_start": values[0], "q_end": q_end,
-            "sag": q_end - target, "csv": str(csv),
+            "kd_for_zeta_0_7": kd_need, "d_eff": d_eff, "d_fric": d_fric,
+            "q_start": q0, "q_end": q_end,
+            "friction_permille": friction, "csv": str(csv),
         }
 
     def report(self, results: List[dict], out_dir: Path) -> None:
-        print("\n关节   ζ实测  ω_n(rad/s)  J_eff    ζ理论(URDF)  kd@ζ0.7  静态残差")
+        print("\n关节   ζ实测  ω_n(rad/s)  J_eff    ζ理论   kd@ζ0.7*  行程     摩擦‰")
+        print("      (*已扣除摩擦等效阻尼；0 表示当前 kd 已经过阻尼)")
         for item in results:
+            if not item.get("valid"):
+                print(f"  r{item['joint']:<2} —— 无效：行程 {item['travel']:.4f} rad，静摩擦没克服")
+                continue
+            friction = item.get("friction_permille")
+            friction_text = f"{friction:>6.1f}" if friction is not None else "     -"
+            kd_need = max(0.0, item["kd_for_zeta_0_7"])
+            kd_text = f"{kd_need:>8.0f}" if kd_need <= 300 else f"{kd_need:>7.0f}!"
             print(f"  r{item['joint']:<2} {item['zeta']:>5.2f} {item['wn']:>9.2f} "
-                  f"{item['j_eff']:>7.3f} {item['zeta_urdf']:>11.2f} "
-                  f"{item['kd_for_zeta_0_7']:>8.0f} {item['sag']:>9.4f}")
+                  f"{item['j_eff']:>7.3f} {item['zeta_urdf']:>6.2f} "
+                  f"{kd_text} {item['travel']:>7.4f} {friction_text}")
         path = out_dir / "damping.json"
         path.write_text(json.dumps({
             "kp": self.args.kp, "kd": self.args.kd, "step": self.args.step,
             "joints": results}, ensure_ascii=False, indent=2), encoding="utf-8")
+        if any(item.get("valid") and max(0.0, item["kd_for_zeta_0_7"]) > 300 for item in results):
+            print("! 标 kd 的几轴需要超过 300‰ 才能到 ζ=0.7，超出上限："
+                  "要么减小 kp，要么接受更低的 ζ")
         print(f"\n结果写入 {path}")
         print("说明：ζ 是在当前 kp/kd 下测到的。kd@ζ0.7 用实测 J_eff 反推，"
               "可以直接写回键盘的 MIT_KD。")
@@ -399,17 +461,53 @@ def selftest() -> int:
     return 0 if worst < 0.06 else 1
 
 
+def report_saved(path: Path) -> int:
+    """从已有的 damping.json 重新算表，不碰硬件。"""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    kp = float(data.get("kp", 0.0))
+    kd = float(data.get("kd", 0.0))
+    print(f"{path}：kp={kp} kd={kd}")
+    print("\n关节   ζ实测  ω_n(rad/s)  J_eff    kd@ζ0.7*  行程     摩擦‰")
+    for item in data["joints"]:
+        if not item.get("valid", True):
+            print(f"  r{item['joint']:<2} —— 无效：行程 {item['travel']:.4f} rad")
+            continue
+        joint = item["joint"] - 1
+        rated = RATED_TORQUE[joint]
+        k_eff = kp / 1000.0 * rated
+        d_cmd = kd / 1000.0 * rated
+        d_eff = 2.0 * item["zeta"] * item["wn"] * item["j_eff"]
+        d_fric = max(0.0, d_eff - d_cmd)
+        d_target = 0.7 * 2.0 * math.sqrt(k_eff * item["j_eff"])
+        kd_need = max(0.0, (d_target - d_fric) / rated * 1000.0)
+        friction = item.get("friction_permille")
+        friction_text = f"{friction:>6.1f}" if friction is not None else "     -"
+        print(f"  r{joint + 1:<2} {item['zeta']:>5.2f} {item['wn']:>9.2f} "
+              f"{item['j_eff']:>7.3f} {kd_need:>9.0f} {item['travel']:>7.4f} {friction_text}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", action="store_true", help="先回机械零位")
     parser.add_argument("--step", type=float, default=0.05, help="阶跃幅度（rad，上限 0.06）")
     parser.add_argument("--settle", type=float, default=2.0, help="每次阶跃记录时长（秒）")
+    parser.add_argument("--mode", choices=("torque", "position"), default="torque",
+                        help="torque=力矩阶跃（默认，能克服静摩擦）；position=q_des 位置阶跃")
+    parser.add_argument("--torque", type=float, default=0.0,
+                        help="力矩阶跃大小（‰），0 表示按起动电流自动取")
+    parser.add_argument("--torque-margin", type=float, default=45.0,
+                        help="自动取值时在起动电流上加多少‰")
+    parser.add_argument("--ff", type=float, default=1.0,
+                        help="mit_ff_scale：1=用进入时的保持电流抵重力（默认，响应更线性），0=纯 PD")
     parser.add_argument("--kp", type=float, default=600.0, help="测试用 kp（额定千分比）")
     parser.add_argument("--kd", type=float, default=60.0, help="测试用 kd；给小一点振荡更清楚")
     parser.add_argument("--joints", type=lambda text: [int(v) - 1 for v in text.split(",")],
                         default=list(range(7)), help="只测这些关节，例如 4,6")
     parser.add_argument("--out", default=f"log/mit_damping_{time.strftime('%Y%m%d_%H%M%S')}")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--report-from", default="",
+                        help="只重算已有 damping.json 的表，不连硬件")
     parser.add_argument("--selftest", action="store_true",
                         help="用合成曲线检查拟合器，不需要硬件")
     args = parser.parse_args()
@@ -419,6 +517,8 @@ def main() -> int:
     if any(joint < 0 or joint > 6 for joint in args.joints):
         print("--joints 只能是 1~7")
         return 2
+    if args.report_from:
+        return report_saved(Path(args.report_from))
     if args.selftest:
         return selftest()
     if args.dry_run:
