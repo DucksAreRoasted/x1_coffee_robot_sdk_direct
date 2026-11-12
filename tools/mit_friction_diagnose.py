@@ -125,14 +125,15 @@ class Bench:
             return False, f"{label} 无响应"
         return bool(result.success), result.message
 
-    def push_params(self, kp: Sequence[float], kd: Sequence[float], ff: float) -> bool:
+    def push_params(self, kp: Sequence[float], kd: Sequence[float], ff: float,
+                    mask: int = 0x7F00) -> bool:
         from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
         if not self.params_client.wait_for_service(timeout_sec=3.0):
             return False
         request = self.params_client.srv_type.Request()
         request.parameters = [
             Parameter(name="mit_mask", value=ParameterValue(
-                type=ParameterType.PARAMETER_INTEGER, integer_value=0x7F00)),
+                type=ParameterType.PARAMETER_INTEGER, integer_value=int(mask))),
             Parameter(name="mit_kp", value=ParameterValue(
                 type=ParameterType.PARAMETER_DOUBLE_ARRAY, double_array_value=list(kp))),
             Parameter(name="mit_kd", value=ParameterValue(
@@ -340,7 +341,9 @@ def mode_breakaway(bench: Bench, args) -> int:
                         return 2
                     # 保持电流要在 CSP 下测：进入 MIT 后读到的是带偏置的 CST 值。
                     run_hold = bench.hold_current(0.4).get(RIGHT_JOINTS[joint], float("nan"))
-                    if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff):
+                    # 只让被测轴进 CST，其余六轴留在 CSP 位置保持，不再整臂浮动。
+                    joint_mask = 0x0100 << joint
+                    if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff, joint_mask):
                         print("参数下发失败")
                         return 2
                     ok, detail = bench.trigger(bench.enter_client, "/x1/current_gravity_handfeel")

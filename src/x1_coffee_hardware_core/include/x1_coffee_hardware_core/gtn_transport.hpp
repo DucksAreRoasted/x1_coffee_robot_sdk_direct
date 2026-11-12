@@ -44,6 +44,10 @@ public:
   virtual Result enterMitHandfeelEx(
     const std::array<double, 7> &, const std::array<double, 7> &, double)
   {return enterMitHandfeel();}
+  // 带轴掩码的手感入口：只让掩码内的轴进 CST，其余留在 CSP 位置保持。
+  virtual Result enterMitHandfeelMasked(
+    std::uint16_t, const std::array<double, 7> &, const std::array<double, 7> &, double)
+  {return enterMitHandfeel();}
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   // 参数化 MIT 保持：mask 指定轴（必须非空），kp/kd 用额定千分比单位，
   // ff_scale 是重力前馈倍率，0 表示纯 PD、不加重力前馈。

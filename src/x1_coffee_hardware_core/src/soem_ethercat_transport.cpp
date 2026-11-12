@@ -2966,6 +2966,17 @@ Result SoemEthercatTransport::enterMitHandfeel()
 Result SoemEthercatTransport::enterMitHandfeelEx(
   const std::array<double, 7> & kp, const std::array<double, 7> & kd, double ff_scale)
 {
+  // 不给掩码时保持旧行为：整条右臂进 CST。
+  return enterMitHandfeelMasked(0x7F00, kp, kd, ff_scale);
+}
+
+Result SoemEthercatTransport::enterMitHandfeelMasked(
+  std::uint16_t mask, const std::array<double, 7> & kp, const std::array<double, 7> & kd,
+  double ff_scale)
+{
+  // 只允许右臂的轴；掩码为空时按整臂处理，避免误调用把 15 轴全切到力矩模式。
+  mask = static_cast<std::uint16_t>(mask & 0x7F00);
+  if (mask == 0) {mask = 0x7F00;}
   {
     std::lock_guard<std::mutex> lock(sample_mu_);
     if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ ||
@@ -2992,7 +3003,8 @@ Result SoemEthercatTransport::enterMitHandfeelEx(
     current_fault_joint_ = -1;
     current_over_limit_cycles_.fill(0);
     current_handfeel_=true;current_zero_gravity_=false;current_active_=true;mit_active_=true;mit_zero_g_=false;
-    mit_mask_=0x7F00;motion_armed_=false;
+    // 掩码外的轴留在 CSP：周期写里按 mit_mask_ 逐轴选模式。
+    mit_mask_=mask;motion_armed_=false;
     for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
       held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
     }

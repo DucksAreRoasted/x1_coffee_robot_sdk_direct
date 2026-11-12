@@ -301,13 +301,18 @@ bool X1CoffeeSystemHardware::startMotionService()
             kd[j] = kd_vec[j];
           }
           const double ff = std::clamp(motion_node_->get_parameter("mit_ff_scale").as_double(), 0.0, 1.0);
+          // 掩码决定哪些轴进 CST；掩码外留在 CSP 位置保持。0 表示整条右臂。
+          const auto mask_param = std::clamp<std::int64_t>(
+            motion_node_->get_parameter("mit_mask").as_int(), 0, 0x7FFF);
+          const auto mask = static_cast<std::uint16_t>(mask_param & 0x7F00);
           // 用组件日志名，否则 --log-level warn 会把这条 INFO 过滤掉，事后查不到用了哪组增益。
           RCLCPP_INFO(
             rclcpp::get_logger("X1CoffeeSystemHardware"),
-            "MIT 手感：kp=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] kd=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] ff=%.2f",
-            kp[0], kp[1], kp[2], kp[3], kp[4], kp[5], kp[6],
+            "MIT 手感：mask=0x%04x kp=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] "
+            "kd=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] ff=%.2f",
+            static_cast<unsigned>(mask), kp[0], kp[1], kp[2], kp[3], kp[4], kp[5], kp[6],
             kd[0], kd[1], kd[2], kd[3], kd[4], kd[5], kd[6], ff);
-          result = direct->enterMitHandfeelEx(kp, kd, ff);
+          result = direct->enterMitHandfeelMasked(mask, kp, kd, ff);
         }
         response->success = static_cast<bool>(result);
         response->message = result.detail;
