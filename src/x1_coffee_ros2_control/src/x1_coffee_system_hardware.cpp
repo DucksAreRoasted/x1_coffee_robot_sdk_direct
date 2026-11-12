@@ -218,9 +218,12 @@ bool X1CoffeeSystemHardware::startMotionService()
   // 默认掩码 0（必须显式指定单轴），前馈默认 1（保持原有行为）。
   motion_node_->declare_parameter<std::int64_t>("mit_mask", 0);
   // 逐轴 kp/kd，顺序 r1..r7，单位额定千分比。rclcpp 用 double 数组参数承载。
-  // 空数组表示沿用 YAML 里辨识出来的逐轴增益。
-  motion_node_->declare_parameter<std::vector<double>>("mit_kp", std::vector<double>{});
-  motion_node_->declare_parameter<std::vector<double>>("mit_kd", std::vector<double>{});
+  // 逐轴增益默认值来自 2026-11-12 的匀速拖动辨识（摩擦 / 0.05 rad 死区，ζ=0.7）。
+  // 必须给满 7 个值：空 vector 默认值在 Humble 下类型未定，as_double_array() 会崩。
+  motion_node_->declare_parameter<std::vector<double>>(
+    "mit_kp", std::vector<double>{828.0, 858.0, 834.0, 942.0, 498.0, 1488.0, 794.0});
+  motion_node_->declare_parameter<std::vector<double>>(
+    "mit_kd", std::vector<double>{101.0, 80.0, 102.0, 137.0, 92.0, 267.0, 20.0});
   motion_node_->declare_parameter<double>("mit_ff_scale", 1.0);
   // 力矩缓升（自动辨识）：单轴、±50‰、速率 ‰/s。
   motion_node_->declare_parameter<std::int64_t>("ramp_mask", 0);
@@ -453,9 +456,9 @@ bool X1CoffeeSystemHardware::startMotionService()
       }
       const auto kp_vec = motion_node_->get_parameter("mit_kp").as_double_array();
       const auto kd_vec = motion_node_->get_parameter("mit_kd").as_double_array();
-      if (!kp_vec.empty() && (kp_vec.size() != 7 || kd_vec.size() != 7)) {
+      if (kp_vec.size() != 7 || kd_vec.size() != 7) {
         response->success = false;
-        response->message = "mit_kp / mit_kd 要么都留空（用 YAML 辨识值），要么都给 7 个值";
+        response->message = "mit_kp / mit_kd 必须是 7 个值（r1..r7）";
         return;
       }
       std::array<double, 7> kp{};
@@ -469,10 +472,8 @@ bool X1CoffeeSystemHardware::startMotionService()
         motion_node_->get_logger(),
         "MIT 保持：掩码 0x%04x kp=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] ff=%.2f",
         static_cast<unsigned>(mask_param), kp[0], kp[1], kp[2], kp[3], kp[4], kp[5], kp[6], ff);
-      const auto result = kp_vec.empty() ?
-        transport->enterMitHoldMasked(static_cast<std::uint16_t>(mask_param), ff) :
-        transport->enterMitHoldEx(
-          static_cast<std::uint16_t>(mask_param), kp, kd, ff);
+      const auto result = transport->enterMitHoldEx(
+        static_cast<std::uint16_t>(mask_param), kp, kd, ff);
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });
