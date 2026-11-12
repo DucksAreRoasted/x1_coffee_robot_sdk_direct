@@ -565,6 +565,8 @@ def main() -> int:
     if any(joint < 0 or joint > 6 for joint in args.joints):
         print("--joints 只能是 1~7")
         return 2
+    from x1_ros_env import ensure_ros_env
+    ensure_ros_env()
     if args.report_from:
         return report_saved(Path(args.report_from), args.target_zeta)
     if args.selftest:

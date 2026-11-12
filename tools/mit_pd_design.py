@@ -435,6 +435,8 @@ def main() -> int:
     parser.add_argument("--out", default=f"log/mit_pd_{time.strftime('%Y%m%d_%H%M%S')}")
     args = parser.parse_args()
 
+    from x1_ros_env import ensure_ros_env
+    ensure_ros_env()
     q = load_pose(args)
     if q is None:
         return 2
