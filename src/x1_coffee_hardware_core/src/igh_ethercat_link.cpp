@@ -492,6 +492,10 @@ Result IghEthercatLink::openAndReachOp(
         i + 1, rc, abort_code, result_size);
     }
   }
+  // 逐轴打印：MIT 前馈换算和"模型 vs 实测"的核对都要用单轴值，别只看 min/max。
+  for (std::size_t i = 0; i < kAxes; ++i) {
+    say("● 轴 %zu 额定力矩 %.2f N·m", i + 1, s.rated_nm[i]);
+  }
   say(
     "● 额定力矩读取完成：右臂 %.2f ~ %.2f N·m",
     s.rated_nm[kAxes - 7], s.rated_nm[kAxes - 1]);
