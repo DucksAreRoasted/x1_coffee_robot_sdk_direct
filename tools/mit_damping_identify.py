@@ -284,8 +284,8 @@ class Identifier:
             return 2
         if self.args.home and not self.send_home():
             return 2
-        kp = [self.args.kp] * 7
-        kd = [self.args.kd] * 7
+        kp = self.args.kp
+        kd = self.args.kd
         if not self.push_params(kp, kd, self.args.ff):
             return 2
         ok, detail = self.trigger(self.handfeel_client, "/x1/current_gravity_handfeel")
@@ -390,13 +390,13 @@ class Identifier:
         if not fit:
             print("   拟合失败")
             return None
-        k_eff = self.args.kp / 1000.0 * RATED_TORQUE[joint]
+        k_eff = self.args.kp[joint] / 1000.0 * RATED_TORQUE[joint]
         j_eff = k_eff / (fit["wn"] ** 2) if fit["wn"] > 0 else float("nan")
-        zeta_urdf = ((self.args.kd / 1000.0 * RATED_TORQUE[joint])
+        zeta_urdf = ((self.args.kd[joint] / 1000.0 * RATED_TORQUE[joint])
                      / (2 * math.sqrt(k_eff * URDF_INERTIA[joint])))
         # 实测总阻尼 = 2ζω_n·J；减去指令 kd 贡献，剩下的就是摩擦等带来的等效阻尼。
         # 只按「ζ=0.7 需要多少粘性阻尼」算会把 kd 高估好几倍，因为摩擦本来就贡献了大量阻尼。
-        d_cmd = self.args.kd / 1000.0 * RATED_TORQUE[joint]
+        d_cmd = self.args.kd[joint] / 1000.0 * RATED_TORQUE[joint]
         d_eff = 2.0 * fit["zeta"] * fit["wn"] * j_eff
         d_fric = max(0.0, d_eff - d_cmd)
         d_target = 0.7 * 2.0 * math.sqrt(k_eff * j_eff)
@@ -404,7 +404,7 @@ class Identifier:
         # 静摩擦：平衡时 力矩阶跃 = kp·(q_end − q0) + 摩擦，全部用‰表示。
         friction = None
         if applied_torque is not None:
-            friction = applied_torque - self.args.kp * (q_end - q0)
+            friction = applied_torque - self.args.kp[joint] * (q_end - q0)
         return {
             "joint": joint + 1, "name": name, "valid": True, "kind": kind,
             "travel": travel, "zeta": fit["zeta"], "wn": fit["wn"],
@@ -464,8 +464,10 @@ def selftest() -> int:
 def report_saved(path: Path) -> int:
     """从已有的 damping.json 重新算表，不碰硬件。"""
     data = json.loads(path.read_text(encoding="utf-8"))
-    kp = float(data.get("kp", 0.0))
-    kd = float(data.get("kd", 0.0))
+    kp = data.get("kp", 0.0)
+    kd = data.get("kd", 0.0)
+    kp = kp if isinstance(kp, list) else [float(kp)] * 7
+    kd = kd if isinstance(kd, list) else [float(kd)] * 7
     print(f"{path}：kp={kp} kd={kd}")
     print("\n关节   ζ实测  ω_n(rad/s)  J_eff    kd@ζ0.7*  行程     摩擦‰")
     for item in data["joints"]:
@@ -474,8 +476,8 @@ def report_saved(path: Path) -> int:
             continue
         joint = item["joint"] - 1
         rated = RATED_TORQUE[joint]
-        k_eff = kp / 1000.0 * rated
-        d_cmd = kd / 1000.0 * rated
+        k_eff = kp[joint] / 1000.0 * rated
+        d_cmd = kd[joint] / 1000.0 * rated
         d_eff = 2.0 * item["zeta"] * item["wn"] * item["j_eff"]
         d_fric = max(0.0, d_eff - d_cmd)
         d_target = 0.7 * 2.0 * math.sqrt(k_eff * item["j_eff"])
@@ -487,6 +489,20 @@ def report_saved(path: Path) -> int:
     return 0
 
 
+def gain_list(text: str) -> List[float]:
+    """接受 1 个数或 7 个逗号分隔的数，统一展开成 r1..r7。"""
+    parts = [item for item in text.replace(" ", "").split(",") if item]
+    try:
+        values = [float(item) for item in parts]
+    except ValueError:
+        raise argparse.ArgumentTypeError("只能是数字，或用逗号分隔的 7 个数字")
+    if len(values) == 1:
+        return values * 7
+    if len(values) != 7:
+        raise argparse.ArgumentTypeError("需要 1 个或 7 个值")
+    return values
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", action="store_true", help="先回机械零位")
@@ -496,12 +512,14 @@ def main() -> int:
                         help="torque=力矩阶跃（默认，能克服静摩擦）；position=q_des 位置阶跃")
     parser.add_argument("--torque", type=float, default=0.0,
                         help="力矩阶跃大小（‰），0 表示按起动电流自动取")
-    parser.add_argument("--torque-margin", type=float, default=45.0,
-                        help="自动取值时在起动电流上加多少‰")
+    parser.add_argument("--torque-margin", type=float, default=80.0,
+                        help="自动取值时在起动电流上加多少‰；太小则行程不足、拟合噪声大")
     parser.add_argument("--ff", type=float, default=1.0,
                         help="mit_ff_scale：1=用进入时的保持电流抵重力（默认，响应更线性），0=纯 PD")
-    parser.add_argument("--kp", type=float, default=600.0, help="测试用 kp（额定千分比）")
-    parser.add_argument("--kd", type=float, default=60.0, help="测试用 kd；给小一点振荡更清楚")
+    parser.add_argument("--kp", type=gain_list, default=[600.0] * 7,
+                        help="测试用 kp，1 个值或 7 个逗号分隔值（额定千分比）")
+    parser.add_argument("--kd", type=gain_list, default=[60.0] * 7,
+                        help="测试用 kd，1 个值或 7 个逗号分隔值")
     parser.add_argument("--joints", type=lambda text: [int(v) - 1 for v in text.split(",")],
                         default=list(range(7)), help="只测这些关节，例如 4,6")
     parser.add_argument("--out", default=f"log/mit_damping_{time.strftime('%Y%m%d_%H%M%S')}")
