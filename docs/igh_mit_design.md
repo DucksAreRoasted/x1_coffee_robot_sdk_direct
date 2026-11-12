@@ -22,20 +22,18 @@
 
 ## 二、运行时切模式的时序
 
-IgH 只能用 `ecrt_master_sdo_download()`，它是**异步**的：请求进邮箱队列，
-由内核 OP 线程执行，调用方不能同步等。在 1 ms 周期线程里同步等会拖慢周期帧，
-触发 SM 看门狗，从站报 `0x001B` 回到 SAFEOP（迁移过程中实测过这个后果）。
-
-所以拆成三拍：
+`0x6060` 就在 RxPDO `0x1600` 里（第 4 项，8 位），策略层每个周期按
+`mit_mask_` / `cst_zero_mask_` 写一次。驱动器就是按这帧过程数据切模式的，
+所以**切模式不需要任何邮箱操作**：
 
 ```
-控制线程          requestDriveMode(CST, mask)  →  记录 pending_mask_
+控制线程          requestDriveMode(CST, mask)  →  只记一条日志
    ↓
-周期线程          取 pending_mask_，调 ecrt_master_sdo_download(0x6060, 0x0A)
-   ↓              （IgH 内部排队，不阻塞本拍）
-周期线程          读回 PDO 里的 0x6061，与期望模式比对
-   ↓              全部一致 → 置 mode_confirmed_
-上层              只有 mode_confirmed_ 才允许发力矩
+周期线程          按 mit_mask_/cst_zero_mask_ 写 0x6060（每 1 ms）
+   ↓
+周期线程          读回 TxPDO 里的 0x6061，与期望模式比对
+   ↓              全部一致 → 才允许发力矩
+上层              退出时把 mitigate 状态清掉，下一拍 0x6060 自动回 0x08
 ```
 
 约束：
@@ -43,6 +41,29 @@ IgH 只能用 `ecrt_master_sdo_download()`，它是**异步**的：请求进邮�
 - 每次只切一个轴，失败不影响其他轴
 - 切换超时（默认 100 拍 = 100 ms，可配）判定失败
 - 切换期间 `0x6071` 必须持续写 0，不能沿用上一拍的力矩
+
+### 实测结论（2026-11-12）：不要用 SDO 切模式
+
+早期实现是「`requestDriveMode()` 里逐台 `ecrt_master_sdo_download(0x6060)`」，
+理由写的是「IgH 只能用 SDO」。实测证明这条路会**把整个控制栈钉死**：
+
+- 内核 journal 里的现场是 `ecrt_master_sdo_download → schedule`，进程处于 D 状态，
+  等一个永远不来的邮箱应答，`SIGKILL` 都杀不掉
+- launch 杀不掉子进程，`/dev/EtherCAT0` 一直被占，主站停在 Operation，
+  `systemctl restart ethercat` 也救不回来，只能重启下位机
+- 其中一个调用点还在 1 ms 周期线程里（MIT 故障退出），命中后周期帧直接停发
+
+去掉 SDO、只保留 PDO 通道之后，实机验证（腰部 `Joint_Body`，绕竖直轴、重力
+不产生力矩，零力矩 CST）：
+
+| 步骤 | 0x6061 | 结果 |
+| --- | --- | --- |
+| 切入 CST（`cst_zero_mask=0x0001`） | `0x0a` | success，Δ脉冲 0 |
+| 退出回 CSP | `0x08` | success，Δ脉冲 2（≈2.4e-5 rad） |
+| Ctrl-C | — | 2 秒内退出，主站释放回 Idle，无残留进程 |
+
+所以当前实现：`requestDriveMode()` 只记日志，模式切换完全走周期 PDO，
+`0x6061` 读回确认；**任何线程都不再碰 0x6060 的邮箱写**。
 
 ## 三、额定力矩读取
 
@@ -94,10 +115,13 @@ MIT 的力矩换算依赖 `0x6076`（mN·m）。IgH 没有「配置期读 SDO」
 
 ## 七、已知限制
 
-- IgH 的 `ecrt_master_sdo_download()` 依赖邮箱，切换期间总线会多出邮箱流量，
-  切换应只在「已使能且稳定」后进行，不在 1 ms 启动阶段做
-- 该接口的返回值只表示「请求已排队」，不代表驱动器已接受，必须以 `0x6061` 读回为准
+- 模式切换不再走邮箱：`0x6060` 由周期 PDO 下发，`0x6061` 读回为准（见第二节实测结论）
+- 唯一还在用邮箱的是启动时读 `0x6076` 额定力矩（`ecrt_master_sdo_upload`），
+  它必须在周期线程起来之后做，且只做一次；若将来也要限时，应换成 SDO request
+  轮询接口，而不是再加一个阻塞调用
 - 力矩模式下 SM 看门狗仍按 100 ms 生效，周期抖动过大时驱动器会报 `0x001B`
+- 采样锁在 `read()`/`write()` 侧最多等 20 ms，等不到就报错停机：总线线程一旦卡住，
+  宁可让 ros2_control 走 stop → ERROR，也不让读循环无声挂死
 
 ## 八、零力矩 CST 验证入口（第 3 步的实现约定）
 
@@ -106,8 +130,8 @@ MIT 的力矩换算依赖 `0x6076`（mN·m）。IgH 没有「配置期读 SDO」
 
 - `GtnTransport` 增加虚函数 `enterCstZeroTorque(std::uint16_t axis_mask)`，
   默认返回不支持，IgH/SOEM 传输层各自覆盖
-- 行为：对该 mask 的轴调用 `requestDriveMode(0x0A, mask)`，并在周期里把这些轴的
-  `0x6071` 恒写 0，**不接任何 kp/kd**
+- 行为：把该 mask 记进 `cst_zero_mask_`，周期帧里这些轴的 `0x6060` 写 `0x0A`、
+  `0x6071` 恒写 0，**不接任何 kp/kd**；`requestDriveMode()` 只留一条日志
 - 不改 `0x607A`，位置轴的目标位置保持锁存，退出时回到 CSP 并重新对齐实测
 - 服务名 `/x1/mit_zero_check`，参数为轴掩码，默认 `0x00FE`（左臂）或 `0x7F00`（右臂）
 
