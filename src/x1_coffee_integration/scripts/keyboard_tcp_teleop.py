@@ -33,7 +33,7 @@ COFFEE_JOINTS = ["Joint_Body", *LEFT_JOINTS, *RIGHT_JOINTS]
 # 否则节点重启后参数会回到默认（前馈开、默认增益）。顺序 r1..r7，单位额定千分比。
 MIT_MASK = 0x7F00
 MIT_KP = [480.0, 480.0, 480.0, 480.0, 480.0, 480.0, 480.0]
-MIT_KD = [96.0, 96.0, 96.0, 96.0, 96.0, 96.0, 96.0]
+MIT_KD = [96.0, 96.0, 96.0, 96.0, 96.0, 96.0, 20.0]
 MIT_FF_SCALE = 0.0
 ARMS = {
     "left": ("left_group_controller", LEFT_JOINTS, "left_gripper_tcp"),
