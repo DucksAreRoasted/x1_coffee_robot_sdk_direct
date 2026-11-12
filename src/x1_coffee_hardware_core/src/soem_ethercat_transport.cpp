@@ -2471,6 +2471,32 @@ void SoemEthercatTransport::onCycle(
       }
     }
   }
+  // 力矩缓升：每周期推进 rate*dt，检测关节开始运动就锁存起动扭矩并卸力。
+  if (ramp_active_) {
+    ramp_now_ += ramp_rate_ * kEthercatCycleSec;
+    const bool forward = ramp_to_ > ramp_from_;
+    const bool reached = forward ? ramp_now_ >= ramp_to_ : ramp_now_ <= ramp_to_;
+    if (latest_[ramp_axis_].valid) {
+      const double q = pulseToPosition(ramp_axis_, latest_[ramp_axis_].actual_position);
+      if (std::abs(q - ramp_q0_) > kRampMotionRad) {
+        ramp_onset_ = static_cast<std::int32_t>(std::lround(ramp_now_));
+        ramp_active_ = false;
+        ramp_done_ = true;
+        cst_zero_torque_permille_ = 0;
+      }
+    }
+    if (ramp_active_ && reached) {
+      ramp_now_ = static_cast<double>(ramp_to_);
+      ramp_active_ = false;
+      ramp_done_ = true;
+      cst_zero_torque_permille_ = 0;
+    }
+    if (ramp_active_ && ++ramp_cycles_ > 120000) {
+      ramp_active_ = false;
+      ramp_done_ = true;
+      cst_zero_torque_permille_ = 0;
+    }
+  }
   bool servo_waiting = false;
   if (servo_ready_delay_ms_ > 0) {
     const int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2588,7 +2614,9 @@ void SoemEthercatTransport::onCycle(
       out.target_position = item.actual_position;
       if (!mit_axis) {
         // 零力矩验证：目标力矩是常数偏置，第 4 步的小力矩也走这条路。
-        out.target_torque = static_cast<std::int16_t>(cst_zero_torque_permille_);
+        // 自动辨识期间改成周期线程推进的斜坡值。
+        out.target_torque = static_cast<std::int16_t>(std::lround(
+          ramp_active_ ? ramp_now_ : static_cast<double>(cst_zero_torque_permille_)));
       } else if (current_active_) {
         const int side = index >= 8 ? 1 : 0;
         const int slot = static_cast<int>(index) - (side == 1 ? 8 : 1);
@@ -2814,6 +2842,80 @@ Result SoemEthercatTransport::cstZeroStatus(std::uint16_t axis_mask)
     return Result::fail(CoreError::kWriteFailed, detail);
   }
   return Result{CoreError::kOk, detail};
+}
+
+Result SoemEthercatTransport::startCstZeroRamp(
+  std::uint16_t axis_mask, std::int32_t from_permille, std::int32_t to_permille,
+  double rate_permille_per_s)
+{
+  // 只允许单轴：多轴同时缓升既没有辨识意义，也会放大误动作。
+  if (axis_mask == 0 || (axis_mask & (axis_mask - 1)) != 0) {
+    return Result::fail(CoreError::kInvalidConfiguration, "缓升只支持单轴掩码");
+  }
+  if (std::abs(from_permille) > kCstZeroMaxPermille ||
+    std::abs(to_permille) > kCstZeroMaxPermille)
+  {
+    return Result::fail(CoreError::kInvalidConfiguration, "缓升力矩超出额定 5%（±50‰）");
+  }
+  if (from_permille == to_permille) {
+    return Result::fail(CoreError::kInvalidConfiguration, "缓升起点和终点相同");
+  }
+  if (!std::isfinite(rate_permille_per_s) || rate_permille_per_s <= 0.0 ||
+    rate_permille_per_s > 50.0)
+  {
+    return Result::fail(CoreError::kInvalidConfiguration, "缓升速率必须在 0..50‰/s");
+  }
+  const auto entered = enterCstZeroTorque(axis_mask, from_permille);
+  if (!entered) {
+    return entered;
+  }
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    ramp_axis_ = 0;
+    for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
+      if ((axis_mask & (1u << i)) != 0) {ramp_axis_ = i; break;}
+    }
+    ramp_from_ = from_permille;
+    ramp_to_ = to_permille;
+    ramp_now_ = static_cast<double>(from_permille);
+    ramp_rate_ = rate_permille_per_s;
+    ramp_q0_ = latest_[ramp_axis_].valid ?
+      pulseToPosition(ramp_axis_, latest_[ramp_axis_].actual_position) : 0.0;
+    ramp_onset_ = std::numeric_limits<std::int32_t>::min();
+    ramp_cycles_ = 0;
+    ramp_active_ = true;
+    ramp_done_ = false;
+  }
+  return Result{
+    CoreError::kOk, "已开始力矩缓升：从 " + std::to_string(from_permille) + "‰ 到 " +
+    std::to_string(to_permille) + "‰，速率 " + std::to_string(rate_permille_per_s) +
+    "‰/s；关节一动就锁存起动扭矩并卸力"};
+}
+
+Result SoemEthercatTransport::cstZeroRampStatus()
+{
+  std::lock_guard<std::mutex> lock(sample_mu_);
+  if (!ramp_active_ && !ramp_done_) {
+    return Result::fail(CoreError::kReadFailed, "没有缓升记录");
+  }
+  char buffer[256];
+  if (ramp_active_) {
+    std::snprintf(
+      buffer, sizeof(buffer), "缓升中：轴 %zu，%.1f‰ → %d‰，已用 %.1f s",
+      ramp_axis_ + 1, ramp_now_, ramp_to_,
+      static_cast<double>(ramp_cycles_) * kEthercatCycleSec);
+    return Result{CoreError::kOk, buffer};
+  }
+  if (ramp_onset_ == std::numeric_limits<std::int32_t>::min()) {
+    std::snprintf(
+      buffer, sizeof(buffer), "缓升结束：轴 %zu 在 %d‰ 内没有检测到运动",
+      ramp_axis_ + 1, ramp_to_);
+    return Result{CoreError::kOk, buffer};
+  }
+  std::snprintf(
+    buffer, sizeof(buffer), "缓升完成：轴 %zu 起动扭矩 %d‰（从 %d‰ 走向 %d‰）",
+    ramp_axis_ + 1, ramp_onset_, ramp_from_, ramp_to_);
+  return Result{CoreError::kOk, buffer};
 }
 
 Result SoemEthercatTransport::enterMitHandfeel()
@@ -3069,7 +3171,10 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
     command = torquePermilleFromNm(gravity_nm - kd_nm * mit_velocity_[index], rated);
   } else {
     // mit_ff_scale_ = 0 时就是纯 PD：重力模型完全不参与，手感只由 kp/kd 决定。
-    command = mit_kp_ * error - mit_kd_ * mit_velocity_[index] +
+    const std::size_t gain = slot >= 0 ? static_cast<std::size_t>(slot) : 0;
+    const double kp = slot >= 0 ? mit_kp_[gain] : 0.0;
+    const double kd = slot >= 0 ? mit_kd_[gain] : 0.0;
+    command = kp * error - kd * mit_velocity_[index] +
       torquePermilleFromNm(gravity_nm * mit_ff_scale_, rated);
   }
   if (slot >= 0) {
@@ -3090,7 +3195,8 @@ Result SoemEthercatTransport::enterMitHold()
 }
 
 Result SoemEthercatTransport::enterMitHoldEx(
-  std::uint16_t mask, double kp_permille, double kd_permille, double ff_scale)
+  std::uint16_t mask, const std::array<double, 7> & kp_permille,
+  const std::array<double, 7> & kd_permille, double ff_scale)
 {
   // 纯 PD 试验不需要重力模型；要加前馈就必须先有模型，否则会静默变成纯 PD。
   if (ff_scale > 0.0 && !gravity_ready_) {
@@ -3134,12 +3240,12 @@ Result SoemEthercatTransport::enterZeroGravity()
       CoreError::kInvalidConfiguration,
       "右臂没有读到额定力矩 0x6076，不能把牛·米换成驱动器千分比：" + missing);
   }
-  return beginRightArmTorque(0x7F00, 0.0, mit_kd_, 1.0, true);
+  return beginRightArmTorque(0x7F00, std::array<double, 7>{}, mit_kd_, 1.0, true);
 }
 
 Result SoemEthercatTransport::beginRightArmTorque(
-  std::uint16_t mask, double kp_permille, double kd_permille, double ff_scale,
-  bool zero_gravity)
+  std::uint16_t mask, const std::array<double, 7> & kp_permille,
+  const std::array<double, 7> & kd_permille, double ff_scale, bool zero_gravity)
 {
   if (!active_ || link_ == nullptr) {
     return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
@@ -3153,13 +3259,19 @@ Result SoemEthercatTransport::beginRightArmTorque(
   if (mask == 0 || (mask & ~0x7F00u) != 0) {
     return Result::fail(CoreError::kInvalidConfiguration, "MIT 掩码必须非空且只包含右臂 bit8..14");
   }
-  if (!std::isfinite(kp_permille) || !std::isfinite(kd_permille) || !std::isfinite(ff_scale) ||
-    kp_permille < 0.0 || kp_permille > 2000.0 || kd_permille < 0.0 || kd_permille > 200.0 ||
-    ff_scale < 0.0 || ff_scale > 1.0)
-  {
-    return Result::fail(
-      CoreError::kInvalidConfiguration,
-      "MIT 参数越界：kp 0..2000‰/rad，kd 0..200‰/(rad·s)，ff_scale 0..1");
+  for (int joint = 0; joint < 7; ++joint) {
+    const double kp = kp_permille[static_cast<std::size_t>(joint)];
+    const double kd = kd_permille[static_cast<std::size_t>(joint)];
+    if (!std::isfinite(kp) || !std::isfinite(kd) || kp < 0.0 || kp > 2000.0 ||
+      kd < 0.0 || kd > 200.0)
+    {
+      return Result::fail(
+        CoreError::kInvalidConfiguration,
+        "MIT 逐轴增益越界：kp 0..2000‰/rad，kd 0..200‰/(rad·s)");
+    }
+  }
+  if (!std::isfinite(ff_scale) || ff_scale < 0.0 || ff_scale > 1.0) {
+    return Result::fail(CoreError::kInvalidConfiguration, "ff_scale 必须在 0..1");
   }
   // 校验和状态准备都在锁内完成；requestDriveMode 在 IgH 上是阻塞邮箱调用，
   // 必须放锁后再发，否则会和等锁的周期线程互锁（服务无响应）。

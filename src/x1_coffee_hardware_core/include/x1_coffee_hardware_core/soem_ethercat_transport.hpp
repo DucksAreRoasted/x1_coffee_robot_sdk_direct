@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <limits>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -111,11 +112,18 @@ public:
   Result currentGravityStatus();
   Result currentGravityHoldStatus();
   Result enterMitHold();
-  Result enterMitHoldEx(std::uint16_t mask, double kp, double kd, double ff_scale) override;
+  Result enterMitHoldEx(
+    std::uint16_t mask, const std::array<double, 7> & kp, const std::array<double, 7> & kd,
+    double ff_scale) override;
   Result enterMitHandfeel();
   // 只切 CST 并把 0x6071 写常数，不接 kp/kd；传 0 表示退出并回到 CSP。
   Result enterCstZeroTorque(std::uint16_t axis_mask, std::int32_t torque_permille = 0) override;
   Result cstZeroStatus(std::uint16_t axis_mask) override;
+  // 自动辨识用：单轴力矩斜坡。从 from 以 rate 走�to，关节动起来就记下起动值。
+  Result startCstZeroRamp(
+    std::uint16_t axis_mask, std::int32_t from_permille, std::int32_t to_permille,
+    double rate_permille_per_s) override;
+  Result cstZeroRampStatus() override;
   Result updateMitHandfeel(int joint, double q_des, double dq_des, double kp, double kd, double tau_ff);
   Result exitMitHold();
   // 右臂只有重力前馈，kp 和 kd 都是 0。用来手感检验补偿方向和大小。
@@ -231,12 +239,26 @@ private:
   std::uint16_t mit_mask_{0x7F00};
   // 零力矩 CST 验证的轴掩码，非 0 时这些轴按 CST 发，力矩为下面的常值偏置。
   std::uint16_t cst_zero_mask_{0};
+  // 力矩斜坡状态：ramp_now_ 每个周期推进，ramp_onset_ 记录关节开始运动的扭矩。
+  bool ramp_active_{false};
+  bool ramp_done_{false};
+  std::size_t ramp_axis_{0};
+  double ramp_rate_{0.0};
+  double ramp_now_{0.0};
+  std::int32_t ramp_from_{0};
+  std::int32_t ramp_to_{0};
+  double ramp_q0_{0.0};
+  std::int32_t ramp_onset_{std::numeric_limits<std::int32_t>::min()};
+  int ramp_cycles_{0};
+  // 起动判据：相对斜坡起点的位移超过这个值就算动起来了（约 0.6°）。
+  static constexpr double kRampMotionRad = 0.01;
   // 第 4 步的小力矩，单位额定千分比，限 ±5%（±50‰），只作用于掩码内轴。
   std::int32_t cst_zero_torque_permille_{0};
   // 额定力矩的 5%。超过这个数就不是「小力矩验证」了。
   static constexpr std::int32_t kCstZeroMaxPermille = 50;
-  double mit_kp_{480.0};
-  double mit_kd_{24.0};
+  // 逐轴增益，顺序 r1..r7。不同关节的惯量差两个数量级，全局单值没法同时合适。
+  std::array<double, 7> mit_kp_{{480.0, 480.0, 480.0, 480.0, 480.0, 480.0, 480.0}};
+  std::array<double, 7> mit_kd_{{24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0}};
   // 重力前馈倍率：0 = 纯 PD 手感试验，1 = 正常前馈。
   double mit_ff_scale_{1.0};
   double mit_limit_{1000.0};
@@ -266,8 +288,8 @@ private:
     const std::array<std::array<double, 3>, 7> & com_delta);
   // 参数化入口：mask/kp/kd/ff_scale 由调用方给定，zero_gravity 时忽略 kp（只用前馈+阻尼）。
   Result beginRightArmTorque(
-    std::uint16_t mask, double kp_permille, double kd_permille, double ff_scale,
-    bool zero_gravity);
+    std::uint16_t mask, const std::array<double, 7> & kp_permille,
+    const std::array<double, 7> & kd_permille, double ff_scale, bool zero_gravity);
   std::atomic<bool> gravity_calib_stop_{false};
   std::atomic<bool> gravity_calib_running_{false};
   std::thread gravity_calib_thread_;

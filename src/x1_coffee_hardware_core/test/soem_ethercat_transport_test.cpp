@@ -942,12 +942,20 @@ TEST(SoemEthercatTransport, mit_hold_ex_uses_mask_and_pure_pd_when_ff_disabled)
   ASSERT_TRUE(transport.activate());
   for (int i = 0; i < 1002; ++i) {link->replay();}
 
-  EXPECT_FALSE(transport.enterMitHoldEx(0, 100.0, 10.0, 0.0));
-  EXPECT_FALSE(transport.enterMitHoldEx(0x00FE, 100.0, 10.0, 0.0));   // 左臂
-  EXPECT_FALSE(transport.enterMitHoldEx(0x4000, 5000.0, 10.0, 0.0));  // kp 越界
-  EXPECT_FALSE(transport.enterMitHoldEx(0x4000, 100.0, 10.0, 2.0));   // ff 越界
+  std::array<double, 7> kp100{};
+  std::array<double, 7> kp0{};
+  std::array<double, 7> kd10{};
+  kp100.fill(100.0);
+  kd10.fill(10.0);
+  std::array<double, 7> kp_big{};
+  kp_big.fill(5000.0);
 
-  ASSERT_TRUE(transport.enterMitHoldEx(0x4000, 0.0, 0.0, 0.0));
+  EXPECT_FALSE(transport.enterMitHoldEx(0, kp100, kd10, 0.0));
+  EXPECT_FALSE(transport.enterMitHoldEx(0x00FE, kp100, kd10, 0.0));   // 左臂
+  EXPECT_FALSE(transport.enterMitHoldEx(0x4000, kp_big, kd10, 0.0));  // kp 越界
+  EXPECT_FALSE(transport.enterMitHoldEx(0x4000, kp100, kd10, 2.0));   // ff 越界
+
+  ASSERT_TRUE(transport.enterMitHoldEx(0x4000, kp0, kp0, 0.0));
   link->replay();link->replay();
   EXPECT_EQ(link->last[14].mode_of_operation, 0x0A);
   EXPECT_EQ(link->last[14].target_torque, 0);
@@ -955,10 +963,43 @@ TEST(SoemEthercatTransport, mit_hold_ex_uses_mask_and_pure_pd_when_ff_disabled)
   ASSERT_TRUE(transport.exitMitHold());
 
   // kp=200‰/rad，拨出 0.05 rad 后目标力矩应为 -10‰（纯弹簧，无前馈）。
-  ASSERT_TRUE(transport.enterMitHoldEx(0x4000, 200.0, 0.0, 0.0));
+  std::array<double, 7> kp200{};
+  std::array<double, 7> kd0{};
+  kp200.fill(200.0);
+  ASSERT_TRUE(transport.enterMitHoldEx(0x4000, kp200, kd0, 0.0));
   link->position_shift = 50;
   link->replay();link->replay();
   EXPECT_EQ(link->last[14].target_torque, -10);
   link->position_shift = 0;
   ASSERT_TRUE(transport.exitMitHold());
+}
+
+TEST(SoemEthercatTransport, cst_zero_ramp_records_breakaway_torque)
+{
+  // 自动辨识：单轴力矩缓升，关节一动就锁存起动扭矩并卸力。
+  auto owned = std::make_unique<FakeLink>();
+  auto * link = owned.get();
+  link->status = 0x1237;
+  SoemEthercatTransport transport(std::move(owned));
+  ASSERT_TRUE(transport.configure(parameters(true)));
+  ASSERT_TRUE(transport.activate());
+  for (int i = 0; i < 1002; ++i) {link->replay();}
+
+  EXPECT_FALSE(transport.startCstZeroRamp(0x6000, 0, 20, 2.0));   // 多轴
+  EXPECT_FALSE(transport.startCstZeroRamp(0x4000, 0, 80, 2.0));   // 超出 ±50‰
+  EXPECT_FALSE(transport.startCstZeroRamp(0x4000, 0, 20, 0.0));   // 速率非法
+
+  ASSERT_TRUE(transport.startCstZeroRamp(0x4000, 0, 20, 20.0));   // 20‰/s，只切 r7
+  for (int i = 0; i < 500; ++i) {link->replay();}                 // 0.5 s → 10‰
+  EXPECT_EQ(link->last[14].mode_of_operation, 0x0A);
+  EXPECT_EQ(link->last[14].target_torque, 10);
+  EXPECT_EQ(link->last[13].mode_of_operation, 0x08);
+
+  link->position_shift = 50;                                      // 0.05 rad，超过起动阈值
+  // 起动检测在 onCycle 开头用的是上一拍的反馈，所以要再走一拍才看得到这次位移。
+  link->replay();link->replay();
+  EXPECT_EQ(link->last[14].target_torque, 0);
+  const auto status = transport.cstZeroRampStatus();
+  ASSERT_TRUE(status);
+  EXPECT_NE(std::string(status.detail).find("起动扭矩"), std::string::npos);
 }

@@ -217,9 +217,17 @@ bool X1CoffeeSystemHardware::startMotionService()
   // MIT 保持的可调参数：掩码、刚度、阻尼、重力前馈倍率。
   // 默认掩码 0（必须显式指定单轴），前馈默认 1（保持原有行为）。
   motion_node_->declare_parameter<std::int64_t>("mit_mask", 0);
-  motion_node_->declare_parameter<double>("mit_kp", 480.0);
-  motion_node_->declare_parameter<double>("mit_kd", 24.0);
+  // 逐轴 kp/kd，顺序 r1..r7，单位额定千分比。rclcpp 用 double 数组参数承载。
+  motion_node_->declare_parameter<std::vector<double>>(
+    "mit_kp", std::vector<double>(7, 480.0));
+  motion_node_->declare_parameter<std::vector<double>>(
+    "mit_kd", std::vector<double>(7, 24.0));
   motion_node_->declare_parameter<double>("mit_ff_scale", 1.0);
+  // 力矩缓升（自动辨识）：单轴、±50‰、速率 ‰/s。
+  motion_node_->declare_parameter<std::int64_t>("ramp_mask", 0);
+  motion_node_->declare_parameter<std::int64_t>("ramp_from", 0);
+  motion_node_->declare_parameter<std::int64_t>("ramp_to", 0);
+  motion_node_->declare_parameter<double>("ramp_rate", 2.0);
   // 自动采样的异常出口，服务成功仍须由调用方检查实际运动是否停止。
   cancel_pvt_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/cancel_pvt",
@@ -382,6 +390,44 @@ bool X1CoffeeSystemHardware::startMotionService()
       response->success = confirmed;
       response->message = result.detail + "；" + (confirmed ? "" : "未确认：") + readback;
     });
+  // 自动辨识入口：单轴力矩缓升，周期线程推进并自动锁存起动扭矩。
+  ramp_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/mit_ramp",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      if (!transport_) {
+        response->success = false;
+        response->message = "传输层尚未创建";
+        return;
+      }
+      const auto mask = static_cast<std::uint16_t>(std::clamp<std::int64_t>(
+        motion_node_->get_parameter("ramp_mask").as_int(), 0, 0x7FFF));
+      const auto from = static_cast<std::int32_t>(
+        motion_node_->get_parameter("ramp_from").as_int());
+      const auto to = static_cast<std::int32_t>(
+        motion_node_->get_parameter("ramp_to").as_int());
+      const double rate = motion_node_->get_parameter("ramp_rate").as_double();
+      const auto result = transport_->startCstZeroRamp(mask, from, to, rate);
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
+  ramp_status_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
+    "/x1/mit_ramp_status",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+      if (!transport_) {
+        response->success = false;
+        response->message = "传输层尚未创建";
+        return;
+      }
+      const auto result = transport_->cstZeroRampStatus();
+      response->success = static_cast<bool>(result);
+      response->message = result.detail;
+    });
   mit_hold_service_ = motion_node_->create_service<std_srvs::srv::Trigger>(
     "/x1/mit_hold",
     [this](
@@ -401,12 +447,24 @@ bool X1CoffeeSystemHardware::startMotionService()
         response->message = "mit_mask 为 0，拒绝进入；先用 ros2 param set 指定单轴（例如 r7 = 16384）";
         return;
       }
-      const double kp = motion_node_->get_parameter("mit_kp").as_double();
-      const double kd = motion_node_->get_parameter("mit_kd").as_double();
+      const auto kp_vec = motion_node_->get_parameter("mit_kp").as_double_array();
+      const auto kd_vec = motion_node_->get_parameter("mit_kd").as_double_array();
+      if (kp_vec.size() != 7 || kd_vec.size() != 7) {
+        response->success = false;
+        response->message = "mit_kp / mit_kd 必须是 7 个值（r1..r7）";
+        return;
+      }
+      std::array<double, 7> kp{};
+      std::array<double, 7> kd{};
+      for (std::size_t i = 0; i < 7; ++i) {
+        kp[i] = kp_vec[i];
+        kd[i] = kd_vec[i];
+      }
       const double ff = std::clamp(motion_node_->get_parameter("mit_ff_scale").as_double(), 0.0, 1.0);
       RCLCPP_INFO(
-        motion_node_->get_logger(), "MIT 保持：掩码 0x%04x kp=%.1f‰/rad kd=%.1f‰/(rad·s) ff=%.2f",
-        static_cast<unsigned>(mask_param), kp, kd, ff);
+        motion_node_->get_logger(),
+        "MIT 保持：掩码 0x%04x kp=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] ff=%.2f",
+        static_cast<unsigned>(mask_param), kp[0], kp[1], kp[2], kp[3], kp[4], kp[5], kp[6], ff);
       const auto result = transport->enterMitHoldEx(
         static_cast<std::uint16_t>(mask_param), kp, kd, ff);
       response->success = static_cast<bool>(result);

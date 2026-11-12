@@ -43,7 +43,8 @@ public:
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   // 参数化 MIT 保持：mask 指定轴（必须非空），kp/kd 用额定千分比单位，
   // ff_scale 是重力前馈倍率，0 表示纯 PD、不加重力前馈。
-  virtual Result enterMitHoldEx(std::uint16_t, double, double, double)
+  virtual Result enterMitHoldEx(
+    std::uint16_t, const std::array<double, 7> &, const std::array<double, 7> &, double)
   {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持参数化 MIT");}
   // 只把 mask 内的轴切到 CST 并把 0x6071 恒置 0，不接 kp/kd。
   // 用来把「模式切换」和「力矩输出」分开验证，见 docs/igh_mit_design.md 第八节。
@@ -51,6 +52,11 @@ public:
   // 读回 mask 内各轴的 0x6061、状态字和 0x607A 目标与 0x6064 实际之差。
   // 只读周期线程的锁存值、不改输出；服务用它给验收判据留证据。
   virtual Result cstZeroStatus(std::uint16_t) {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零力矩 CST 读回");}
+  // 自动辨识：单轴力矩缓升，用于测静摩擦和重力分量。返回后由周期线程推进。
+  virtual Result startCstZeroRamp(std::uint16_t, std::int32_t, std::int32_t, double)
+  {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持力矩缓升");}
+  virtual Result cstZeroRampStatus()
+  {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持力矩缓升");}
   virtual Result exitMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   virtual Result enterZeroGravity() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持零重力");}
   virtual Result startRightArmGravityCalibration() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持重力标定");}

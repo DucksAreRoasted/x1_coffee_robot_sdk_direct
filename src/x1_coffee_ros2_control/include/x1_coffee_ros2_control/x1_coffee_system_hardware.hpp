@@ -75,6 +75,9 @@ private:
   bool cst_zero_active_{false};
   // 进入时用的掩码。退出后仍按它读回 0x6061，确认都回到 CSP。
   std::uint16_t cst_zero_active_mask_{0};
+  // 自动辨识：力矩缓升与状态查询。
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ramp_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ramp_status_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr mit_exit_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_calib_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr gravity_reset_service_;
