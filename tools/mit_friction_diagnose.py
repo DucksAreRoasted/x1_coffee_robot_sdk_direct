@@ -514,7 +514,8 @@ def classify_window(samples: List[List[float]], speed: float, budget: int) -> di
             "mean_velocity": mean_velocity, "std_velocity": std_velocity,
             "mean_q": sum(poses) / len(poses),
             "mean_torque": sum(torques) / len(torques),
-            "std_torque": statistics.pstdev(torques)}
+            "std_torque": statistics.pstdev(torques),
+            "steady": [(item[0], item[2]) for item in steady]}
 
 
 def mode_motion(bench: Bench, args) -> int:
@@ -575,6 +576,109 @@ def mode_motion(bench: Bench, args) -> int:
           "负载依赖与方向差异需要独立实验。")
     RESULTS["motion"] = records
     return 0 if records else 2
+
+
+def fit_at_position(steady: List[tuple], target: float):
+    """把一小段稳态样本按位置线性拟合，再取目标位置上的值。"""
+    if len(steady) < 10:
+        return None
+    import numpy as np
+    qs = np.array([item[0] for item in steady])
+    us = np.array([item[1] for item in steady])
+    if qs.max() - qs.min() < 1e-6:
+        return float(us.mean())
+    basis = np.column_stack([qs - qs.mean(), np.ones_like(qs)])
+    coefficients, *_ = np.linalg.lstsq(basis, us, rcond=None)
+    return float(coefficients[0] * (target - qs.mean()) + coefficients[1])
+
+
+def mode_poses(bench: Bench, args) -> int:
+    """多姿态运动法：自动把被测关节依次摆到几个角度，每个角度做正反向匀速配对。
+
+    每个角度上正向和反向各走一小段（-swing/+swing），各自按位置线性拟合后
+    在角度处取正反向电流：平均是重力项，差是摩擦。这样不要求两次停在同一点。
+    """
+    if not check_enabled(bench):
+        return 2
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    results = []
+    speeds = [0.05, 0.10]
+    for joint in args.joints:
+        name = RIGHT_JOINTS[joint]
+        low_limit, high_limit = _joint_limits(name)
+        angles = [float(item) for item in str(args.angles).split(",") if item.strip()] \
+            if args.angles else None
+        center = bench.measured[name]
+        if angles is None:
+            angles = [center - 0.15, center, center + 0.15]
+        rows = []
+        index = JOINTS_ALL.index(name)
+        for angle in angles:
+            if not (low_limit + 0.02 < angle < high_limit - 0.02):
+                print(f"  r{joint + 1} 角度 {angle:+.3f} 超出限位，跳过")
+                continue
+            pose = [bench.measured[item] for item in JOINTS_ALL]
+            pose[index] = angle
+            if not bench.move(pose, max(0.8, abs(pose[index] - bench.measured[name]) / 0.1)):
+                print(f"  r{joint + 1} 走到 {angle:+.3f} 失败")
+                continue
+            bench.spin(args.dwell)
+            start_pose = bench.measured[name]
+            per_speed = {}
+            for speed in speeds:
+                for direction in (1.0, -1.0):
+                    target = start_pose + direction * args.swing
+                    goal = list(pose)
+                    goal[index] = target
+                    if not bench.move(goal, max(0.8, args.swing / speed)):
+                        continue
+                    samples = bench.sweep(joint, target, max(0.8, args.swing / speed),
+                                          LIMIT_BUDGET[joint])
+                    verdict = classify_window(samples, direction * speed, LIMIT_BUDGET[joint])
+                    if verdict["valid"]:
+                        value = fit_at_position(verdict["steady"], start_pose)
+                        if value is not None:
+                            per_speed.setdefault(speed, {})[direction] = value
+                    # 回中，避免行程累积
+                    back = list(pose)
+                    back[index] = start_pose
+                    bench.move(back, max(0.8, args.swing / speed))
+                    bench.spin(0.3)
+            # 每个速度都配出 (u+ + u-)/2 与 (u+ - u-)/2，再按速度平均
+            gravity_values, friction_values = [], []
+            for speed, pair in per_speed.items():
+                if 1.0 in pair and -1.0 in pair:
+                    gravity_values.append((pair[1.0] + pair[-1.0]) / 2)
+                    friction_values.append((pair[1.0] - pair[-1.0]) / 2)
+            if not gravity_values:
+                print(f"  r{joint + 1} {angle:+.3f} rad：没有可配对的稳态段")
+                continue
+            row = {"joint": joint + 1, "angle": start_pose,
+                   "gravity": sum(gravity_values) / len(gravity_values),
+                   "friction": sum(friction_values) / len(friction_values),
+                   "speed_count": len(gravity_values)}
+            rows.append(row)
+            print(f"  r{joint + 1} {row['angle']:+.3f} rad  重力 {row['gravity']:>7.1f}‰  "
+                  f"摩擦 {row['friction']:>6.1f}‰  （{row['speed_count']} 个速度配对）")
+        if len(rows) < 2:
+            print(f"  r{joint + 1} 有效姿态不足两个，无法看趋势")
+            continue
+        import numpy as np
+        qs = np.array([item["angle"] for item in rows])
+        gravity = np.array([item["gravity"] for item in rows])
+        basis = np.column_stack([qs - qs.mean(), np.ones_like(qs)])
+        coefficients, *_ = np.linalg.lstsq(basis, gravity, rcond=None)
+        rms = float(np.sqrt(np.mean((basis @ coefficients - gravity) ** 2)))
+        span = float(gravity.max() - gravity.min())
+        print(f"    → u_g(q) = {coefficients[0]:+.0f}‰/rad ·(q−{qs.mean():+.3f}) "
+              f"{coefficients[1]:+.1f}，RMS {rms:.1f}‰，窗口内变化 {span:.1f}‰")
+        results.append({"joint": joint + 1, "rows": rows, "slope": float(coefficients[0]),
+                        "intercept": float(coefficients[1]), "rms": rms})
+        RESULTS.setdefault("poses", []).append(results[-1])
+    print("\n[不可确认] 这些点是「其余关节固定」时的 u_g(q)；换手臂姿态要重测，"
+          "也不能据此反推质量或惯量。")
+    return 0 if results else 2
 
 
 def mode_sweep(bench: Bench, args) -> int:
@@ -670,7 +774,7 @@ def mode_sweep(bench: Bench, args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mode", choices=("budget", "breakaway", "motion", "sweep"),
+    parser.add_argument("--mode", choices=("budget", "breakaway", "motion", "sweep", "poses"),
                         default="budget")
     parser.add_argument("--joints", type=lambda text: [int(v) - 1 for v in text.split(",")],
                         default=list(range(7)))
@@ -686,6 +790,8 @@ def main() -> int:
     parser.add_argument("--settle", type=float, default=0.5)
     parser.add_argument("--swing", type=float, default=0.15, help="sweep 模式的单边行程 rad")
     parser.add_argument("--steps", type=int, default=5, help="sweep 模式每个方向测几个点")
+    parser.add_argument("--angles", default="",
+                        help="poses 模式的角度列表（绝对 rad）；留空取当前±0.15")
     parser.add_argument("--dwell", type=float, default=0.8,
                         help="进入 MIT 并确认模式后，再等多久才开始加力")
     parser.add_argument("--return-kp", type=float, default=400.0,
@@ -707,6 +813,8 @@ def main() -> int:
             status = mode_breakaway(bench, args)
         elif args.mode == "sweep":
             status = mode_sweep(bench, args)
+        elif args.mode == "poses":
+            status = mode_poses(bench, args)
         else:
             status = mode_motion(bench, args)
         out = Path(args.out)
