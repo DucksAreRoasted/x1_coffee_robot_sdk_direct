@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
-"""单关节摩擦与电流预算诊断（不做 PD 阶跃整定）。
+"""单关节摩擦与电流预算诊断（不做 PD 阶跃整定，也不生成补偿参数）。
 
-三个实验，对应「起动 / 运动 / 预算」三类问题：
+三个实验：
 
-  --mode budget     读取指定姿态下的保持力矩 u0（0x6077 反馈），
-                    与每轴电流预算比较，给出正反向余量 h+ / h-。
-                    u0 的绝对值超过预算 80% 时，MIT 手感模式会拒绝进入。
+  --mode budget     读当前姿态的保持电流 hold_current（0x6077 反馈），
+                    给出正反向命令余量。hold_current 不是重力电流，
+                    静摩擦可能承担了一部分负载。
 
-  --mode breakaway  起动辨识：MIT 手感模式下 kp=0、ff=1（用进入时的保持电流抵重力），
-                    只叠加一个缓慢上升的 tau_ff 偏置，检测到持续运动就立刻撤力。
-                    正反方向各做一次，输出起动阈值（‰，相对 u0）。
-                    到达预算 90% 仍未起动时，结论写成「预算内未观察到起动」下界，
-                    不会把预算上限当成测得的静摩擦，也不会自动提高预算继续试。
+  --mode breakaway  起动辨识：MIT 手感模式下 kp=0、ff=1，只叠加缓慢上升的
+                    tau_ff 偏置，检测到持续位移立刻撤力。正反方向各测，
+                    可按多个速率、多次重复。报告里区分：
+                      first_motion_time      首次检出位移的时刻
+                      confirmed_motion_time  满足持续判据的时刻
+                      ramp_at_first_motion   首次位移时的斜坡值
+                      ramp_at_confirm        确认时的斜坡值
+                    以及 total = hold_current + ramp（真正下发的总命令）。
 
-  --mode motion     运动摩擦辨识：CSP 下用小行程、匀速往返代替空载连续转动，
-                    采样只接受「速度稳定、无饱和、无换向」的窗口，
-                    正反方向分别建表，不合并、不预先扣重力。
+  --mode motion     运动摩擦辨识：CSP 小行程匀速往返，逐段保存 (t, q, dq, u)，
+                    不再把多段平均成一张表。只接受速度稳定、无饱和、
+                    未处于换向或制动的窗口；正反向配对要求姿态接近。
 
-注意：
-  * 静止保持电流不一定等于重力电流（静摩擦也分担负载），所以这里只报告
-    「该姿态下的正反向总起动电流」，不命名为纯摩擦参数。
-  * 补偿不能创造力矩；命令被截断和 PD 不够是两回事，本工具分别记录。
+报告分三层，明确哪些能确认、哪些要靠假设、哪些现在不可确认：
+
+  [测量量]   hold_current、正反向起动总命令、首次/确认时刻、起动瞬间余量
+  [派生量]   起动区间中点与半宽——只在正反方向都有效时给出，
+             中点不等于重力电流，半宽不等于双向统一摩擦
+  [不可确认] 重力电流、各方向静摩擦真值、惯量与质量参数
+             重力电流只能给出一致性区间 [u_-, u_+]
 """
 
 from __future__ import annotations
@@ -28,13 +34,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent / "gravity_identification"))
 
 from x1_ros_env import ensure_ros_env
 
@@ -42,8 +48,10 @@ JOINTS_ALL = ["Joint_Body"] + [f"Joint_{s}{i}" for s in "lr" for i in range(1, 8
 RIGHT_JOINTS = [f"Joint_r{i}" for i in range(1, 8)]
 RATED_TORQUE = [52.0, 52.0, 21.0, 21.0, 10.0, 5.4, 5.4]
 LIMIT_BUDGET = [250, 150, 200, 400, 120, 250, 120]
-MOTION_SPEEDS = [0.02, 0.05, 0.10]      # rad/s
-MOTION_SWING = 0.10                      # rad，单向行程
+MOTION_SPEEDS = [0.02, 0.05, 0.10]
+MOTION_SWING = 0.10
+FIRST_MOTION_RAD = 0.02
+CONFIRM_VELOCITY = 0.01
 
 RESULTS: dict = {"budget": [], "breakaway": [], "motion": []}
 
@@ -54,7 +62,7 @@ class Bench:
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import JointState
-        from std_msgs.msg import Float64MultiArray
+        from std_msgs.msg import Float64MultiArray, String
         from std_srvs.srv import Trigger
         from rcl_interfaces.srv import SetParameters
         from x1_coffee_interfaces.msg import MotorStateArray
@@ -67,10 +75,8 @@ class Bench:
         self.stamp = 0.0
         self.node = Node("mit_friction_diagnose")
         self.node.create_subscription(JointState, "/joint_states", self._on_joint, qos_profile_sensor_data)
-        # 广播器是 BEST_EFFORT，而且一次发整组 15 轴。
         self.node.create_subscription(MotorStateArray, "/x1/motor_states", self._on_motor,
                                       qos_profile_sensor_data)
-        from std_msgs.msg import String
         self.node.create_subscription(String, "/x1/pvt_result", self._on_pvt_result, 10)
         self.command_pub = self.node.create_publisher(Float64MultiArray, "/x1/mit_command", 10)
         self.pvt_pub = self.node.create_publisher(Float64MultiArray, "/x1/pvt_move", 10)
@@ -136,9 +142,7 @@ class Bench:
         result = future.result() if future.done() else None
         return result is not None and all(item.successful for item in result.results)
 
-    # ---------- 预算 ----------
-    def baseline(self, duration: float = 1.5) -> Dict[str, float]:
-        """当前姿态下的保持力矩 u0（‰，0x6077 实际值）。"""
+    def hold_current(self, duration: float = 1.0) -> Dict[str, float]:
         samples: Dict[str, List[float]] = {name: [] for name in RIGHT_JOINTS}
         end = time.monotonic() + duration
         while time.monotonic() < end:
@@ -150,43 +154,61 @@ class Bench:
         return {name: (sum(values) / len(values) if values else float("nan"))
                 for name, values in samples.items()}
 
-    # ---------- 起动 ----------
-    def breakaway(self, joint: int, rate: float, kp: float, kd: float,
-                  limit_ratio: float, settle: float) -> dict:
-        """单向力矩斜坡，检测起动。返回阈值或「预算内未起动」。"""
-        name = RIGHT_JOINTS[joint]
-        budget = LIMIT_BUDGET[joint]
-        ceiling = budget * limit_ratio
-        q_start = self.measured[name]
-        ramp = 0.0
-        step = max(1.0, rate * 0.05)          # 每 50 ms 加多少‰
-        moved_at: Optional[float] = None
-        started = time.monotonic()
-        while abs(ramp) < ceiling:
-            ramp += step if rate > 0 else -step
-            self.publish(joint, q_start, kp, kd, ramp)
-            self.spin(0.05)
-            if abs(self.measured[name] - q_start) > 0.02:
-                moved_at = ramp
-                break
-            if time.monotonic() - started > 20.0:
-                break
-        self.publish(joint, q_start, kp, kd, 0.0)
-        self.spin(settle)
-        return {
-            "joint": joint + 1, "budget": budget, "ceiling": ceiling,
-            "direction": "positive" if rate > 0 else "negative",
-            "threshold": moved_at, "started": moved_at is not None,
-            "displacement": self.measured[name] - q_start,
-        }
-
     def publish(self, joint: int, q_des: float, kp: float, kd: float, tau_ff: float) -> None:
         from std_msgs.msg import Float64MultiArray
         message = Float64MultiArray()
         message.data = [float(joint), float(q_des), 0.0, float(kp), float(kd), float(tau_ff)]
         self.command_pub.publish(message)
 
-    # ---------- 运动摩擦 ----------
+    def breakaway(self, joint: int, rate: float, kp: float, kd: float,
+                  limit_ratio: float, settle: float, max_seconds: float) -> dict:
+        """单向斜坡。返回首次位移/确认两套时刻，以及是否在时间/预算内起动。"""
+        name = RIGHT_JOINTS[joint]
+        budget = LIMIT_BUDGET[joint]
+        ceiling = budget * limit_ratio
+        q_start = self.measured[name]
+        ramp = 0.0
+        step = max(0.5, abs(rate) * 0.05)
+        started_at = time.monotonic()
+        first = None            # (time, ramp, displacement)
+        confirmed = None        # (time, ramp)
+        reason = "ceiling"
+        velocity_history: List[float] = []
+        previous = q_start
+        while abs(ramp) < ceiling:
+            ramp += step if rate > 0 else -step
+            self.publish(joint, q_start, kp, kd, ramp)
+            self.spin(0.05)
+            now = time.monotonic()
+            q = self.measured[name]
+            velocity_history.append((q - previous) / 0.05)
+            velocity_history = velocity_history[-3:]
+            previous = q
+            if first is None and abs(q - q_start) > FIRST_MOTION_RAD:
+                first = (now - started_at, ramp, q - q_start)
+            if first is not None and len(velocity_history) == 3 and \
+                    all(abs(value) > CONFIRM_VELOCITY for value in velocity_history):
+                confirmed = (now - started_at, ramp)
+                reason = "started"
+                break
+            if now - started_at > max_seconds:
+                reason = "timeout"
+                break
+        self.publish(joint, q_start, kp, kd, 0.0)
+        self.spin(settle)
+        displacement = self.measured[name] - q_start
+        return {
+            "direction": "positive" if rate > 0 else "negative",
+            "rate": rate, "budget": budget, "ceiling": ceiling,
+            "reason": reason,
+            "ramp_at_first_motion": first[1] if first else None,
+            "first_motion_s": first[0] if first else None,
+            "ramp_at_confirm": confirmed[1] if confirmed else None,
+            "confirm_s": confirmed[0] if confirmed else None,
+            "confirm_delay_s": (confirmed[0] - first[0]) if (first and confirmed) else None,
+            "displacement": displacement,
+        }
+
     def move(self, target: List[float], duration: float) -> bool:
         from std_msgs.msg import Float64MultiArray
         self.pvt_seq += 1
@@ -211,40 +233,34 @@ class Bench:
         print("位置目标没有回应")
         return False
 
-    def steady_torque(self, joint: int, duration: float, settle: float = 0.3) -> Optional[float]:
-        """取窗口末尾的稳态力矩：只接受速度稳定、无饱和、无换向的采样。"""
+    def sweep(self, joint: int, target: float, duration: float,
+              budget: int) -> List[List[float]]:
+        """边运动边采样：t, q, dq, u。不做平均，交给上层判定稳态。"""
         name = RIGHT_JOINTS[joint]
-        self.spin(settle)
-        values, speeds, saturated = [], [], 0
-        end = time.monotonic() + duration
+        samples: List[List[float]] = []
         previous = self.measured[name]
+        last = time.monotonic()
+        end = last + duration
         while time.monotonic() < end:
-            self.rclpy.spin_once(self.node, timeout_sec=0.01)
+            self.rclpy.spin_once(self.node, timeout_sec=0.005)
             state = self.motors.get(name)
-            if state is None or not state.torque_valid:
+            now = time.monotonic()
+            if state is None or not state.torque_valid or now - last < 0.01:
                 continue
             q = self.measured[name]
-            velocity = (q - previous) / 0.01
+            velocity = (q - previous) / (now - last)
             previous = q
-            speeds.append(velocity)
-            values.append(float(state.torque_permille))
-        if len(values) < 10:
-            return None
-        mean_speed = sum(speeds) / len(speeds)
-        spread = max(speeds) - min(speeds)
-        if spread > max(0.02, abs(mean_speed) * 0.5):
-            return None                       # 速度不稳，丢弃窗口
-        return sum(values) / len(values)
+            last = now
+            samples.append([now, q, velocity, float(state.torque_permille)])
+        return samples
 
 
 def check_enabled(bench: Bench) -> bool:
-    """先确认轴真的使能了：没使能时 0x6077 全是 0，会把"没负载"误读成"没摩擦"。"""
     disabled = [name for name in RIGHT_JOINTS
                 if (state := bench.motors.get(name)) is None or not state.enabled]
     if disabled:
         print(f"✗ 这些轴未使能：{', '.join(disabled)}")
-        print("  此时 0x6077 恒为 0，任何摩擦/预算结论都无效。"
-              "请先确认控制栈没有传输故障并重新进入使能保持。")
+        print("  此时 0x6077 恒为 0，任何摩擦/预算结论都无效。")
         return False
     return True
 
@@ -252,19 +268,21 @@ def check_enabled(bench: Bench) -> bool:
 def mode_budget(bench: Bench) -> int:
     if not check_enabled(bench):
         return 2
-    baseline = bench.baseline()
-    print("\n关节  保持力矩 u0(‰)  预算(‰)   正余量 h+   反余量 h-   进入 MIT")
+    hold = bench.hold_current()
+    print("\n[测量量] 当前姿态保持电流与命令余量")
+    print("关节  hold_current(‰)  预算(‰)  h+(‰)  h-(‰)  进入MIT")
     rows = []
     for joint, name in enumerate(RIGHT_JOINTS):
-        u0 = baseline[name]
+        current = hold[name]
         budget = LIMIT_BUDGET[joint]
-        head_plus = budget - u0
-        head_minus = budget + u0
-        entry = "可以" if abs(u0) <= budget * 0.8 else "会被拒绝（>80%预算）"
-        print(f"  r{joint + 1:<2} {u0:>12.1f} {budget:>8} {head_plus:>10.1f} "
-              f"{head_minus:>10.1f}   {entry}")
-        rows.append({"joint": joint + 1, "u0": u0, "budget": budget,
-                     "head_plus": head_plus, "head_minus": head_minus})
+        entry = "可以" if abs(current) <= budget * 0.8 else "会被拒绝"
+        print(f"  r{joint + 1:<2} {current:>13.1f} {budget:>8} {budget - current:>7.1f} "
+              f"{budget + current:>6.1f}  {entry}")
+        rows.append({"joint": joint + 1, "hold_current": current, "budget": budget,
+                     "headroom_positive": budget - current,
+                     "headroom_negative": budget + current})
+    print("\n注意：hold_current 不等于重力电流——静摩擦可能分担了一部分负载，"
+          "本模式不能把它当作重力补偿值。")
     RESULTS["budget"] = rows
     return 0 if rows else 2
 
@@ -272,77 +290,156 @@ def mode_budget(bench: Bench) -> int:
 def mode_breakaway(bench: Bench, args) -> int:
     if not check_enabled(bench):
         return 2
+    rates = [float(value) for value in str(args.rates).split(",") if value.strip()]
+    print(f"\n起动辨识：速率 {rates} ‰/s，每方向重复 {args.repeat} 次，"
+          f"单次最长 {args.max_seconds:.0f}s，记录保持端电流")
+    print("[测量量] 关节 速率 方向 保持电流 首动斜坡 确认斜坡 首动/确认时刻 总命令 起动余量 状态")
     results = []
     for joint in args.joints:
-        # 先记录进入前的保持电流 u0：节点用它作为 MIT 的偏置，
-        # 所以起动时的总下发量 = u0 + 斜坡增量。只报增量会低估真实需要。
-        u0 = bench.baseline(0.6).get(RIGHT_JOINTS[joint], float("nan"))
-        row = {"joint": joint + 1, "u0": u0, "directions": []}
-        for rate in (args.rate, -args.rate):
-            if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff):
-                print("参数下发失败")
-                return 2
-            ok, detail = bench.trigger(bench.enter_client, "/x1/current_gravity_handfeel")
-            if not ok:
-                print(f"r{joint + 1} 进入 MIT 失败：{detail}")
-                row["directions"].append({"direction": "negative" if rate < 0 else "positive",
-                                          "error": detail})
-                continue
-            try:
-                result = bench.breakaway(joint, rate, args.kp, args.kd,
-                                         args.limit_ratio, args.settle)
-            finally:
-                bench.trigger(bench.exit_client, "/x1/current_gravity_exit")
-            if result["started"]:
-                total = u0 + result["threshold"]
-                result["total"] = total
-                print(f"  r{joint + 1} {'正' if rate > 0 else '反'}向起动阈值 "
-                      f"增量 {abs(result['threshold']):.0f}‰，总下发 {total:+.0f}‰"
-                      f"（保持 {u0:+.0f}，预算 {result['budget']}‰）")
-            else:
-                print(f"  r{joint + 1} {'正' if rate > 0 else '反'}向：预算内未观察到起动 "
-                      f"（斜坡到 {result['ceiling']:.0f}‰ 仍不动）→ 阈值只能给下界")
-            row["directions"].append(result)
-        results.append(row)
+        hold = bench.hold_current(0.8).get(RIGHT_JOINTS[joint], float("nan"))
+        for rate in rates:
+            for direction in (1.0, -1.0):
+                for attempt in range(args.repeat):
+                    if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff):
+                        print("参数下发失败")
+                        return 2
+                    ok, detail = bench.trigger(bench.enter_client, "/x1/current_gravity_handfeel")
+                    if not ok:
+                        print(f"  r{joint + 1} 进入 MIT 失败：{detail}")
+                        break
+                    try:
+                        result = bench.breakaway(joint, rate * direction, args.kp, args.kd,
+                                                 args.limit_ratio, args.settle, args.max_seconds)
+                    finally:
+                        bench.trigger(bench.exit_client, "/x1/current_gravity_exit")
+                    result.update({"joint": joint + 1, "attempt": attempt + 1,
+                                   "hold_current": hold})
+                    if result["ramp_at_confirm"] is not None:
+                        result["total"] = hold + result["ramp_at_confirm"]
+                        result["headroom_at_breakaway"] = result["budget"] - result["total"]
+                    else:
+                        result["total"] = None
+                        result["headroom_at_breakaway"] = None
+                    results.append(result)
+                    if result["total"] is None:
+                        print(f"  r{joint + 1} {rate:>4.0f} {result['direction']:<8} "
+                              f"{hold:>8.1f}  ——      ——     ——                ——     ——    "
+                              f"{result['reason']}")
+                    else:
+                        print(f"  r{joint + 1} {rate:>4.0f} {result['direction']:<8} "
+                              f"{hold:>8.1f} {result['ramp_at_first_motion']:>8.0f} "
+                              f"{result['ramp_at_confirm']:>8.0f} "
+                              f"{result['first_motion_s']:>6.2f}/{result['confirm_s']:>5.2f}s  "
+                              f"{result['total']:>6.0f} {result['headroom_at_breakaway']:>7.0f}  "
+                              f"{result['reason']}")
+    summarize_breakaway(results)
     RESULTS["breakaway"] = results
     return 0 if results else 2
+
+
+def summarize_breakaway(results: List[dict]) -> None:
+    """按 (关节, 速率) 汇总，明确区分测量量、派生量和不可确认量。"""
+    print("\n[派生量] 同一速率下的起动区间（只在该速率正反方向都有效时给出）")
+    print("关节 速率  中点(‰)  半宽(‰)  解释")
+    for joint in sorted({item["joint"] for item in results}):
+        for rate in sorted({abs(item["rate"]) for item in results if item["joint"] == joint}):
+            plus = [item for item in results if item["joint"] == joint
+                    and abs(item["rate"] - rate) < 1e-9 and item.get("total") is not None]
+            minus = [item for item in results if item["joint"] == joint
+                     and abs(item["rate"] + rate) < 1e-9 and item.get("total") is not None]
+            if not plus or not minus:
+                continue
+            up = statistics.median(item["total"] for item in plus)
+            down = statistics.median(item["total"] for item in minus)
+            midpoint = (up + down) / 2.0
+            halfwidth = (up - down) / 2.0
+            print(f"  r{joint:<2} {rate:>4.0f} {midpoint:>9.1f} {halfwidth:>8.1f}  "
+                  f"中点≠重力电流，半宽≠双向统一摩擦")
+            print(f"        重力电流只落在这个区间内：{down:+.0f} ‰ ≤ u_g ≤ {up:+.0f} ‰")
+    print("\n[不可确认] 本轮实验不能确定：重力电流 u_g（含静摩擦分担）、"
+          "正反向静摩擦真值、惯量与质量参数。")
+    print("           这些需要独立的重力模型或多姿态辨识，不能由上面的中点/半宽直接给出。")
+
+
+def classify_window(samples: List[List[float]], speed: float, budget: int) -> dict:
+    """判定一段采样能否用于运动摩擦：速度稳定、未饱和、未换向。"""
+    if len(samples) < 20:
+        return {"valid": False, "reason": "样本不足"}
+    steady = []
+    for index in range(2, len(samples)):
+        _, q, velocity, torque = samples[index]
+        if abs(velocity - speed) > max(0.02, abs(speed) * 0.4):
+            continue
+        if abs(torque) > budget * 0.95:
+            continue
+        steady.append((q, torque))
+    if len(steady) < 10:
+        return {"valid": False, "reason": "未形成稳态或已饱和", "n_steady": len(steady)}
+    poses = [item[0] for item in steady]
+    if max(poses) - min(poses) > 0.05:
+        return {"valid": False, "reason": "稳态段姿态漂移过大", "n_steady": len(steady)}
+    return {"valid": True, "reason": "ok", "n_steady": len(steady),
+            "ratio": len(steady) / len(samples),
+            "mean_q": sum(poses) / len(poses),
+            "mean_torque": sum(item[1] for item in steady) / len(steady)}
 
 
 def mode_motion(bench: Bench, args) -> int:
     if not check_enabled(bench):
         return 2
-    rows = []
+    out = Path(args.out)
+    records = []
     for joint in args.joints:
         name = RIGHT_JOINTS[joint]
         for speed in MOTION_SPEEDS:
             for direction in (1.0, -1.0):
-                swing = MOTION_SWING * direction
                 start = [bench.measured[joint_name] for joint_name in JOINTS_ALL]
+                index = JOINTS_ALL.index(name)
                 target = list(start)
-                target[JOINTS_ALL.index(name)] = start[JOINTS_ALL.index(name)] + swing
-                duration = max(0.8, abs(swing) / speed)
+                target[index] = start[index] + MOTION_SWING * direction
+                duration = max(0.8, MOTION_SWING / speed)
                 if not bench.move(target, duration):
                     continue
-                torque = bench.steady_torque(joint, duration * 0.5)
-                if torque is None:
-                    print(f"  r{joint + 1} {direction * speed:+.2f} rad/s：速度不稳，窗口丢弃")
-                    continue
-                rows.append({"joint": joint + 1, "speed": direction * speed, "torque": torque})
-                print(f"  r{joint + 1} {direction * speed:+.2f} rad/s  稳态力矩 {torque:+.1f}‰")
-                # 回到起点，避免行程累积。
+                samples = bench.sweep(joint, target[index], duration, LIMIT_BUDGET[joint])
+                verdict = classify_window(samples, direction * speed, LIMIT_BUDGET[joint])
+                path = out / f"j{joint + 1}_{direction:+.0f}_{speed:.2f}.csv"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("w", encoding="utf-8") as handle:
+                    handle.write("t,q,dq,u\n")
+                    for row in samples:
+                        handle.write(f"{row[0]:.6f},{row[1]:.6f},{row[2]:.6f},{row[3]:.3f}\n")
+                record = {"joint": joint + 1, "speed": direction * speed,
+                          "csv": str(path), **verdict}
+                records.append(record)
+                if verdict["valid"]:
+                    print(f"  r{joint + 1} {direction * speed:+.2f} rad/s  "
+                          f"稳态 {verdict['n_steady']} 点/{verdict['ratio'] * 100:.0f}%  "
+                          f"平均姿态 {verdict['mean_q']:+.3f} 力矩 {verdict['mean_torque']:+.1f}‰")
+                else:
+                    print(f"  r{joint + 1} {direction * speed:+.2f} rad/s  丢弃：{verdict['reason']}")
                 bench.move(start, duration)
-        # 同速度正反向的数据配成摩擦/重力估计（仅当摩擦近似对称时后者才可用）
-        speeds = sorted({abs(row["speed"]) for row in rows if row["joint"] == joint + 1})
-        for value in speeds:
-            plus = [row["torque"] for row in rows
-                    if row["joint"] == joint + 1 and abs(row["speed"] - value) < 1e-9]
-            minus = [row["torque"] for row in rows
-                     if row["joint"] == joint + 1 and abs(row["speed"] + value) < 1e-9]
-            if plus and minus:
-                print(f"     |v|={value:.2f}: 摩擦≈{(plus[0] - minus[0]) / 2:+.1f}‰  "
-                      f"残差(重力+不对称)≈{(plus[0] + minus[0]) / 2:+.1f}‰")
-    RESULTS["motion"] = rows
-    return 0 if rows else 2
+    print("\n[测量量] 每段原始曲线已写入 CSV；正反向配对只在平均姿态相差 <0.02 rad 时给出。")
+    print("关节  |v|      摩擦半差(‰)  残差(‰)  备注")
+    for joint in sorted({item["joint"] for item in records if item["valid"]}):
+        for speed in sorted({abs(item["speed"]) for item in records
+                             if item["joint"] == joint and item["valid"]}):
+            plus = [item for item in records if item["joint"] == joint and item["valid"]
+                    and abs(item["speed"] - speed) < 1e-9]
+            minus = [item for item in records if item["joint"] == joint and item["valid"]
+                     and abs(item["speed"] + speed) < 1e-9]
+            if not plus or not minus:
+                continue
+            if abs(plus[0]["mean_q"] - minus[0]["mean_q"]) > 0.02:
+                print(f"  r{joint:<2} {speed:.2f}      ——           ——       正反向姿态差过大，不配对")
+                continue
+            friction = (plus[0]["mean_torque"] - minus[0]["mean_torque"]) / 2
+            residual = (plus[0]["mean_torque"] + minus[0]["mean_torque"]) / 2
+            print(f"  r{joint:<2} {speed:.2f} {friction:>12.1f} {residual:>9.1f}   "
+                  f"残差含重力与方向不对称，不能直接当重力")
+    print("\n[不可确认] 本模式不给出重力电流，也不把六段平均成一条 u_f(v)；"
+          "负载依赖与方向差异需要独立实验。")
+    RESULTS["motion"] = records
+    return 0 if records else 2
 
 
 def main() -> int:
@@ -351,12 +448,15 @@ def main() -> int:
     parser.add_argument("--mode", choices=("budget", "breakaway", "motion"), default="budget")
     parser.add_argument("--joints", type=lambda text: [int(v) - 1 for v in text.split(",")],
                         default=list(range(7)))
-    parser.add_argument("--rate", type=float, default=20.0, help="起动辨识的力矩上升速率 ‰/s")
+    parser.add_argument("--rates", default="8,20", help="起动辨识的力矩上升速率 ‰/s，可多个")
+    parser.add_argument("--repeat", type=int, default=1, help="每个速率/方向重复次数")
+    parser.add_argument("--max-seconds", type=float, default=20.0,
+                        help="单次斜坡最长秒数；到点即报 timeout，不自动延长")
     parser.add_argument("--limit-ratio", type=float, default=0.9,
-                        help="力矩斜坡最多到预算的多少倍；到顶仍未动就报下界")
-    parser.add_argument("--kp", type=float, default=0.0, help="起动辨识时的 kp（默认 0）")
-    parser.add_argument("--kd", type=float, default=80.0, help="起动辨识时的 kd（限制滑动）")
-    parser.add_argument("--ff", type=float, default=1.0, help="mit_ff_scale，默认 1：用保持电流抵重力")
+                        help="斜坡最多到预算的多少倍")
+    parser.add_argument("--kp", type=float, default=0.0)
+    parser.add_argument("--kd", type=float, default=80.0)
+    parser.add_argument("--ff", type=float, default=1.0)
     parser.add_argument("--settle", type=float, default=0.5)
     parser.add_argument("--out", default=f"log/mit_friction_{time.strftime('%Y%m%d_%H%M%S')}")
     args = parser.parse_args()
