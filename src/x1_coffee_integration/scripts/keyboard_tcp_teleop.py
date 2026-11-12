@@ -32,8 +32,8 @@ COFFEE_JOINTS = ["Joint_Body", *LEFT_JOINTS, *RIGHT_JOINTS]
 # 2026-11-12 实机标定结果：整臂纯 PD 手感。按 m 进入 MIT 前先下发给硬件节点，
 # 否则节点重启后参数会回到默认（前馈开、默认增益）。顺序 r1..r7，单位额定千分比。
 MIT_MASK = 0x7F00
-MIT_KP = [856.0, 889.0, 838.0, 1500.0, 528.0, 760.0, 420.0]
-MIT_KD = [168.0, 103.0, 213.0, 290.0, 93.0, 191.0, 14.0]
+MIT_KP = [856.0, 889.0, 1200.0, 1500.0, 528.0, 760.0, 420.0]
+MIT_KD = [168.0, 103.0, 340.0, 290.0, 93.0, 191.0, 14.0]
 MIT_FF_SCALE = 0.0
 ARMS = {
     "left": ("left_group_controller", LEFT_JOINTS, "left_gripper_tcp"),
