@@ -229,6 +229,14 @@ bool X1CoffeeSystemHardware::startMotionService()
   motion_node_->declare_parameter<std::vector<double>>(
     "mit_kd", std::vector<double>{101.0, 80.0, 102.0, 137.0, 92.0, 267.0, 20.0});
   motion_node_->declare_parameter<double>("mit_ff_scale", 1.0);
+  // 逐轴重力常数前馈（额定千分比），实测自保持电流；默认 0 表示不用。
+  motion_node_->declare_parameter<std::vector<double>>(
+    "mit_gravity_permille", std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+  // 有界起动辅助：幅值 0 即关闭。时间/位移预算是防止它持续推着走。
+  motion_node_->declare_parameter<double>("mit_assist_permille", 0.0);
+  motion_node_->declare_parameter<double>("mit_assist_seconds", 0.5);
+  motion_node_->declare_parameter<double>("mit_assist_rad", 0.01);
+  motion_node_->declare_parameter<double>("mit_assist_velocity", 0.05);
   // 力矩缓升（自动辨识）：单轴、±50‰、速率 ‰/s。
   motion_node_->declare_parameter<std::int64_t>("ramp_mask", 0);
   motion_node_->declare_parameter<std::int64_t>("ramp_from", 0);
@@ -312,7 +320,33 @@ bool X1CoffeeSystemHardware::startMotionService()
             "kd=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] ff=%.2f",
             static_cast<unsigned>(mask), kp[0], kp[1], kp[2], kp[3], kp[4], kp[5], kp[6],
             kd[0], kd[1], kd[2], kd[3], kd[4], kd[5], kd[6], ff);
-          result = direct->enterMitHandfeelMasked(mask, kp, kd, ff);
+          x1_coffee_hardware_core::GtnTransport::MitHandfeelConfig config;
+          config.kp = kp;
+          config.kd = kd;
+          config.ff_scale = ff;
+          const auto gravity_vec =
+            motion_node_->get_parameter("mit_gravity_permille").as_double_array();
+          if (gravity_vec.size() == 7) {
+            for (std::size_t j = 0; j < 7; ++j) {
+              config.gravity[j] = gravity_vec[j];
+            }
+          }
+          config.assist_permille =
+            motion_node_->get_parameter("mit_assist_permille").as_double();
+          config.assist_seconds =
+            motion_node_->get_parameter("mit_assist_seconds").as_double();
+          config.assist_rad = motion_node_->get_parameter("mit_assist_rad").as_double();
+          config.assist_velocity =
+            motion_node_->get_parameter("mit_assist_velocity").as_double();
+          RCLCPP_INFO(
+            rclcpp::get_logger("X1CoffeeSystemHardware"),
+            "MIT 前馈/辅助：gravity=[%.0f %.0f %.0f %.0f %.0f %.0f %.0f] "
+            "assist=%.0f‰ %.2fs %.3frad v<%.2f",
+            config.gravity[0], config.gravity[1], config.gravity[2], config.gravity[3],
+            config.gravity[4], config.gravity[5], config.gravity[6],
+            config.assist_permille, config.assist_seconds, config.assist_rad,
+            config.assist_velocity);
+          result = direct->enterMitHandfeelCfg(mask, config);
         }
         response->success = static_cast<bool>(result);
         response->message = result.detail;

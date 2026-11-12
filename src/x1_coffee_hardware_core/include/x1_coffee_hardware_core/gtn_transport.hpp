@@ -48,6 +48,19 @@ public:
   virtual Result enterMitHandfeelMasked(
     std::uint16_t, const std::array<double, 7> &, const std::array<double, 7> &, double)
   {return enterMitHandfeel();}
+  // 完整手感配置：增益 + 逐轴重力常数前馈 + 有界起动辅助。
+  struct MitHandfeelConfig {
+    std::array<double, 7> kp{};
+    std::array<double, 7> kd{};
+    std::array<double, 7> gravity{};
+    double ff_scale{1.0};
+    double assist_permille{0.0};
+    double assist_seconds{0.5};
+    double assist_rad{0.01};
+    double assist_velocity{0.05};
+  };
+  virtual Result enterMitHandfeelCfg(std::uint16_t, const MitHandfeelConfig &)
+  {return enterMitHandfeel();}
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   // 参数化 MIT 保持：mask 指定轴（必须非空），kp/kd 用额定千分比单位，
   // ff_scale 是重力前馈倍率，0 表示纯 PD、不加重力前馈。

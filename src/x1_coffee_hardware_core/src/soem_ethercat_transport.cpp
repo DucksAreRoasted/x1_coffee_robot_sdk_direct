@@ -2974,6 +2974,17 @@ Result SoemEthercatTransport::enterMitHandfeelMasked(
   std::uint16_t mask, const std::array<double, 7> & kp, const std::array<double, 7> & kd,
   double ff_scale)
 {
+  MitHandfeelConfig config;
+  config.kp = kp; config.kd = kd; config.ff_scale = ff_scale;
+  return enterMitHandfeelCfg(mask, config);
+}
+
+Result SoemEthercatTransport::enterMitHandfeelCfg(
+  std::uint16_t mask, const MitHandfeelConfig & config)
+{
+  const auto & kp = config.kp;
+  const auto & kd = config.kd;
+  const double ff_scale = config.ff_scale;
   // 只允许右臂的轴；掩码为空时按整臂处理，避免误调用把 15 轴全切到力矩模式。
   mask = static_cast<std::uint16_t>(mask & 0x7F00);
   if (mask == 0) {mask = 0x7F00;}
@@ -2993,7 +3004,16 @@ Result SoemEthercatTransport::enterMitHandfeelMasked(
       if (i>=8) {bias[i-8]=latest_[i].actual_current;}
     }
     // 增益来自节点参数；范围在 configure() 里校验，越界就拒绝进入，不静默截断。
-    if (!handfeel_.configure(q,bias,kp,kd,ff_scale)) {
+    MitHandfeel::Config handfeel_config;
+    handfeel_config.kp = config.kp;
+    handfeel_config.kd = config.kd;
+    handfeel_config.gravity = config.gravity;
+    handfeel_config.ff_scale = config.ff_scale;
+    handfeel_config.assist_permille = config.assist_permille;
+    handfeel_config.assist_seconds = config.assist_seconds;
+    handfeel_config.assist_rad = config.assist_rad;
+    handfeel_config.assist_velocity = config.assist_velocity;
+    if (!handfeel_.configure(q,bias,handfeel_config)) {
       return Result::fail(
         CoreError::kWriteFailed,
         "保持电流超过手感试验预算，或 kp/kd/ff_scale 超出范围（kp 0~1000，kd 0~300，ff 0~1）");

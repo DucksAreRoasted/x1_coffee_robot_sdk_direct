@@ -138,7 +138,9 @@ class Bench:
         return bool(result.success), result.message
 
     def push_params(self, kp: Sequence[float], kd: Sequence[float], ff: float,
-                    mask: int = 0x7F00) -> bool:
+                    mask: int = 0x7F00, gravity: Optional[Sequence[float]] = None,
+                    assist: float = 0.0, assist_seconds: float = 0.5,
+                    assist_rad: float = 0.01, assist_velocity: float = 0.05) -> bool:
         from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
         if not self.params_client.wait_for_service(timeout_sec=3.0):
             return False
@@ -152,6 +154,17 @@ class Bench:
                 type=ParameterType.PARAMETER_DOUBLE_ARRAY, double_array_value=list(kd))),
             Parameter(name="mit_ff_scale", value=ParameterValue(
                 type=ParameterType.PARAMETER_DOUBLE, double_value=ff)),
+            Parameter(name="mit_gravity_permille", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE_ARRAY,
+                double_array_value=list(gravity or [0.0] * 7))),
+            Parameter(name="mit_assist_permille", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=assist)),
+            Parameter(name="mit_assist_seconds", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=assist_seconds)),
+            Parameter(name="mit_assist_rad", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=assist_rad)),
+            Parameter(name="mit_assist_velocity", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=assist_velocity)),
         ]
         future = self.params_client.call_async(request)
         self.rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
@@ -433,7 +446,18 @@ def mode_breakaway(bench: Bench, args) -> int:
                     run_hold = bench.hold_current(0.4).get(RIGHT_JOINTS[joint], float("nan"))
                     # 只让被测轴进 CST，其余六轴留在 CSP 位置保持，不再整臂浮动。
                     joint_mask = 0x0100 << joint
-                    if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff, joint_mask):
+                    gravity = None
+                    if args.gravity:
+                        values = [float(item) for item in args.gravity.split(",")]
+                        gravity = values * 7 if len(values) == 1 else values
+                        if len(gravity) != 7:
+                            print("--gravity 需要 1 个或 7 个值")
+                            return 2
+                    if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff, joint_mask,
+                                             gravity=gravity, assist=args.assist,
+                                             assist_seconds=args.assist_seconds,
+                                             assist_rad=args.assist_rad,
+                                             assist_velocity=args.assist_velocity):
                         print("参数下发失败")
                         return 2
                     ok, detail = bench.trigger(bench.enter_client, "/x1/current_gravity_handfeel")
@@ -854,6 +878,13 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=5, help="sweep 模式每个方向测几个点")
     parser.add_argument("--angles", default="",
                         help="poses 模式的角度列表（绝对 rad）；留空取当前±0.15")
+    parser.add_argument("--gravity", default="",
+                        help="逐轴重力常数前馈（‰，1 个或 7 个逗号分隔值），默认不用")
+    parser.add_argument("--assist", type=float, default=0.0,
+                        help="起动辅助幅值（‰），0 表示关闭")
+    parser.add_argument("--assist-seconds", type=float, default=0.5)
+    parser.add_argument("--assist-rad", type=float, default=0.01)
+    parser.add_argument("--assist-velocity", type=float, default=0.05)
     parser.add_argument("--dwell", type=float, default=0.8,
                         help="进入 MIT 并确认模式后，再等多久才开始加力")
     parser.add_argument("--return-kp", type=float, default=400.0,
