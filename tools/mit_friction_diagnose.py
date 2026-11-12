@@ -157,6 +157,24 @@ class Bench:
             self.spin(0.2)
         return False, detail
 
+    def pvt_return(self, joint: int, target: float, timeout: float = 6.0) -> float:
+        """退出 MIT 后回到起点：位置模式能把静摩擦彻底走完。"""
+        name = RIGHT_JOINTS[joint]
+        pose = [self.measured[item] for item in JOINTS_ALL]
+        index = JOINTS_ALL.index(name)
+        delta = target - pose[index]
+        if abs(delta) < 1e-4:
+            return 0.0
+        pose[index] = target
+        if not self.move(pose, max(0.8, abs(delta) / 0.1)):
+            return abs(self.measured[name] - target)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.02)
+            if abs(self.measured[name] - target) < 0.002:
+                break
+        return abs(self.measured[name] - target)
+
     def return_to(self, joint: int, target: float, kp: float, timeout: float = 3.0) -> float:
         """用有界弹簧把关节送回起点，避免每轮实验后手臂逐步漂移。"""
         name = RIGHT_JOINTS[joint]
@@ -361,11 +379,12 @@ def mode_breakaway(bench: Bench, args) -> int:
                     try:
                         result = bench.breakaway(joint, rate * direction, args.kp, args.kd,
                                                  args.limit_ratio, args.settle, args.max_seconds)
-                        drift = bench.return_to(joint, start_pose, args.return_kp)
-                        result["return_drift"] = drift
                     finally:
                         bench.trigger(bench.exit_client, "/x1/current_gravity_exit")
                         bench.wait_ok(bench.hold_client, "CSP 确认")
+                    # 力矩弹簧会被静摩擦卡在半路（残差≈摩擦/kp），回位必须走位置模式。
+                    drift = bench.pvt_return(joint, start_pose)
+                    result["return_drift"] = drift
                     result.update({"joint": joint + 1, "attempt": attempt + 1,
                                    "hold_current": run_hold, "start_pose": start_pose,
                                    "pose_span": start_pose - first_pose})
