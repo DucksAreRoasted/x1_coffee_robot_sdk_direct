@@ -406,15 +406,15 @@ def summarize_breakaway(results: List[dict]) -> None:
             down = statistics.median(item["total"] for item in minus)
             midpoint = (up + down) / 2.0
             halfwidth = (up - down) / 2.0
-            spreads = []
-            for group in (plus, minus):
-                totals = [item["total"] for item in group]
-                median = statistics.median(totals)
-                spreads.append(statistics.pstdev(totals) / abs(median) if median else float("inf"))
+            # 用绝对 ‰ 的离散度：中位数可能接近 0（r1 就是），相对值会失真。
+            spreads = [statistics.pstdev([item["total"] for item in group])
+                       for group in (plus, minus)]
+            budget = plus[0]["budget"]
             worst = max(spreads)
-            verdict = "可用" if worst < 0.15 else ("勉强" if worst < 0.3 else "不可用")
+            verdict = ("可用" if worst < budget * 0.08
+                       else "勉强" if worst < budget * 0.15 else "不可用")
             print(f"  r{joint:<2} {rate:>4.0f} {midpoint:>9.1f} {halfwidth:>8.1f}  "
-                  f"离散度 正{spreads[0] * 100:>3.0f}%/反{spreads[1] * 100:>3.0f}% → {verdict}；"
+                  f"离散 σ: 正{spreads[0]:>5.1f}‰/反{spreads[1]:>5.1f}‰ → {verdict}；"
                   f"中点≠重力电流，半宽≠双向统一摩擦")
             print(f"        重力电流只落在这个区间内：{down:+.0f} ‰ ≤ u_g ≤ {up:+.0f} ‰")
     print("\n[不可确认] 本轮实验不能确定：重力电流 u_g（含静摩擦分担）、"
@@ -423,26 +423,42 @@ def summarize_breakaway(results: List[dict]) -> None:
 
 
 def classify_window(samples: List[List[float]], speed: float, budget: int) -> dict:
-    """判定一段采样能否用于运动摩擦：速度稳定、未饱和、未换向。"""
-    if len(samples) < 20:
+    """匀速运动本来就在移动，所以判速度/力矩稳定，不判位置不变。
+
+    丢掉前后各 20%（起步与制动），只在中段里找与目标速度一致、
+    未饱和的连续样本。
+    """
+    if len(samples) < 40:
         return {"valid": False, "reason": "样本不足"}
+    low = int(len(samples) * 0.2)
+    high = int(len(samples) * 0.8)
+    middle = samples[low:high]
     steady = []
-    for index in range(2, len(samples)):
-        _, q, velocity, torque = samples[index]
-        if abs(velocity - speed) > max(0.02, abs(speed) * 0.4):
+    for _, q, velocity, torque in middle:
+        if abs(velocity - speed) > max(0.015, abs(speed) * 0.35):
             continue
         if abs(torque) > budget * 0.95:
             continue
-        steady.append((q, torque))
-    if len(steady) < 10:
+        steady.append((q, velocity, torque))
+    if len(steady) < 20:
         return {"valid": False, "reason": "未形成稳态或已饱和", "n_steady": len(steady)}
+    velocities = [item[1] for item in steady]
+    torques = [item[2] for item in steady]
     poses = [item[0] for item in steady]
-    if max(poses) - min(poses) > 0.05:
-        return {"valid": False, "reason": "稳态段姿态漂移过大", "n_steady": len(steady)}
+    mean_velocity = sum(velocities) / len(velocities)
+    std_velocity = statistics.pstdev(velocities)
+    if abs(mean_velocity - speed) > abs(speed) * 0.25:
+        return {"valid": False, "reason": f"平均速度偏差大（{mean_velocity:+.3f}）",
+                "n_steady": len(steady)}
+    if std_velocity > abs(speed) * 0.3:
+        return {"valid": False, "reason": f"速度不稳（σ={std_velocity:.3f}）",
+                "n_steady": len(steady)}
     return {"valid": True, "reason": "ok", "n_steady": len(steady),
             "ratio": len(steady) / len(samples),
+            "mean_velocity": mean_velocity, "std_velocity": std_velocity,
             "mean_q": sum(poses) / len(poses),
-            "mean_torque": sum(item[1] for item in steady) / len(steady)}
+            "mean_torque": sum(torques) / len(torques),
+            "std_torque": statistics.pstdev(torques)}
 
 
 def mode_motion(bench: Bench, args) -> int:
@@ -475,7 +491,9 @@ def mode_motion(bench: Bench, args) -> int:
                 if verdict["valid"]:
                     print(f"  r{joint + 1} {direction * speed:+.2f} rad/s  "
                           f"稳态 {verdict['n_steady']} 点/{verdict['ratio'] * 100:.0f}%  "
-                          f"平均姿态 {verdict['mean_q']:+.3f} 力矩 {verdict['mean_torque']:+.1f}‰")
+                          f"实测速度 {verdict['mean_velocity']:+.3f}±{verdict['std_velocity']:.3f}  "
+                          f"姿态 {verdict['mean_q']:+.3f} 力矩 {verdict['mean_torque']:+.1f}"
+                          f"±{verdict['std_torque']:.1f}‰")
                 else:
                     print(f"  r{joint + 1} {direction * speed:+.2f} rad/s  丢弃：{verdict['reason']}")
                 bench.move(start, duration)
