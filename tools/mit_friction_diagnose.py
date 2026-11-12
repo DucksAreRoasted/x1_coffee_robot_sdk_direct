@@ -274,7 +274,10 @@ def mode_breakaway(bench: Bench, args) -> int:
         return 2
     results = []
     for joint in args.joints:
-        row = {"joint": joint + 1, "directions": []}
+        # 先记录进入前的保持电流 u0：节点用它作为 MIT 的偏置，
+        # 所以起动时的总下发量 = u0 + 斜坡增量。只报增量会低估真实需要。
+        u0 = bench.baseline(0.6).get(RIGHT_JOINTS[joint], float("nan"))
+        row = {"joint": joint + 1, "u0": u0, "directions": []}
         for rate in (args.rate, -args.rate):
             if not bench.push_params([args.kp] * 7, [args.kd] * 7, args.ff):
                 print("参数下发失败")
@@ -290,13 +293,16 @@ def mode_breakaway(bench: Bench, args) -> int:
                                          args.limit_ratio, args.settle)
             finally:
                 bench.trigger(bench.exit_client, "/x1/current_gravity_exit")
-            row["directions"].append(result)
             if result["started"]:
+                total = u0 + result["threshold"]
+                result["total"] = total
                 print(f"  r{joint + 1} {'正' if rate > 0 else '反'}向起动阈值 "
-                      f"{abs(result['threshold']):.0f}‰（预算 {result['budget']}‰）")
+                      f"增量 {abs(result['threshold']):.0f}‰，总下发 {total:+.0f}‰"
+                      f"（保持 {u0:+.0f}，预算 {result['budget']}‰）")
             else:
                 print(f"  r{joint + 1} {'正' if rate > 0 else '反'}向：预算内未观察到起动 "
-                      f"（到 {result['ceiling']:.0f}‰ 仍不动）→ 阈值只能给下界")
+                      f"（斜坡到 {result['ceiling']:.0f}‰ 仍不动）→ 阈值只能给下界")
+            row["directions"].append(result)
         results.append(row)
     RESULTS["breakaway"] = results
     return 0 if results else 2
