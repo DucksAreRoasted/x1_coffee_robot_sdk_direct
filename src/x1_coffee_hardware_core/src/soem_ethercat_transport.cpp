@@ -2818,39 +2818,42 @@ Result SoemEthercatTransport::cstZeroStatus(std::uint16_t axis_mask)
 
 Result SoemEthercatTransport::enterMitHandfeel()
 {
-  std::lock_guard<std::mutex> lock(sample_mu_);
-  if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ ||
-    !bus_operational_.load() || official_enable_step_ <= kOfficialEnableEnd ||
-    mit_active_ || path_active_ || motion_armed_ || gravity_calib_running_.load() ||
-    std::chrono::steady_clock::now()-last_cycle_at_ > std::chrono::milliseconds(100))
-  {return Result::fail(CoreError::kWriteFailed, "MIT手感试验需要新鲜CSP保持且无其他运动占用");}
-  CurrentGravity::Pose q{};CurrentGravity::Arm bias{};
-  for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
-    if (torque_axis_[i] || !latest_[i].valid || (latest_[i].status_word & 0x006F)!=0x0027 ||
-      latest_[i].mode_of_operation!=kZeroErrCyclicPositionMode)
-    {return Result::fail(CoreError::kReadFailed, "进入前需要15轴有效CSP使能反馈");}
-    q[i]=pulseToPosition(i,latest_[i].actual_position);
-    if (i>=8) {bias[i-8]=latest_[i].actual_current;}
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    if (!active_ || !gravity_ready_ || !drives_enabled_ || shutdown_outputs_ ||
+      !bus_operational_.load() || official_enable_step_ <= kOfficialEnableEnd ||
+      mit_active_ || path_active_ || motion_armed_ || gravity_calib_running_.load() ||
+      std::chrono::steady_clock::now()-last_cycle_at_ > std::chrono::milliseconds(100))
+    {return Result::fail(CoreError::kWriteFailed, "MIT手感试验需要新鲜CSP保持且无其他运动占用");}
+    CurrentGravity::Pose q{};CurrentGravity::Arm bias{};
+    for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
+      if (torque_axis_[i] || !latest_[i].valid || (latest_[i].status_word & 0x006F)!=0x0027 ||
+        latest_[i].mode_of_operation!=kZeroErrCyclicPositionMode)
+      {return Result::fail(CoreError::kReadFailed, "进入前需要15轴有效CSP使能反馈");}
+      q[i]=pulseToPosition(i,latest_[i].actual_position);
+      if (i>=8) {bias[i-8]=latest_[i].actual_current;}
+    }
+    if (!handfeel_.configure(q,bias)) {
+      return Result::fail(CoreError::kWriteFailed, "保持电流超过手感试验预算，拒绝进入");
+    }
+    current_previous_[1]=bias;current_previous_q_=q;current_velocity_.fill(0.0);
+    current_mode_wait_=0;current_modes_confirmed_=false;current_fault_=0;
+    current_fault_joint_ = -1;
+    current_over_limit_cycles_.fill(0);
+    current_handfeel_=true;current_zero_gravity_=false;current_active_=true;mit_active_=true;mit_zero_g_=false;
+    mit_mask_=0x7F00;motion_armed_=false;
+    for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
+      held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
+    }
   }
-  if (!handfeel_.configure(q,bias)) {
-    return Result::fail(CoreError::kWriteFailed, "保持电流超过手感试验预算，拒绝进入");
-  }
-  current_previous_[1]=bias;current_previous_q_=q;current_velocity_.fill(0.0);
-  current_mode_wait_=0;current_modes_confirmed_=false;current_fault_=0;
-  current_fault_joint_ = -1;
-  current_over_limit_cycles_.fill(0);
-  current_handfeel_=true;current_zero_gravity_=false;current_active_=true;mit_active_=true;mit_zero_g_=false;
-  mit_mask_=0x7F00;motion_armed_=false;
-  for (std::size_t i=0;i<kCoffeeAxisCount;++i) {
-    held_pulse_[i]=goal_pulse_[i]=latest_[i].actual_position;
-  }
+  // requestDriveMode 在 IgH 上是阻塞邮箱调用，放锁后再发，避免和周期线程互锁。
   link_->requestDriveMode(kZeroErrCyclicTorqueMode,mit_mask_);
   return Result{CoreError::kOk, "已请求右臂MIT阻抗手感，等待实际模式；全工作空间弹簧回正，腰和左臂CSP"};
 }
 
 Result SoemEthercatTransport::enterCurrentGravity()
 {
-  std::lock_guard<std::mutex> lock(sample_mu_);
+  std::unique_lock<std::mutex> lock(sample_mu_);
   if (!active_ || !current_loaded_ || !drives_enabled_ || shutdown_outputs_ ||
     !bus_operational_.load() || official_enable_step_ <= kOfficialEnableEnd ||
     mit_active_ || path_active_ || gravity_calib_running_.load())
@@ -2905,6 +2908,8 @@ Result SoemEthercatTransport::enterCurrentGravity()
   for (std::size_t i = 0; i < kCoffeeAxisCount; ++i) {
     held_pulse_[i] = goal_pulse_[i] = latest_[i].actual_position;
   }
+  // 阻塞 SDO 放到锁外：周期线程也在等这把锁，持锁调用会把整个控制环卡死。
+  lock.unlock();
   link_->requestDriveMode(kZeroErrCyclicTorqueMode, mask);
   return Result{CoreError::kOk, "已请求电流重力补偿，等待0x6061确认；腰和未选手臂保持位置"};
 }
@@ -3130,34 +3135,39 @@ Result SoemEthercatTransport::beginRightArmTorque(bool zero_gravity)
       return Result::fail(CoreError::kInvalidConfiguration, "已有轴用纯扭矩映射启动，不能再切 MIT");
     }
   }
-  std::lock_guard<std::mutex> lock(sample_mu_);
-  if (!drives_enabled_) {
-    return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能进入 MIT");
-  }
-  if (mit_active_) {return Result::fail(CoreError::kWriteFailed, "已有扭矩模式占用，请先退出");}
-  mit_mask_ = 0x7F00;
-  const auto & descriptors = coffeeAxisDescriptors();
-  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-    const SlaveFeedback & item = latest_[index];
-    if (!item.valid || (item.status_word & 0x006F) != 0x0027) {
-      return Result::fail(
-        CoreError::kWriteFailed,
-        std::string(descriptors[index].joint_name) + " 还没使能，不能进入 MIT");
+  const std::uint16_t mask = 0x7F00;
+  // 校验和状态准备都在锁内完成；requestDriveMode 在 IgH 上是阻塞邮箱调用，
+  // 必须放锁后再发，否则会和等锁的周期线程互锁（服务无响应）。
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    if (!drives_enabled_) {
+      return Result::fail(CoreError::kWriteFailed, "驱动器未使能，不能进入 MIT");
     }
+    if (mit_active_) {return Result::fail(CoreError::kWriteFailed, "已有扭矩模式占用，请先退出");}
+    mit_mask_ = mask;
+    const auto & descriptors = coffeeAxisDescriptors();
+    for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+      const SlaveFeedback & item = latest_[index];
+      if (!item.valid || (item.status_word & 0x006F) != 0x0027) {
+        return Result::fail(
+          CoreError::kWriteFailed,
+          std::string(descriptors[index].joint_name) + " 还没使能，不能进入 MIT");
+      }
+    }
+    path_active_ = false;
+    path_.clear();
+    motion_armed_ = false;
+    mit_have_sample_.fill(false);
+    mit_velocity_.fill(0.0);
+    for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+      mit_hold_pulse_[index] = latest_[index].actual_position;
+      held_pulse_[index] = latest_[index].actual_position;
+      goal_pulse_[index] = latest_[index].actual_position;
+    }
+    mit_zero_g_ = zero_gravity;
+    mit_active_ = true;
   }
-  path_active_ = false;
-  path_.clear();
-  motion_armed_ = false;
-  mit_have_sample_.fill(false);
-  mit_velocity_.fill(0.0);
-  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-    mit_hold_pulse_[index] = latest_[index].actual_position;
-    held_pulse_[index] = latest_[index].actual_position;
-    goal_pulse_[index] = latest_[index].actual_position;
-  }
-  mit_zero_g_ = zero_gravity;
-  mit_active_ = true;
-  link_->requestDriveMode(kZeroErrCyclicTorqueMode, mit_mask_);
+  link_->requestDriveMode(kZeroErrCyclicTorqueMode, mask);
   if (zero_gravity) {
     return Result{
       CoreError::kOk,
@@ -3175,34 +3185,37 @@ Result SoemEthercatTransport::exitMitHold()
   if (!active_ || link_ == nullptr) {
     return Result::fail(CoreError::kTransportUnavailable, "EtherCAT 传输层尚未激活");
   }
-  std::lock_guard<std::mutex> lock(sample_mu_);
-  if (shutdown_outputs_) {
-    return Result::fail(CoreError::kWriteFailed, "已请求关断，不能把退出请求当成位置保持成功");
-  }
-  current_active_ = false;
-  current_handfeel_ = false;
-  current_zero_gravity_ = false;
-  for (int side = 0; side < 2; ++side) {
-    if (current_bundle_.present[side]) {current_models_[side].setPoseDomainEnforced(true);}
-  }
-  mit_active_ = false;
-  mit_zero_g_ = false;
-  mit_track_qdes_ = false;
-  mit_soft_hold_ = false;
-  motion_armed_ = false;
-  gravity_calib_stop_.store(true);
-  for (const auto & item : latest_) {
-    if (!item.valid || (item.status_word & 0x006F) != 0x0027 ||
-      std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
-    {
-      shutdown_outputs_ = true;
-      return Result::fail(CoreError::kReadFailed, "退出时反馈无效，已请求关断，不能确认位置保持");
+  {
+    std::lock_guard<std::mutex> lock(sample_mu_);
+    if (shutdown_outputs_) {
+      return Result::fail(CoreError::kWriteFailed, "已请求关断，不能把退出请求当成位置保持成功");
+    }
+    current_active_ = false;
+    current_handfeel_ = false;
+    current_zero_gravity_ = false;
+    for (int side = 0; side < 2; ++side) {
+      if (current_bundle_.present[side]) {current_models_[side].setPoseDomainEnforced(true);}
+    }
+    mit_active_ = false;
+    mit_zero_g_ = false;
+    mit_track_qdes_ = false;
+    mit_soft_hold_ = false;
+    motion_armed_ = false;
+    gravity_calib_stop_.store(true);
+    for (const auto & item : latest_) {
+      if (!item.valid || (item.status_word & 0x006F) != 0x0027 ||
+        std::chrono::steady_clock::now() - last_cycle_at_ > std::chrono::milliseconds(100))
+      {
+        shutdown_outputs_ = true;
+        return Result::fail(CoreError::kReadFailed, "退出时反馈无效，已请求关断，不能确认位置保持");
+      }
+    }
+    for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
+      held_pulse_[index] = latest_[index].actual_position;
+      goal_pulse_[index] = latest_[index].actual_position;
     }
   }
-  for (std::size_t index = 0; index < kCoffeeAxisCount; ++index) {
-    held_pulse_[index] = latest_[index].actual_position;
-    goal_pulse_[index] = latest_[index].actual_position;
-  }
+  // 同上：阻塞 SDO 放到锁外，周期线程才能继续跑。
   link_->requestDriveMode(kZeroErrCyclicPositionMode, mit_mask_);
   return Result{CoreError::kOk, "已请求退出扭矩模式并锁存当前位置；需确认CSP反馈和停稳"};
 }
