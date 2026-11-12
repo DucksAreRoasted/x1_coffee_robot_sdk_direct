@@ -291,8 +291,26 @@ class Bench:
                 return True
         return False
 
+    def wait_still_all(self, timeout: float = 3.0, band: float = 0.003) -> bool:
+        """等 15 轴全部静止。发新指令前必须先确认，否则会和还在执行的旧段打架。"""
+        history: List[List[float]] = []
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.02)
+            if not all(name in self.measured for name in JOINTS_ALL):
+                continue
+            history.append([self.measured[name] for name in JOINTS_ALL])
+            history = history[-8:]
+            if len(history) >= 6:
+                if all(max(column) - min(column) < band
+                       for column in zip(*history)):
+                    return True
+        return False
+
     def move(self, target: List[float], duration: float, wait: bool = True) -> bool:
         from std_msgs.msg import Float64MultiArray
+        # 旧段还没走完就发新指令，会让关节在中途被另一条轨迹带走。
+        self.wait_still_all()
         self.pvt_seq += 1
         self.pvt_result = None
         message = Float64MultiArray()
