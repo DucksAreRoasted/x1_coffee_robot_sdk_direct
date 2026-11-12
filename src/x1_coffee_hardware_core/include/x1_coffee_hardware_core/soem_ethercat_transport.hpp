@@ -112,6 +112,7 @@ public:
   Result currentGravityStatus();
   Result currentGravityHoldStatus();
   Result enterMitHold();
+  Result enterMitHoldMasked(std::uint16_t mask, double ff_scale) override;
   Result enterMitHoldEx(
     std::uint16_t mask, const std::array<double, 7> & kp, const std::array<double, 7> & kd,
     double ff_scale) override;

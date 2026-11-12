@@ -43,6 +43,9 @@ public:
   virtual Result enterMitHold() {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持 MIT");}
   // 参数化 MIT 保持：mask 指定轴（必须非空），kp/kd 用额定千分比单位，
   // ff_scale 是重力前馈倍率，0 表示纯 PD、不加重力前馈。
+  // 用传输层从 YAML 读到的逐轴增益进入 MIT，只指定掩码和前馈倍率。
+  virtual Result enterMitHoldMasked(std::uint16_t, double)
+  {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持参数化 MIT");}
   virtual Result enterMitHoldEx(
     std::uint16_t, const std::array<double, 7> &, const std::array<double, 7> &, double)
   {return Result::fail(CoreError::kTransportUnavailable, "当前后端不支持参数化 MIT");}

@@ -1915,6 +1915,14 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
             for (int slot = 0; slot < 7; ++slot) {
               dest[static_cast<std::size_t>(slot)] = values[slot];
             }
+          } else if (key == "mit_kp" || key == "mit_kd") {
+            // 逐轴 MIT 增益，单位额定千分比；0 或缺失表示沿用默认值。
+            auto & dest = key == "mit_kp" ? mit_kp_ : mit_kd_;
+            for (int slot = 0; slot < 7; ++slot) {
+              if (values[slot] > 0.0) {
+                dest[static_cast<std::size_t>(slot)] = values[slot];
+              }
+            }
           } else if (key == "sin_amplitude") {
             for (int slot = 0; slot < 7; ++slot) {
               gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)] = values[slot];
@@ -3194,6 +3202,15 @@ Result SoemEthercatTransport::enterMitHold()
   return beginRightArmTorque(0x7F00, mit_kp_, mit_kd_, 1.0, false);
 }
 
+Result SoemEthercatTransport::enterMitHoldMasked(std::uint16_t mask, double ff_scale)
+{
+  if (ff_scale > 0.0 && !gravity_ready_) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration, "没有 URDF 重力模型，只能做 ff_scale=0 的纯 PD 试验");
+  }
+  return beginRightArmTorque(mask, mit_kp_, mit_kd_, ff_scale, false);
+}
+
 Result SoemEthercatTransport::enterMitHoldEx(
   std::uint16_t mask, const std::array<double, 7> & kp_permille,
   const std::array<double, 7> & kd_permille, double ff_scale)
@@ -3263,11 +3280,11 @@ Result SoemEthercatTransport::beginRightArmTorque(
     const double kp = kp_permille[static_cast<std::size_t>(joint)];
     const double kd = kd_permille[static_cast<std::size_t>(joint)];
     if (!std::isfinite(kp) || !std::isfinite(kd) || kp < 0.0 || kp > 2000.0 ||
-      kd < 0.0 || kd > 200.0)
+      kd < 0.0 || kd > 500.0)
     {
       return Result::fail(
         CoreError::kInvalidConfiguration,
-        "MIT 逐轴增益越界：kp 0..2000‰/rad，kd 0..200‰/(rad·s)");
+        "MIT 逐轴增益越界：kp 0..2000‰/rad，kd 0..500‰/(rad·s)");
     }
   }
   if (!std::isfinite(ff_scale) || ff_scale < 0.0 || ff_scale > 1.0) {
