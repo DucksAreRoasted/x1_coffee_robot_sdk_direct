@@ -278,6 +278,19 @@ class Bench:
                 return True
         return False
 
+    def wait_still(self, joint: int, timeout: float = 3.0, band: float = 0.004) -> bool:
+        """等到关节真的停稳：连续 0.3 秒位置变化小于 band。"""
+        name = RIGHT_JOINTS[joint]
+        end = time.monotonic() + timeout
+        history: List[float] = []
+        while time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.02)
+            history.append(self.measured[name])
+            history = history[-8:]
+            if len(history) >= 6 and max(history) - min(history) < band:
+                return True
+        return False
+
     def move(self, target: List[float], duration: float, wait: bool = True) -> bool:
         from std_msgs.msg import Float64MultiArray
         self.pvt_seq += 1
@@ -648,12 +661,13 @@ def mode_poses(bench: Bench, args) -> int:
                 print(f"  r{joint + 1} 走到 {angle:+.3f} 失败")
                 continue
             bench.spin(args.dwell)
+            # 到位之后还会继续漂，必须等它停稳再取姿态。
+            bench.wait_still(joint)
             start_pose = bench.measured[name]
-            # PVT 只回了「接受」，不代表真的到位；偏差超过 10 mrad 说明姿态没摆到，
-            # 这时测出来的 u_g 会被记成另一个角度，必须拦住。
-            if abs(start_pose - angle) > 0.01:
-                print(f"  r{joint + 1} 目标 {angle:+.3f} rad，实际停在 {start_pose:+.3f} rad，"
-                      f"偏差 {abs(start_pose - angle) * 1000:.0f} mrad，跳过该姿态")
+            print(f"  r{joint + 1} 目标 {angle:+.3f}，实到 {start_pose:+.3f}，"
+                  f"偏差 {(start_pose - angle) * 1000:+.0f} mrad")
+            if abs(start_pose - angle) > 0.05:
+                print(f"     姿态偏差超过 50 mrad，跳过该点")
                 continue
             per_speed = {}
             for speed in speeds:
