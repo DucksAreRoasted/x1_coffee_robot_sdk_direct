@@ -878,7 +878,43 @@ class KeyboardMenu:
         return key if key in "12wsadqeikjluo[]M+-" else None
 
 
+def find_dds_profile() -> Optional[Path]:
+    """定位仓库里的 Fast DDS 配置：源码目录和安装目录启动都要能找到。"""
+    here = Path(__file__).resolve()
+    candidates = [parent / "environment" / "scripts" / "fastdds_localhost.xml" for parent in here.parents]
+    sdk_root = os.environ.get("SDK_ROOT", "")
+    if sdk_root:
+        candidates.insert(0, Path(sdk_root) / "environment" / "scripts" / "fastdds_localhost.xml")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def ensure_ros_env() -> None:
+    """直接用 ros2 run 启动键盘时也要和下位机同域、同 DDS 配置。
+
+    start_upper_moveit.sh 会 source ros_lan_env.sh，单独跑脚本时不会。
+    域不一致时能看见别的机器人发布的 /joint_states，却永远等不到 15 个关节。
+    """
+    domain = os.environ.get("ROS_DOMAIN_ID", "")
+    if domain != "3":
+        os.environ["ROS_DOMAIN_ID"] = "3"
+        print(f"[x1] ROS_DOMAIN_ID={domain or '(未设置)'} → 3，与下位机同域。", flush=True)
+    os.environ.setdefault("ROS_LOCALHOST_ONLY", "0")
+    os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+    if not os.environ.get("FASTRTPS_DEFAULT_PROFILES_FILE"):
+        profile = find_dds_profile()
+        if profile is not None:
+            os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(profile)
+            print(f"[x1] DDS 配置 {profile}", flush=True)
+        else:
+            print("[x1] 未找到 fastdds_localhost.xml，用默认 DDS 发现。", flush=True)
+
+
 def run_teleop() -> int:
+    # 必须在 rclpy 初始化前改环境，参与者创建后再改就无效了。
+    ensure_ros_env()
     import rclpy
     from rclpy.node import Node
     from sensor_msgs.msg import JointState

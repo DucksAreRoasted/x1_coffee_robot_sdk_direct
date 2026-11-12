@@ -4,26 +4,10 @@
        原因：useBuiltinTransports=false 会让同一台机器上的所有参与者共用同一个 UDP 端口，
        服务请求是单播，可能被投递给错误的进程。表现就是「图里能看到节点和服务，
        但 spawn_controllers / 键盘程序永远等不到服务」。
-       改用内置传输后，每个参与者按域号分到独立端口；同用户进程走 SHM，跨机走 UDP。
-       发现仍用下面两个地址做初始对端，避免跑到无关网卡上。 -->
-  <participant profile_name="udp_participant" is_default_profile="true">
-    <rtps>
-      <builtin>
-        <initialPeersList>
-          <locator>
-            <udpv4>
-              <address>192.168.2.1</address>
-            </udpv4>
-          </locator>
-          <locator>
-            <udpv4>
-              <address>192.168.2.230</address>
-            </udpv4>
-          </locator>
-        </initialPeersList>
-      </builtin>
-    </rtps>
-  </participant>
+       改用内置传输后，每个参与者按域号分到独立端口；同用户进程走 SHM，跨机走 UDP。 -->
+  <!-- 不要写 initialPeersList：只给地址不给端口时，发现报文被发到默认 SPDP 端口，
+       域 3 的参与者根本不监听那里。实测这条配置会让同一台机器上的节点互相看不见
+       （/controller_manager 消失、spawn_controllers 永远等不到服务），必须留空用组播。 -->
   <!-- 关掉数据共享（不是 SHM 传输）：root 写的段桌面用户打不开，/robot_description 和
        /tf_static 会收不到。 -->
   <data_writer profile_name="no_data_sharing_writer" is_default_profile="true">
