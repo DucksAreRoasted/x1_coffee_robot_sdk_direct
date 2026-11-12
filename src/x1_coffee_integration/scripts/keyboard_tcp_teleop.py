@@ -28,6 +28,13 @@ Matrix = List[List[float]]
 LEFT_JOINTS = [f"Joint_l{index}" for index in range(1, 8)]
 RIGHT_JOINTS = [f"Joint_r{index}" for index in range(1, 8)]
 COFFEE_JOINTS = ["Joint_Body", *LEFT_JOINTS, *RIGHT_JOINTS]
+
+# 2026-11-12 实机标定结果：整臂纯 PD 手感。按 m 进入 MIT 前先下发给硬件节点，
+# 否则节点重启后参数会回到默认（前馈开、默认增益）。顺序 r1..r7，单位额定千分比。
+MIT_MASK = 0x7F00
+MIT_KP = [856.0, 889.0, 838.0, 990.0, 528.0, 760.0, 420.0]
+MIT_KD = [168.0, 103.0, 213.0, 234.0, 93.0, 191.0, 14.0]
+MIT_FF_SCALE = 0.0
 ARMS = {
     "left": ("left_group_controller", LEFT_JOINTS, "left_gripper_tcp"),
     "right": ("right_group_controller", RIGHT_JOINTS, "right_gripper_tcp"),
@@ -877,6 +884,8 @@ def run_teleop() -> int:
     from sensor_msgs.msg import JointState
     from std_msgs.msg import Float64MultiArray, String
     from std_srvs.srv import Trigger
+    from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+    from rcl_interfaces.srv import SetParameters
 
     urdf_path = default_urdf()
     chains = {
@@ -933,6 +942,8 @@ def run_teleop() -> int:
             self.zero_torque_client = self.create_client(Trigger, "/x1/zero_torque")
             self.brake_client = self.create_client(Trigger, "/x1/brake_hold")
             self.mit_hold_client = self.create_client(Trigger, "/x1/mit_hold")
+            self.mit_params_client = self.create_client(
+                SetParameters, "/x1_coffee_system_hardware/set_parameters")
             self.mit_exit_client = self.create_client(Trigger, "/x1/mit_exit")
             self.gravity_calib_client = self.create_client(Trigger, "/x1/right_arm_gravity_calib")
             self.gravity_reset_client = self.create_client(Trigger, "/x1/right_arm_gravity_reset")
@@ -1024,6 +1035,40 @@ def run_teleop() -> int:
                 print(f"\n{label} 失败: {detail}")
                 return False
             print(f"\n{result.message}")
+            return True
+
+        def apply_mit_params(self) -> bool:
+            """把标定好的整臂 MIT 参数下发给硬件节点，失败就不要进入 MIT。"""
+            from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+
+            if not self.mit_params_client.wait_for_service(timeout_sec=3.0):
+                print("\n没有参数服务 /x1_coffee_system_hardware/set_parameters")
+                return False
+            request = SetParameters.Request()
+            request.parameters = [
+                Parameter(
+                    name="mit_mask",
+                    value=ParameterValue(
+                        type=ParameterType.PARAMETER_INTEGER, integer_value=MIT_MASK)),
+                Parameter(
+                    name="mit_kp",
+                    value=ParameterValue(
+                        type=ParameterType.PARAMETER_DOUBLE_ARRAY, double_array_value=MIT_KP)),
+                Parameter(
+                    name="mit_kd",
+                    value=ParameterValue(
+                        type=ParameterType.PARAMETER_DOUBLE_ARRAY, double_array_value=MIT_KD)),
+                Parameter(
+                    name="mit_ff_scale",
+                    value=ParameterValue(
+                        type=ParameterType.PARAMETER_DOUBLE, double_value=MIT_FF_SCALE)),
+            ]
+            future = self.mit_params_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            result = future.result() if future.done() else None
+            if result is None or not all(item.successful for item in result.results):
+                print("\nMIT 参数下发失败")
+                return False
             return True
 
         def start_sample(self, execute):
@@ -1463,6 +1508,8 @@ def run_teleop() -> int:
                     print("\n再次选择 1：只松开右臂做 MIT。左臂和腰保持位置，请扶着右臂。")
                     continue
                 node.mit_confirm_until = 0.0
+                if not node.apply_mit_params():
+                    continue
                 if node.call_trigger(node.mit_hold_client, "/x1/mit_hold"):
                     node.mit_hold = True
                     node.zero_g = False
