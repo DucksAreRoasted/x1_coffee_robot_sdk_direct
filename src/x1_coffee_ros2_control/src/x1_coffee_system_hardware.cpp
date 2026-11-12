@@ -410,6 +410,11 @@ bool X1CoffeeSystemHardware::startMotionService()
         motion_node_->get_parameter("ramp_to").as_int());
       const double rate = motion_node_->get_parameter("ramp_rate").as_double();
       const auto result = transport_->startCstZeroRamp(mask, from, to, rate);
+      // 缓升内部走的是零力矩 CST 入口，这里同步标记，之后 /x1/mit_zero_check 才能正确退出。
+      if (result) {
+        cst_zero_active_ = true;
+        cst_zero_active_mask_ = mask;
+      }
       response->success = static_cast<bool>(result);
       response->message = result.detail;
     });
