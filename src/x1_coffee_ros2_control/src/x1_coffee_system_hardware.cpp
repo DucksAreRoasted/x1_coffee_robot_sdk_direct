@@ -209,9 +209,9 @@ bool X1CoffeeSystemHardware::startMotionService()
   motion_node_ = std::make_shared<rclcpp::Node>(
     "x1_coffee_system_hardware", rclcpp::NodeOptions().use_global_arguments(false));
   debugf("startMotionService node created");
-  // 零力矩 CST 验证的轴掩码。默认右臂 7 轴（文档 0x7F00）；实机第一次请先
-  // ros2 param set /x1_coffee_system_hardware cst_zero_mask 16384 只切 r7 单轴。
-  motion_node_->declare_parameter<std::int64_t>("cst_zero_mask", 0x7F00);
+  // 零力矩 CST 验证的轴掩码。默认 0：误调用不会切任何轴，必须显式指定。
+  // 实机第一次请先 ros2 param set /x1_coffee_system_hardware cst_zero_mask 16384 只切 r7。
+  motion_node_->declare_parameter<std::int64_t>("cst_zero_mask", 0);
   // 第 4 步的小力矩偏置，单位额定千分比。0 表示只验证模式切换。
   motion_node_->declare_parameter<std::int64_t>("cst_zero_torque_permille", 0);
   // 自动采样的异常出口，服务成功仍须由调用方检查实际运动是否停止。
@@ -333,6 +333,13 @@ bool X1CoffeeSystemHardware::startMotionService()
         motion_node_->get_parameter("cst_zero_mask").as_int(), 0, 0x7FFF);
       const std::uint16_t mask = cst_zero_active_ ? 0x0000 :
         static_cast<std::uint16_t>(configured);
+      // 默认掩码是 0。没有显式指定轴时直接拒绝，别让一次误调用变成「退出」或空操作。
+      if (!cst_zero_active_ && mask == 0) {
+        response->success = false;
+        response->message =
+          "cst_zero_mask 为 0，拒绝切换；先用 ros2 param set 指定单轴掩码（例如 r7 = 16384）";
+        return;
+      }
       // 第 4 步的小力矩：默认 0，即纯模式切换；上限 ±50‰（额定 5%）由传输层再校验一次。
       const std::int32_t torque_permille = mask == 0 ? 0 : static_cast<std::int32_t>(
         std::clamp<std::int64_t>(
