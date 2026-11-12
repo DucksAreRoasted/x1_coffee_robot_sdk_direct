@@ -422,6 +422,8 @@ def main() -> int:
     parser.add_argument("--gear", default="", help="减速比，1 个或 7 个值")
     parser.add_argument("--step", type=float, default=0.04, help="验证阶跃幅度 rad")
     parser.add_argument("--settle", type=float, default=2.0)
+    parser.add_argument("--ff", type=float, default=1.0,
+                        help="验证时 mit_ff_scale：1=用来进入时的保持电流抵重力（默认），0=纯 PD")
     parser.add_argument("--verify", action="store_true", help="把筛选后的候选下发实机验证")
     parser.add_argument("--verify-top", type=int, default=2)
     parser.add_argument("--max-deadband", type=float, default=5.0,
@@ -508,7 +510,7 @@ def main() -> int:
             label = (f"fn{item['fn']:.1f}_z{item['zeta']:.2f}" if args.mode == "position"
                      else "drag")
             if not bench.push_params([row["kp"] for row in item["rows"]],
-                                     [row["kd"] for row in item["rows"]], 0.0):
+                                     [row["kd"] for row in item["rows"]], args.ff):
                 print("参数下发失败")
                 return 2
             ok, detail = bench.trigger(bench.enter_client, "/x1/current_gravity_handfeel")
@@ -519,13 +521,16 @@ def main() -> int:
             try:
                 for joint in args.joints:
                     row = item["rows"][joint]
-                    result = bench.step(joint, args.step, args.settle,
+                    # 阶跃必须大于摩擦死区，否则关节不动、指标全是噪声。
+                    deadband = FRICTION_EST[joint] / max(row["kp"], 1e-6)
+                    step = min(0.12, max(args.step, 1.5 * deadband))
+                    result = bench.step(joint, step, args.settle,
                                         row["kp"], row["kd"], row["budget_nm"], out / label)
                     if not result:
                         continue
                     zeta_text = (f"{result['zeta_measured']:.2f}"
                                  if result["zeta_measured"] else "过阻尼")
-                    print(f"  r{joint + 1}: 过冲 {result['overshoot'] * 100:>5.1f}%  "
+                    print(f"  r{joint + 1} (阶跃 {step:.3f}): 过冲 {result['overshoot'] * 100:>5.1f}%  "
                           f"上升 {result['rise_s']:.2f}s  稳定 {result['settling_s']:.2f}s  "
                           f"峰值力矩 {result['peak_tau']:.2f}N·m "
                           f"(P {result['peak_tau_p']:.2f} / D {result['peak_tau_d']:.2f})  "
