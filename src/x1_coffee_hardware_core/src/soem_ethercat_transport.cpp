@@ -4117,8 +4117,9 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       if (!wait_quiet(side, true)) {
         continue;
       }
-      say("● 软持滑向航点");
-      if (!glide(goal, true, 1.5)) {
+      // 到航点前保持硬跟踪。这里切成软刚度时，重力残差会把臂突然拽走。
+      say("● 慢速走到航点");
+      if (!glide(goal, false, 1.5)) {
         break;
       }
       if (!wait_quiet(goal, false)) {
