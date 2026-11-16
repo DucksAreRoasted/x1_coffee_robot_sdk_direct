@@ -957,7 +957,10 @@ def run_teleop() -> int:
     except (ET.ParseError, StopIteration, AttributeError, TypeError, ValueError):
         # 解析失败时使用当前模型的已知轴高，不能退化为无约束。
         pass
-    waist_plate_clearance = 0.06
+    # 腰轴下方的法兰是实机结构的一部分；不能把整片水平面抬到轴上方
+    # 60 mm，否则会误拒绝位于法兰上方的合法 TCP。网格净距和 MoveIt
+    # 碰撞检查仍负责判断法兰的实际外形，额外高度只留 20 mm 余量。
+    waist_plate_clearance = 0.02
 
     class Teleop(Node):
         def __init__(self) -> None:
