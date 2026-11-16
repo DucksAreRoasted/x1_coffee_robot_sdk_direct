@@ -3284,8 +3284,8 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   // r3/r4 的连杆负载明显高于腕部；20 Nm/rad 在 0.1 rad 级误差时
   // 经常不足以克服静摩擦，采样会被误判为“30 秒没有靠近”。
   // 只提高巡航跟踪，不改变最终硬跟踪和实机 MIT 默认增益。
-  static constexpr double kCruiseKpNm[7] = {40.0, 40.0, 32.0, 32.0, 8.0, 6.0, 5.0};
-  static constexpr double kCruiseKdNm[7] = {10.0, 10.0, 7.0, 7.0, 2.0, 1.5, 1.2};
+  static constexpr double kCruiseKpNm[7] = {40.0, 40.0, 32.0, 32.0, 8.0, 12.0, 10.0};
+  static constexpr double kCruiseKdNm[7] = {10.0, 10.0, 7.0, 7.0, 2.0, 2.0, 1.8};
   double command = 0.0;
   if (mit_track_qdes_ && slot >= 0) {
     const double kp_nm = mit_cruise_hold_ ? kCruiseKpNm[slot] :
@@ -4053,7 +4053,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
               latest_[index].actual_torque, rated);
             if (mit_cruise_hold_ && enabled) {
               // 采样时扣掉巡航弹簧，拟合的才是负载力矩。
-              constexpr double kCruiseKpNm[7] = {40.0, 40.0, 32.0, 32.0, 8.0, 6.0, 5.0};
+              constexpr double kCruiseKpNm[7] = {40.0, 40.0, 32.0, 32.0, 8.0, 12.0, 10.0};
               y[static_cast<std::size_t>(joint)] -= kCruiseKpNm[joint] * (
                 mit_qdes_rad_[index] - q[static_cast<std::size_t>(joint)]);
             }
