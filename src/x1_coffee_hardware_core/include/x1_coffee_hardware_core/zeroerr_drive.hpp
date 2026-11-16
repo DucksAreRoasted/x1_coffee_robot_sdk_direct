@@ -83,4 +83,17 @@ inline double torqueNmFromPermille(std::int16_t permille, double rated_nm)
   return static_cast<double>(permille) * rated_nm / 1000.0;
 }
 
+// 静止时 0x6077 就是电机用来抵消重力的力矩。符号与 0x6071 相同。
+inline double holdingTorqueNm(std::int16_t actual_permille, double rated_nm)
+{
+  return torqueNmFromPermille(actual_permille, rated_nm);
+}
+
+// 零重力：Kp 为 0，只留下 g(q) 和阻尼。
+inline double zeroGravityPermille(
+  double gravity_nm, double kd_nm, double velocity_rad_s, double rated_nm)
+{
+  return torquePermilleFromNm(gravity_nm - kd_nm * velocity_rad_s, rated_nm);
+}
+
 }  // namespace x1_coffee_hardware_core

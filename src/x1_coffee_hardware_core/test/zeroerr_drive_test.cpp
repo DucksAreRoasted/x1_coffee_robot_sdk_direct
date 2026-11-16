@@ -2,6 +2,7 @@
 #include <cstdint>
 
 #include "gtest/gtest.h"
+#include "x1_coffee_hardware_core/urdf_gravity.hpp"
 #include "x1_coffee_hardware_core/zeroerr_drive.hpp"
 
 namespace
@@ -42,6 +43,21 @@ TEST(ZeroErrDrive, rated_torque_converts_newton_meters_without_a_stand_in)
       20.0),
     -16.52, 0.01);
   EXPECT_EQ(x1_coffee_hardware_core::torquePermilleFromNm(16.0, 0.0), 0.0);
+}
+
+TEST(ZeroErrDrive, zero_gravity_command_is_gravity_minus_damping)
+{
+  using x1_coffee_hardware_core::fusedGravityNm;
+  using x1_coffee_hardware_core::holdingTorqueNm;
+  using x1_coffee_hardware_core::zeroGravityPermille;
+  const double gravity = fusedGravityNm(16.0, 1.2, -0.5, 1.5707963267948966);
+  EXPECT_NEAR(gravity, 16.0 * 1.2 - 0.5, 1e-9);
+  EXPECT_NEAR(zeroGravityPermille(gravity, 0.0, 0.2, 52.0), gravity / 52.0 * 1000.0, 1e-9);
+  EXPECT_NEAR(
+    zeroGravityPermille(10.0, 0.15, 2.0, 10.0),
+    (10.0 - 0.15 * 2.0) / 10.0 * 1000.0, 1e-9);
+  EXPECT_NEAR(holdingTorqueNm(200, 52.0), 10.4, 1e-9);
+  EXPECT_EQ(holdingTorqueNm(200, 0.0), 0.0);
 }
 
 TEST(ZeroErrDrive, pdo_image_supports_position_torque_and_mode_feedback)

@@ -3250,7 +3250,7 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
       gravity_nm + kp_nm * error - kd_nm * mit_velocity_[index], rated);
   } else if (mit_zero_g_) {
     const double kd_nm = slot >= 4 ? kSoftKdNm[slot] : 0.0;
-    command = torquePermilleFromNm(gravity_nm - kd_nm * mit_velocity_[index], rated);
+    command = zeroGravityPermille(gravity_nm, kd_nm, mit_velocity_[index], rated);
   } else {
     // mit_ff_scale_ = 0 时就是纯 PD：重力模型完全不参与，手感只由 kp/kd 决定。
     const std::size_t gain = slot >= 0 ? static_cast<std::size_t>(slot) : 0;
@@ -3743,28 +3743,50 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       }
       return q;
     };
-  auto glide = [&](const Pose & target, bool soft, double duration) -> bool {
-      const std::array<double, 7> from = command_q();
+  // 右臂标定全程停在周期同步扭矩。目标角最多领先实测 0.12 rad，
+  // 力矩饱和时参考点停下来等手臂，而不是按时间把目标跑走。
+  auto glide = [&](const Pose & target, bool soft, double) -> bool {
       {
         std::lock_guard<std::mutex> lock(sample_mu_);
         mit_soft_hold_ = soft;
       }
+      constexpr double kLeadRad = 0.12;
       const auto began = std::chrono::steady_clock::now();
-      while (!gravity_calib_stop_.load()) {
-        const double elapsed = std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - began).count();
-        const double alpha = duration > 0.0 ? std::min(1.0, elapsed / duration) : 1.0;
-        const double smooth = alpha * alpha * (3.0 - 2.0 * alpha);
-        std::array<double, 7> next{};
+      double farthest = 0.0;
+      {
+        const std::array<double, 7> now = measured_q();
         for (int joint = 0; joint < 7; ++joint) {
-          next[static_cast<std::size_t>(joint)] = from[static_cast<std::size_t>(joint)] +
-            (target.q[joint] - from[static_cast<std::size_t>(joint)]) * smooth;
+          farthest = std::max(
+            farthest, std::abs(target.q[joint] - now[static_cast<std::size_t>(joint)]));
+        }
+      }
+      const auto deadline = began + std::chrono::duration<double>(
+        std::max(20.0, 4.0 * farthest / kLeadRad));
+      while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
+        const std::array<double, 7> measured = measured_q();
+        std::array<double, 7> next{};
+        double remaining = 0.0;
+        for (int joint = 0; joint < 7; ++joint) {
+          const double error = target.q[joint] - measured[static_cast<std::size_t>(joint)];
+          remaining = std::max(remaining, std::abs(error));
+          const double lead = std::min(kLeadRad, std::max(-kLeadRad, error));
+          next[static_cast<std::size_t>(joint)] =
+            measured[static_cast<std::size_t>(joint)] + lead;
         }
         set_qdes(next);
-        if (alpha >= 1.0) {
+        if (remaining < 0.08) {
+          std::array<double, 7> arrived{};
+          for (int joint = 0; joint < 7; ++joint) {
+            arrived[static_cast<std::size_t>(joint)] = target.q[joint];
+          }
+          set_qdes(arrived);
           return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      if (!gravity_calib_stop_.load()) {
+        say("✗ 右臂力矩跟踪没有在限时内跟上，标定停止");
+        gravity_calib_stop_.store(true);
       }
       return false;
     };
@@ -3866,10 +3888,16 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
           std::lock_guard<std::mutex> lock(sample_mu_);
           for (int joint = 0; joint < 7; ++joint) {
             const std::size_t index = static_cast<std::size_t>(8 + joint);
-            q[static_cast<std::size_t>(joint)] = latest_[index].valid ?
+            const bool enabled = latest_[index].valid &&
+              (latest_[index].status_word & 0x006F) == 0x0027;
+            const double rated = rated_axis_nm_[index];
+            q[static_cast<std::size_t>(joint)] = enabled ?
               pulseToPosition(index, latest_[index].actual_position) : 0.0;
-            y[static_cast<std::size_t>(joint)] = mit_balance_nm_[static_cast<std::size_t>(joint)];
-            usable = usable && mit_soft_hold_ && mit_balance_ok_[static_cast<std::size_t>(joint)];
+            // 记下驱动器实际出力，不用模型自己算的平衡力矩去拟合模型。
+            y[static_cast<std::size_t>(joint)] = holdingTorqueNm(
+              latest_[index].actual_torque, rated);
+            usable = usable && enabled && rated > 0.0 &&
+              std::abs(latest_[index].actual_torque) < 950;
           }
         }
         const double time = std::chrono::duration<double>(
