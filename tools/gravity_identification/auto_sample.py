@@ -3,7 +3,7 @@
 import argparse,csv,json,time,hashlib,signal
 from pathlib import Path
 import numpy as np
-from model import Model,JOINTS
+from model import Model,JOINTS,origin
 from record import validated_joints
 from current_identify import current_pairs,fit_current
 from physical_current_identify import build_report,nominal_gains
@@ -13,6 +13,22 @@ from settling import stable_window,stability_reason,StableConfirmation
 # 自动采样只在启动角附近移动，不做整圈等价角搜索。
 LOCAL_RADIUS_RAD=.20
 FIXED_DRIFT_RAD=.02
+TCP_AXIS_CLEARANCE_M=.03
+
+
+def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_M):
+    """动作编排约束：采样臂末端必须高于腰部转轴，留出安全余量。"""
+    frames, _ = model.geometry(q)
+    tcp = f'{side}ight_gripper_tcp' if side == 'r' else 'left_gripper_tcp'
+    if tcp not in frames or 'Joint_Body' not in model.by_name:
+        raise ValueError('URDF 缺少腰部关节或采样臂 TCP，无法执行高度约束')
+    tcp_z = float(frames[tcp][0][2])
+    waist_origin, _ = origin(model.by_name['Joint_Body'].find('origin'))
+    axis_z = float(waist_origin[2])
+    if tcp_z < axis_z + clearance:
+        raise ValueError(
+            f'{tcp} 高度 {tcp_z:.4f} m 低于腰部转轴安全面 '
+            f'{axis_z + clearance:.4f} m')
 
 
 def arm_indices(side):
@@ -60,6 +76,7 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
             raise ValueError(f'{JOINTS[j]} 可用辨识区间仅 {hi-lo:.4f} rad，请先人工移到更居中的安全姿态')
         low.append(lo);high.append(hi)
     rng=np.random.default_rng(17); plan=[]
+    check_tcp_above_waist_axis(model, seed, side)
     if clearance is not None:clearance(seed)
     attempts=0
     while len(plan)<pose_count*4:
@@ -77,6 +94,11 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
                     for point in path_points(previous,step['q']):clearance(point)
                     previous=step['q']
             except ValueError:continue
+        try:
+            for step in block:
+                check_tcp_above_waist_axis(model, step['q'], side)
+        except ValueError:
+            continue
         plan.extend(block)
     # 腰和未选手臂保持原位；只对会移动的手臂要求额外限位余量。
     for step in plan:
