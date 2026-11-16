@@ -248,7 +248,7 @@ def main():
         if seed is not None:check_local_pose(seed,qnow(),a.side,a.target_radius+.05)
         if seed is not None:body_check(qnow())
     def call(client,request):
-        future=client.call_async(request);end=time.monotonic()+3
+        future=client.call_async(request);end=time.monotonic()+10
         while not future.done() and time.monotonic()<end:spin();health()
         if not future.done():raise RuntimeError('服务超时 '+client.srv_name)
         return future.result()
@@ -258,6 +258,7 @@ def main():
             body_check(q)
             req=GetStateValidity.Request();req.robot_state.joint_state.name=JOINTS
             req.robot_state.joint_state.position=q.tolist()
+            req.group_name='right_arm' if a.side=='r' else 'left_arm'
             if not call(validity,req).valid:raise RuntimeError('MoveIt 路径采样点无效/碰撞')
     try:
         print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
