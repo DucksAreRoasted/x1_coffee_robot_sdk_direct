@@ -3986,8 +3986,10 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
             error = joint_error[static_cast<std::size_t>(joint)];
             worst = joint;
           }
-          // 允许误差小于该轴接近量的 85%。0.053 rad 仍落在 0.08 rad 的接近侧。
-          if (hard && joint_error[static_cast<std::size_t>(joint)] > approach[joint] * 0.85) {
+          // 允许误差小于该轴接近量的 85%，但保留至少 0.08 rad 的静止接近窗口。
+          // 采样记录使用实测角度；这里不能因几毫弧度的静态误差拒绝有效样本。
+          const double approach_allow = std::max(0.08, approach[joint] * 0.85);
+          if (hard && joint_error[static_cast<std::size_t>(joint)] > approach_allow) {
             on_approach_side = false;
           }
         }
@@ -4019,7 +4021,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
           std::lock_guard<std::mutex> lock(sample_mu_);
           saturated = mit_balance_ok_;
         }
-        const double allow = approach[worst] * 0.85;
+        const double allow = std::max(0.08, approach[worst] * 0.85);
         const double shown_speed = speed > 100.0 ? -1.0 : speed;
         say(hard ?
           "! 硬跟踪没有停稳。最大是 r%d，误差 %.3f rad，允许 %.3f，速度 %.3f rad/s" :
