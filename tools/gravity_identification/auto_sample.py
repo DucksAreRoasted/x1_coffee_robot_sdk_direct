@@ -14,6 +14,8 @@ from settling import stable_window,stability_reason,StableConfirmation
 LOCAL_RADIUS_RAD=.20
 FIXED_DRIFT_RAD=.02
 TCP_AXIS_CLEARANCE_M=.03
+WAIST_FLANGE_RADIUS_M=.28
+WAIST_FLANGE_Z_BAND_M=.10
 
 
 def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_M):
@@ -23,12 +25,17 @@ def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_
     if tcp not in frames or 'Joint_Body' not in model.by_name:
         raise ValueError('URDF 缺少腰部关节或采样臂 TCP，无法执行高度约束')
     tcp_z = float(frames[tcp][0][2])
-    waist_origin, _ = origin(model.by_name['Joint_Body'].find('origin'))
+    waist_origin, waist_rot = origin(model.by_name['Joint_Body'].find('origin'))
     axis_z = float(waist_origin[2])
     if tcp_z < axis_z + clearance:
         raise ValueError(
             f'{tcp} 高度 {tcp_z:.4f} m 低于腰部转轴安全面 '
             f'{axis_z + clearance:.4f} m')
+    tcp_local=(np.asarray(frames[tcp][0])-np.asarray(waist_origin)) @ waist_rot
+    radial=float(np.linalg.norm(tcp_local[:2]))
+    if radial < WAIST_FLANGE_RADIUS_M and abs(float(tcp_local[2])) < WAIST_FLANGE_Z_BAND_M:
+        raise ValueError(
+            f'{tcp} 进入腰部法兰径向禁区：r={radial:.3f} m，z={tcp_local[2]:+.3f} m')
 
 
 def arm_indices(side):
