@@ -29,15 +29,14 @@ LEFT_JOINTS = [f"Joint_l{index}" for index in range(1, 8)]
 RIGHT_JOINTS = [f"Joint_r{index}" for index in range(1, 8)]
 COFFEE_JOINTS = ["Joint_Body", *LEFT_JOINTS, *RIGHT_JOINTS]
 
-# 2026-11-12 实机标定结果：整臂纯 PD 手感。按 m 进入 MIT 前先下发给硬件节点，
-# 否则节点重启后参数会回到默认（前馈开、默认增益）。顺序 r1..r7，单位额定千分比。
+# 2026-11-12 拖动辨识初值。按 m 进入 MIT 前先下发给硬件节点，
+# 否则节点重启后参数会回到默认。顺序 r1..r7，单位额定千分比。
 MIT_MASK = 0x7F00
-# 2026-11-12 手动拖动仍偏晃，kd 顶到 MitHandfeel::update 的上限（300‰）。
-# r4/r5 留低一点：r5 电流预算只有 120‰，r4 的励磁预算也更紧，给满在手上体现不出来。
-# 注意：静摩擦（28~89‰）和弹簧力同量级，粘滑造成的抖动靠加 kd 只能变慢、消不掉。
-MIT_KP = [900.0, 900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
-MIT_KD = [300.0, 300.0, 300.0, 250.0, 150.0, 300.0, 300.0]
-MIT_FF_SCALE = 0.0
+# r6 原始 Kp=1488 超过 MitHandfeel 的 1000‰/rad 运行上限，明确采用 900‰。
+MIT_KP = [828.0, 858.0, 834.0, 942.0, 498.0, 900.0, 794.0]
+MIT_KD = [101.0, 80.0, 102.0, 137.0, 92.0, 267.0, 20.0]
+# 使用进入瞬间的保持电流作为局部重力偏置；现场仍需确认符号和下沉趋势。
+MIT_FF_SCALE = 1.0
 ARMS = {
     "left": ("left_group_controller", LEFT_JOINTS, "left_gripper_tcp"),
     "right": ("right_group_controller", RIGHT_JOINTS, "right_gripper_tcp"),

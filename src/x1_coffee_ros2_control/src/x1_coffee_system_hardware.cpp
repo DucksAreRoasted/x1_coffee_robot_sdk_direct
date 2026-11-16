@@ -222,10 +222,10 @@ bool X1CoffeeSystemHardware::startMotionService()
   // 默认掩码 0（必须显式指定单轴），前馈默认 1（保持原有行为）。
   motion_node_->declare_parameter<std::int64_t>("mit_mask", 0);
   // 逐轴 kp/kd，顺序 r1..r7，单位额定千分比。rclcpp 用 double 数组参数承载。
-  // 逐轴增益默认值来自 2026-11-12 的匀速拖动辨识（摩擦 / 0.05 rad 死区，ζ=0.7）。
+  // r6 的辨识 Kp=1488 超过 MitHandfeel 的 1000‰/rad 运行上限，首轮明确使用 900‰。
   // 必须给满 7 个值：空 vector 默认值在 Humble 下类型未定，as_double_array() 会崩。
   motion_node_->declare_parameter<std::vector<double>>(
-    "mit_kp", std::vector<double>{828.0, 858.0, 834.0, 942.0, 498.0, 1488.0, 794.0});
+    "mit_kp", std::vector<double>{828.0, 858.0, 834.0, 942.0, 498.0, 900.0, 794.0});
   motion_node_->declare_parameter<std::vector<double>>(
     "mit_kd", std::vector<double>{101.0, 80.0, 102.0, 137.0, 92.0, 267.0, 20.0});
   motion_node_->declare_parameter<double>("mit_ff_scale", 1.0);
