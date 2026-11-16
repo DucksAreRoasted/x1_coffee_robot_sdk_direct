@@ -36,6 +36,11 @@ class BodyClearance:
     def __init__(self, urdf, package_dir, margin=.04):
         if not np.isfinite(margin) or margin<.04:raise ValueError('躯干净距不得小于0.04m')
         self.margin=margin;self.boxes={};self.trees={}
+        # 实机腰部是带法兰的钢板，URDF 的柱状几何不能完全代表其外廓。
+        # 这是采样专用的保守包络，不修改动力学模型。
+        self.flange_radius=0.24
+        self.flange_z_low=-0.10
+        self.flange_z_high=0.08
         root=ET.parse(urdf).getroot()
         for link in root.findall('link'):
             name=link.get('name')
@@ -73,6 +78,26 @@ class BodyClearance:
 
     def check(self, model, q, side):
         frames,_=model.geometry(q)
+        waist_pos, waist_rot, _ = frames['Waist']
+        tcp_name = f'{side}ight_gripper_tcp' if side == 'r' else 'left_gripper_tcp'
+        tcp_pos = frames[tcp_name][0]
+        tcp_local = (tcp_pos - waist_pos) @ waist_rot
+        tcp_radial = float(np.linalg.norm(tcp_local[:2]))
+        if (tcp_radial < self.flange_radius + self.margin and
+                self.flange_z_low-self.margin <= tcp_local[2] <= self.flange_z_high+self.margin):
+            raise ValueError(f'{tcp_name}进入实机腰部法兰钢板包络，请抬高或向外移开夹爪轨迹')
+        # 检查整条 arm3..arm7 的碰撞包围盒是否进入法兰圆柱；
+        # 仅检查 TCP 会漏掉“末端在上方、腕部连杆扫到钢板”的轨迹。
+        for i in range(3,8):
+            arm=f'arm{side}{i}';ap,ar,_=frames[arm]
+            corners=self.boxes[arm] @ ar.T + ap
+            local=(corners-waist_pos) @ waist_rot
+            radial=np.linalg.norm(local[:,:2],axis=1)
+            inside=(radial < self.flange_radius + self.margin) & \
+                   (local[:,2] >= self.flange_z_low-self.margin) & \
+                   (local[:,2] <= self.flange_z_high+self.margin)
+            if np.any(inside):
+                raise ValueError(f'{arm}进入实机腰部法兰钢板包络，请抬高或向外移开轨迹')
         for torso in ('Body','Waist'):
             tp,tr,_=frames[torso]
             for i in range(3,8):
