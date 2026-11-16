@@ -3280,10 +3280,15 @@ std::int16_t SoemEthercatTransport::mitTorque(std::size_t index, std::int32_t ac
   static constexpr double kHardKdNm[7] = {24.0, 24.0, 12.0, 12.0, 3.0, 2.4, 2.0};
   static constexpr double kSoftKpNm[7] = {2.5, 2.5, 2.0, 2.0, 1.0, 1.0, 1.0};
   static constexpr double kSoftKdNm[7] = {0.35, 0.35, 0.3, 0.3, 0.15, 0.12, 0.15};
+  // 0.08 rad 落后大约只补 3 N·m，摩擦松开时不会窜出去。
+  static constexpr double kCruiseKpNm[7] = {40.0, 40.0, 20.0, 20.0, 8.0, 6.0, 5.0};
+  static constexpr double kCruiseKdNm[7] = {10.0, 10.0, 5.0, 5.0, 2.0, 1.5, 1.2};
   double command = 0.0;
   if (mit_track_qdes_ && slot >= 0) {
-    const double kp_nm = mit_soft_hold_ ? kSoftKpNm[slot] : kHardKpNm[slot];
-    const double kd_nm = mit_soft_hold_ ? kSoftKdNm[slot] : kHardKdNm[slot];
+    const double kp_nm = mit_cruise_hold_ ? kCruiseKpNm[slot] :
+      mit_soft_hold_ ? kSoftKpNm[slot] : kHardKpNm[slot];
+    const double kd_nm = mit_cruise_hold_ ? kCruiseKdNm[slot] :
+      mit_soft_hold_ ? kSoftKdNm[slot] : kHardKdNm[slot];
     if (mit_soft_hold_) {
       mit_balance_nm_[static_cast<std::size_t>(slot)] = gravity_nm + kp_nm * error;
     }
@@ -3477,6 +3482,7 @@ Result SoemEthercatTransport::exitMitHold()
     mit_zero_g_ = false;
     mit_track_qdes_ = false;
     mit_soft_hold_ = false;
+    mit_cruise_hold_ = false;
     motion_armed_ = false;
     gravity_calib_stop_.store(true);
     for (const auto & item : latest_) {
@@ -3740,6 +3746,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     }
     mit_track_qdes_ = true;
     mit_soft_hold_ = false;
+    mit_cruise_hold_ = true;
     for (int joint = 0; joint < 7; ++joint) {
       const std::size_t index = static_cast<std::size_t>(8 + joint);
       mit_qdes_rad_[index] = latest_[index].valid ?
@@ -3863,15 +3870,17 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       }
       return q;
     };
-  // 参考角大约 0.05 rad/s。跟上之后领先不超过 0.06 rad，力矩不会被 0.12 rad 的误差顶满。
-  // 领先太小（0.02 rad）时静摩擦和重力残差按住关节，20 秒误差不降就被误判没跟上。
-  auto glide = [&](const Pose & target, bool soft, double) -> bool {
+  // 参考角自己按 0.05 rad/s 积分，不每拍钉回实测角。
+  // 落后超过 0.08 rad 就停住等，避免硬弹簧把静摩擦冲开后再把关节拽停。
+  auto glide = [&](const Pose & target, bool, double) -> bool {
+      std::array<double, 7> reference = command_q();
       {
         std::lock_guard<std::mutex> lock(sample_mu_);
-        mit_soft_hold_ = soft;
+        mit_soft_hold_ = false;
+        mit_cruise_hold_ = true;
       }
       constexpr double kSpeedRadPerSec = 0.05;
-      constexpr double kLeadRad = 0.06;
+      constexpr double kMaxLeadRad = 0.08;
       constexpr double kStepSec = 0.02;
       const auto began = std::chrono::steady_clock::now();
       double farthest = 0.0;
@@ -3889,25 +3898,30 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       auto progress_at = began;
       while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
         const std::array<double, 7> measured = measured_q();
-        const std::array<double, 7> command = command_q();
-        std::array<double, 7> next{};
         double remaining = 0.0;
-        const double step = kSpeedRadPerSec * kStepSec;
+        bool reference_there = true;
+        const double step_limit = kSpeedRadPerSec * kStepSec;
         for (int joint = 0; joint < 7; ++joint) {
           const double error = target.q[joint] - measured[static_cast<std::size_t>(joint)];
           if (std::abs(error) >= remaining) {
             remaining = std::abs(error);
             worst = joint;
           }
-          const double toward = target.q[joint] - command[static_cast<std::size_t>(joint)];
-          const double paced = command[static_cast<std::size_t>(joint)] +
-            std::min(step, std::max(-step, toward));
-          const double lead = std::min(
-            kLeadRad, std::max(-kLeadRad, paced - measured[static_cast<std::size_t>(joint)]));
-          next[static_cast<std::size_t>(joint)] =
-            measured[static_cast<std::size_t>(joint)] + lead;
+          const double toward = target.q[joint] - reference[static_cast<std::size_t>(joint)];
+          if (std::abs(toward) > 0.002) {
+            reference_there = false;
+          }
+          double step = std::min(step_limit, std::max(-step_limit, toward));
+          const double ahead = reference[static_cast<std::size_t>(joint)] -
+            measured[static_cast<std::size_t>(joint)];
+          if (step > 0.0) {
+            step = std::min(step, std::max(0.0, kMaxLeadRad - ahead));
+          } else if (step < 0.0) {
+            step = std::max(step, std::min(0.0, -kMaxLeadRad - ahead));
+          }
+          reference[static_cast<std::size_t>(joint)] += step;
         }
-        set_qdes(next);
+        set_qdes(reference);
         const auto now = std::chrono::steady_clock::now();
         if (remaining + 0.002 < best_remaining) {
           best_remaining = remaining;
@@ -3917,12 +3931,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
           gravity_calib_stop_.store(true);
           return false;
         }
-        if (remaining < 0.08) {
-          std::array<double, 7> arrived{};
-          for (int joint = 0; joint < 7; ++joint) {
-            arrived[static_cast<std::size_t>(joint)] = target.q[joint];
-          }
-          set_qdes(arrived);
+        if (reference_there && remaining < 0.08) {
           return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -4039,6 +4048,12 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
             // 记下驱动器实际出力，不用模型自己算的平衡力矩去拟合模型。
             y[static_cast<std::size_t>(joint)] = holdingTorqueNm(
               latest_[index].actual_torque, rated);
+            if (mit_cruise_hold_ && enabled) {
+              // 采样时扣掉巡航弹簧，拟合的才是负载力矩。
+              constexpr double kCruiseKpNm[7] = {40.0, 40.0, 20.0, 20.0, 8.0, 6.0, 5.0};
+              y[static_cast<std::size_t>(joint)] -= kCruiseKpNm[joint] * (
+                mit_qdes_rad_[index] - q[static_cast<std::size_t>(joint)]);
+            }
             usable = usable && enabled && rated > 0.0 &&
               std::abs(latest_[index].actual_torque) < 950;
           }

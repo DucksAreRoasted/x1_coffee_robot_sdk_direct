@@ -332,6 +332,8 @@ private:
   // 标定软持时由主站给出目标角。平时 MIT 仍锁存按下瞬间的编码器。
   bool mit_track_qdes_{false};
   bool mit_soft_hold_{false};
+  // 激励轨迹用中等刚度跟着匀速参考角，避免硬刚度把静摩擦冲开后再拽停。
+  bool mit_cruise_hold_{false};
   std::array<std::int32_t, kCoffeeAxisCount> mit_hold_pulse_{};
   std::array<double, kCoffeeAxisCount> mit_prev_rad_{};
   std::array<double, kCoffeeAxisCount> mit_velocity_{};
