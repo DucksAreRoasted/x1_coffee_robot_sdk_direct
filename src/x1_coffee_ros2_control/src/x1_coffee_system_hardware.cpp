@@ -584,7 +584,7 @@ bool X1CoffeeSystemHardware::startMotionService()
       auto * transport = transport_.get();
       if (transport == nullptr) {
         response->success = false;
-        response->message = "当前传输层不能恢复右臂重力初值";
+        response->message = "当前传输层不能恢复右臂重力基准";
         return;
       }
       const auto result = transport->resetRightArmGravityToUrdf();

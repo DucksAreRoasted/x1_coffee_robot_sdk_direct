@@ -38,6 +38,21 @@ struct SlaveCommand
   std::uint8_t mode_of_operation{0x08};
 };
 
+// 工作文件和封存基准用同一份字段。保存只写工作文件。
+struct RightArmGravityFile
+{
+  bool found{false};
+  std::array<double, 7> mass_scale{};
+  std::array<std::array<double, 3>, 7> com_delta{};
+  std::array<double, 7> joint_scale{};
+  std::array<double, 7> joint_bias{};
+  std::array<double, 7> sin_amplitude{};
+  std::array<double, 7> mit_kp{};
+  std::array<double, 7> mit_kd{};
+  bool has_mit_kp{false};
+  bool has_mit_kd{false};
+};
+
 // 生产主站和单测替身都走这个口。替身不打开网口。
 class EthercatLink
 {
@@ -137,6 +152,7 @@ public:
   Result enterZeroGravity();
   // 右臂自己走到两侧停稳点，记录力矩并拟合。左臂和腰不动。结果先留在内存。
   Result startRightArmGravityCalibration();
+  // 服务名沿用。实现回到封存基准，不回到纯 URDF。
   Result resetRightArmGravityToUrdf();
   Result saveRightArmGravity();
   Result requestMovePvt(
@@ -304,6 +320,10 @@ private:
   bool writeRightArmGravityFile(
     const std::array<double, 7> & mass_scale,
     const std::array<std::array<double, 3>, 7> & com_delta) const;
+  bool applyRightArmGravityFile(const RightArmGravityFile & file);
+  // 质量和质心都贴着 CAD、关节偏置也是 0 时，零重力会按纯 URDF 甩臂。
+  bool rightArmGravityIsPureUrdf() const;
+  std::string rightArmGravityBaselinePath() const;
   std::array<double, kCoffeeAxisCount> mit_gravity_nm_{};
   std::array<double, kCoffeeAxisCount> mit_gravity_permille_{};
   std::array<double, kCoffeeAxisCount> mit_qdes_rad_{};

@@ -39,6 +39,85 @@ extern "C" int ecx_FPRD_multi(
 
 namespace x1_coffee_hardware_core
 {
+
+bool readRightArmGravityFile(
+  const std::string & path, RightArmGravityFile * file, std::string * error)
+{
+  if (file == nullptr) {
+    return false;
+  }
+  *file = RightArmGravityFile{};
+  file->mass_scale.fill(1.0);
+  std::ifstream input(path);
+  if (!input) {
+    if (error != nullptr) {
+      *error = "打不开 " + path;
+    }
+    return false;
+  }
+  std::string line;
+  while (std::getline(input, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    std::istringstream stream(line);
+    std::string key;
+    stream >> key;
+    if (!key.empty() && key.back() == ':') {
+      key.pop_back();
+    }
+    double values[7]{};
+    bool numeric = true;
+    for (double & value : values) {
+      if (!(stream >> value)) {
+        numeric = false;
+        break;
+      }
+    }
+    if (!numeric) {
+      continue;
+    }
+    if (key == "mass_scale") {
+      for (int slot = 0; slot < 7; ++slot) {
+        file->mass_scale[static_cast<std::size_t>(slot)] = values[slot];
+      }
+    } else if (key == "com_dx" || key == "com_dy" || key == "com_dz") {
+      const int axis = key == "com_dx" ? 0 : key == "com_dy" ? 1 : 2;
+      for (int slot = 0; slot < 7; ++slot) {
+        file->com_delta[static_cast<std::size_t>(slot)][axis] = values[slot];
+      }
+    } else if (key == "joint_scale") {
+      for (int slot = 0; slot < 7; ++slot) {
+        file->joint_scale[static_cast<std::size_t>(slot)] = values[slot];
+      }
+    } else if (key == "joint_bias") {
+      for (int slot = 0; slot < 7; ++slot) {
+        file->joint_bias[static_cast<std::size_t>(slot)] = values[slot];
+      }
+    } else if (key == "mit_kp") {
+      file->has_mit_kp = true;
+      for (int slot = 0; slot < 7; ++slot) {
+        file->mit_kp[static_cast<std::size_t>(slot)] = values[slot];
+      }
+    } else if (key == "mit_kd") {
+      file->has_mit_kd = true;
+      for (int slot = 0; slot < 7; ++slot) {
+        file->mit_kd[static_cast<std::size_t>(slot)] = values[slot];
+      }
+    } else if (key == "sin_amplitude") {
+      for (int slot = 0; slot < 7; ++slot) {
+        file->sin_amplitude[static_cast<std::size_t>(slot)] = values[slot];
+      }
+    }
+  }
+  file->found = true;
+  return true;
+}
+
+}  // namespace x1_coffee_hardware_core
+
+namespace x1_coffee_hardware_core
+{
 namespace
 {
 
@@ -1895,63 +1974,25 @@ Result SoemEthercatTransport::configure(const HardwareParameters & parameters)
   if (gravity_ready_) {
     if (const std::string * yaml = findParameter(parameters, "right_arm_gravity_yaml")) {
       right_arm_gravity_yaml_ = *yaml;
-      std::array<double, 7> mass_scale{};
-      mass_scale.fill(1.0);
-      std::array<std::array<double, 3>, 7> com_delta{};
-      std::ifstream input(*yaml);
-      if (!input) {
-        say("! 没有右臂重力修正文件，仍用 CAD：%s", yaml->c_str());
-      } else {
-        std::string line;
-        while (std::getline(input, line)) {
-          if (line.empty() || line[0] == '#') {
-            continue;
-          }
-          std::istringstream stream(line);
-          std::string key;
-          stream >> key;
-          if (!key.empty() && key.back() == ':') {
-            key.pop_back();
-          }
-          double values[7]{};
-          for (double & value : values) {
-            stream >> value;
-          }
-          if (key == "mass_scale") {
-            for (int slot = 0; slot < 7; ++slot) {
-              mass_scale[static_cast<std::size_t>(slot)] = values[slot];
-            }
-          } else if (key == "com_dx" || key == "com_dy" || key == "com_dz") {
-            const int axis = key == "com_dx" ? 0 : key == "com_dy" ? 1 : 2;
-            for (int slot = 0; slot < 7; ++slot) {
-              com_delta[static_cast<std::size_t>(slot)][axis] = values[slot];
-            }
-          } else if (key == "joint_scale" || key == "joint_bias") {
-            auto & dest = key == "joint_scale" ? right_joint_scale_ : right_joint_bias_;
-            for (int slot = 0; slot < 7; ++slot) {
-              dest[static_cast<std::size_t>(slot)] = values[slot];
-            }
-          } else if (key == "mit_kp" || key == "mit_kd") {
-            // 逐轴 MIT 增益，单位额定千分比；0 或缺失表示沿用默认值。
-            auto & dest = key == "mit_kp" ? mit_kp_ : mit_kd_;
-            for (int slot = 0; slot < 7; ++slot) {
-              if (values[slot] > 0.0) {
-                dest[static_cast<std::size_t>(slot)] = values[slot];
-              }
-            }
-          } else if (key == "sin_amplitude") {
-            for (int slot = 0; slot < 7; ++slot) {
-              gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)] = values[slot];
-            }
-          }
-        }
-        if (gravity_.setRightArmCorrection(mass_scale, com_delta)) {
-          rememberRightArmCorrection(mass_scale, com_delta);
-          say("✓ 已读右臂质量倍率和质心偏移");
+      RightArmGravityFile loaded;
+      std::string error;
+      std::string loaded_from = *yaml;
+      if (!readRightArmGravityFile(*yaml, &loaded, &error)) {
+        const std::string baseline = rightArmGravityBaselinePath();
+        if (!baseline.empty() && readRightArmGravityFile(baseline, &loaded, &error)) {
+          loaded_from = baseline;
+          say("! 没有工作中的右臂重力文件，已改用封存基准：%s", baseline.c_str());
+        } else {
+          say("! 没有右臂重力修正文件，仍用 CAD：%s", yaml->c_str());
         }
       }
+      if (loaded.found && applyRightArmGravityFile(loaded)) {
+        say("✓ 已读右臂质量倍率和质心偏移：%s", loaded_from.c_str());
+      }
       if (!right_correction_known_) {
-        rememberRightArmCorrection(mass_scale, com_delta);
+        std::array<double, 7> mass_scale{};
+        mass_scale.fill(1.0);
+        rememberRightArmCorrection(mass_scale, {});
       }
     }
   }
@@ -3331,6 +3372,11 @@ Result SoemEthercatTransport::enterZeroGravity()
       CoreError::kInvalidConfiguration,
       "右臂没有读到额定力矩 0x6076，不能把牛·米换成驱动器千分比：" + missing);
   }
+  if (rightArmGravityIsPureUrdf()) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration,
+      "当前是纯 URDF 重力，这台机器上会甩臂。先回到封存基准再进零重力");
+  }
   return beginRightArmTorque(0x7F00, std::array<double, 7>{}, mit_kd_, 1.0, true);
 }
 
@@ -3477,18 +3523,87 @@ Result SoemEthercatTransport::positionToPulse(
   return Result::ok();
 }
 
+std::string SoemEthercatTransport::rightArmGravityBaselinePath() const
+{
+  const std::string name = "right_arm_gravity.yaml";
+  const auto pos = right_arm_gravity_yaml_.rfind(name);
+  if (pos == std::string::npos) {
+    return {};
+  }
+  std::string baseline = right_arm_gravity_yaml_;
+  baseline.replace(pos, name.size(), "right_arm_gravity_baseline.yaml");
+  return baseline;
+}
+
+bool SoemEthercatTransport::rightArmGravityIsPureUrdf() const
+{
+  for (int slot = 0; slot < 7; ++slot) {
+    const std::size_t index = static_cast<std::size_t>(slot);
+    if (std::abs(right_mass_scale_[index] - 1.0) > 0.02) {
+      return false;
+    }
+    if (std::abs(right_joint_bias_[index]) > 0.05) {
+      return false;
+    }
+    if (right_joint_scale_[index] > 0.0 && std::abs(right_joint_scale_[index] - 1.0) > 0.02) {
+      return false;
+    }
+    for (double delta : right_com_delta_[index]) {
+      if (std::abs(delta) > 0.001) {
+        return false;
+      }
+    }
+    if (std::abs(gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)]) > 0.01) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SoemEthercatTransport::applyRightArmGravityFile(const RightArmGravityFile & file)
+{
+  if (!gravity_.setRightArmCorrection(file.mass_scale, file.com_delta)) {
+    return false;
+  }
+  rememberRightArmCorrection(file.mass_scale, file.com_delta);
+  right_joint_scale_ = file.joint_scale;
+  right_joint_bias_ = file.joint_bias;
+  for (int slot = 0; slot < 7; ++slot) {
+    gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)] =
+      file.sin_amplitude[static_cast<std::size_t>(slot)];
+  }
+  if (file.has_mit_kp) {
+    for (int slot = 0; slot < 7; ++slot) {
+      if (file.mit_kp[static_cast<std::size_t>(slot)] > 0.0) {
+        mit_kp_[static_cast<std::size_t>(slot)] = file.mit_kp[static_cast<std::size_t>(slot)];
+      }
+    }
+  }
+  if (file.has_mit_kd) {
+    for (int slot = 0; slot < 7; ++slot) {
+      if (file.mit_kd[static_cast<std::size_t>(slot)] > 0.0) {
+        mit_kd_[static_cast<std::size_t>(slot)] = file.mit_kd[static_cast<std::size_t>(slot)];
+      }
+    }
+  }
+  return true;
+}
+
 bool SoemEthercatTransport::writeRightArmGravityFile(
   const std::array<double, 7> & mass_scale,
   const std::array<std::array<double, 3>, 7> & com_delta) const
 {
-  if (right_arm_gravity_yaml_.empty()) {
+  if (right_arm_gravity_yaml_.empty() ||
+    right_arm_gravity_yaml_ == rightArmGravityBaselinePath())
+  {
     return false;
   }
   std::ofstream output(right_arm_gravity_yaml_);
   if (!output) {
     return false;
   }
-  output << "# 右臂 r1 到 r7。质量倍率相对 URDF，质心偏移单位米。\n";
+  output << "# 右臂工作文件。封存基准 right_arm_gravity_baseline.yaml 不会被这次保存覆盖。\n";
+  output << "# 质量倍率相对 URDF，质心偏移单位米。\n";
   output << "mass_scale:";
   for (double value : mass_scale) {
     output << " " << value;
@@ -3523,20 +3638,19 @@ Result SoemEthercatTransport::resetRightArmGravityToUrdf()
   if (!gravity_ready_) {
     return Result::fail(CoreError::kInvalidConfiguration, "没有 URDF 重力模型");
   }
-  std::array<double, 7> scale{};
-  scale.fill(1.0);
-  std::array<std::array<double, 3>, 7> delta{};
-  if (!gravity_.setRightArmCorrection(scale, delta)) {
-    return Result::fail(CoreError::kInvalidConfiguration, "右臂连杆没有对上 URDF");
+  const std::string baseline = rightArmGravityBaselinePath();
+  RightArmGravityFile file;
+  std::string error;
+  if (baseline.empty() || !readRightArmGravityFile(baseline, &file, &error)) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration,
+      "没有封存基准，拒绝回到纯 URDF：" + error);
   }
-  rememberRightArmCorrection(scale, delta);
-  right_joint_scale_.fill(1.0);
-  right_joint_bias_.fill(0.0);
-  for (int slot = 0; slot < 7; ++slot) {
-    gravity_amplitude_nm_[static_cast<std::size_t>(8 + slot)] = 0.0;
+  if (!applyRightArmGravityFile(file) || rightArmGravityIsPureUrdf()) {
+    return Result::fail(CoreError::kInvalidConfiguration, "封存基准读出来仍是纯 URDF");
   }
-  say("✓ 右臂重力已在内存恢复为 URDF 初值，尚未写入文件");
-  return Result{CoreError::kOk, "右臂已恢复 URDF 初值，关节倍率和偏置也已清掉。按 p p 才会写入文件"};
+  say("✓ 右臂重力已回到封存基准，工作文件还没改");
+  return Result{CoreError::kOk, "已回到封存基准。按 5 5 才写入工作文件，封存文件不会被覆盖"};
 }
 
 void SoemEthercatTransport::rememberRightArmCorrection(
@@ -3574,6 +3688,11 @@ Result SoemEthercatTransport::startRightArmGravityCalibration()
       CoreError::kInvalidConfiguration,
       "右臂没有读到额定力矩 0x6076，记录到的千分比不能换成牛·米：" + missing);
   }
+  if (rightArmGravityIsPureUrdf()) {
+    return Result::fail(
+      CoreError::kInvalidConfiguration,
+      "当前是纯 URDF 重力，标定会带着错误前馈运动。先回到封存基准");
+  }
   if (gravity_calib_running_.exchange(true)) {
     return Result::fail(CoreError::kWriteFailed, "右臂标定已经在进行");
   }
@@ -3582,7 +3701,7 @@ Result SoemEthercatTransport::startRightArmGravityCalibration()
   }
   gravity_calib_stop_.store(false);
   gravity_calib_thread_ = std::thread([this]() {runRightArmGravityCalibration();});
-  return Result{CoreError::kOk, "右臂进入周期同步扭矩，从两侧软持采样。请让开右臂"};
+  return Result{CoreError::kOk, "右臂进入周期同步扭矩，走激励姿态并辨识。请让开右臂"};
 }
 
 void SoemEthercatTransport::runRightArmGravityCalibration()
@@ -3628,28 +3747,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
     }
   }
 
-  struct Pose { const char * name; double q[7]; };
-  // 只到前方和侧方。肩不要转到身后，也不要举过头顶；这台手臂没有机械挡块。
-  const Pose goals[] = {
-    {"前伸", {0.30, -0.10, 0.00, 0.40, 0.00, 0.10, 0.00}},
-    {"前屈肘", {0.55, -0.25, 0.30, 1.15, 0.30, 0.00, 0.20}},
-    {"斜前", {0.95, -0.45, -0.30, 0.75, -0.30, 0.20, -0.20}},
-    {"侧前平举", {1.10, -0.85, 0.00, 1.05, 0.00, 0.15, 0.00}},
-    {"侧前屈肘", {0.85, -0.70, 0.40, 1.25, 0.45, -0.15, 0.30}},
-    {"正侧伸", {0.15, -1.15, 0.00, 0.35, 0.00, 0.10, 0.00}},
-    {"正侧半屈", {0.25, -1.00, 0.35, 0.80, 0.20, 0.20, 0.25}},
-    {"正侧屈肘", {0.10, -1.30, -0.25, 1.20, -0.40, 0.10, -0.20}},
-    {"侧平", {0.40, -1.40, 0.00, 0.85, 0.00, 0.00, 0.00}},
-    {"侧平翻腕", {0.35, -1.20, 0.20, 0.95, 0.50, -0.25, 0.40}},
-    {"前平", {0.70, -0.55, 0.00, 0.55, 0.00, 0.25, 0.00}},
-    {"前伸翻腕", {0.40, -0.20, -0.20, 0.50, -0.45, 0.30, -0.35}},
-    {"侧伸", {0.05, -1.40, 0.10, 0.45, 0.10, -0.10, 0.10}},
-    {"斜侧", {0.75, -1.10, -0.20, 1.10, 0.20, 0.10, 0.20}},
-    {"侧前略收", {0.60, -0.60, 0.15, 1.20, 0.15, 0.15, 0.15}},
-    {"侧下", {-0.90, -0.35, 0.10, 0.55, 0.10, 0.10, 0.00}},
-    {"侧向外", {-0.60, -1.05, 0.00, 0.90, 0.00, 0.15, 0.10}},
-    {"侧前", {-0.25, -0.70, 0.20, 1.05, 0.20, 0.00, 0.00}},
-  };
+  struct Pose { double q[7]; };
   const double approach[7] = {0.12, 0.08, 0.12, 0.12, 0.12, 0.10, 0.12};
   // r1=-1 rad 仍是侧下方，不是翻到身后。再往负超过约 -1.2 rad 才会绕到背后。
   const double side_lower[7] = {-1.20, -1.55, -0.65, 0.05, -0.75, -0.55, -0.65};
@@ -3670,9 +3768,31 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
   start_upper[1] = side_upper[1];
   double lower[7];
   double upper[7];
+  double travel_lower[7];
+  double travel_upper[7];
   for (int joint = 0; joint < 7; ++joint) {
-    lower[joint] = side_lower[joint] + approach[joint];
-    upper[joint] = side_upper[joint] - approach[joint];
+    // 肩保持身前边界。肘和腕用 URDF 内收，机械零位的腕角才不会被裁掉。
+    if (joint < 2) {
+      travel_lower[joint] = side_lower[joint];
+      travel_upper[joint] = side_upper[joint];
+    } else {
+      travel_lower[joint] = urdf_lower[joint] + 0.05;
+      travel_upper[joint] = urdf_upper[joint] - 0.05;
+    }
+    lower[joint] = travel_lower[joint] + approach[joint];
+    upper[joint] = travel_upper[joint] - approach[joint];
+  }
+  // 肩和肘分档、腕部换向，专门激励质量和一阶矩。点都落在身前边界内。
+  std::vector<RightArmSamplePose> excitation;
+  buildRightArmGravityExcitation(lower, upper, &excitation);
+  std::vector<Pose> goals;
+  goals.reserve(excitation.size());
+  for (const RightArmSamplePose & sample : excitation) {
+    Pose pose{};
+    for (int joint = 0; joint < 7; ++joint) {
+      pose.q[joint] = sample.q[joint];
+    }
+    goals.push_back(pose);
   }
   auto clamp_to = [](Pose pose, const double * lo, const double * hi) {
       for (int joint = 0; joint < 7; ++joint) {
@@ -3743,14 +3863,16 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       }
       return q;
     };
-  // 右臂标定全程停在周期同步扭矩。目标角最多领先实测 0.12 rad，
-  // 力矩饱和时参考点停下来等手臂，而不是按时间把目标跑走。
+  // 激励轨迹大约 0.05 rad/s，参考角最多领先实测 0.02 rad。
+  // 还在靠近目标就继续等；连续 20 秒没有靠近超过 0.01 rad 才算没跟上。
   auto glide = [&](const Pose & target, bool soft, double) -> bool {
       {
         std::lock_guard<std::mutex> lock(sample_mu_);
         mit_soft_hold_ = soft;
       }
-      constexpr double kLeadRad = 0.12;
+      constexpr double kSpeedRadPerSec = 0.05;
+      constexpr double kLeadRad = 0.02;
+      constexpr double kStepSec = 0.02;
       const auto began = std::chrono::steady_clock::now();
       double farthest = 0.0;
       {
@@ -3761,19 +3883,34 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         }
       }
       const auto deadline = began + std::chrono::duration<double>(
-        std::max(20.0, 4.0 * farthest / kLeadRad));
+        std::max(90.0, 3.0 * farthest / kSpeedRadPerSec + 30.0));
+      double best_remaining = farthest;
+      auto progress_at = began;
       while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
         const std::array<double, 7> measured = measured_q();
+        const std::array<double, 7> command = command_q();
         std::array<double, 7> next{};
         double remaining = 0.0;
+        const double step = kSpeedRadPerSec * kStepSec;
         for (int joint = 0; joint < 7; ++joint) {
           const double error = target.q[joint] - measured[static_cast<std::size_t>(joint)];
           remaining = std::max(remaining, std::abs(error));
-          const double lead = std::min(kLeadRad, std::max(-kLeadRad, error));
+          const double toward = target.q[joint] - command[static_cast<std::size_t>(joint)];
+          const double paced = command[static_cast<std::size_t>(joint)] +
+            std::min(step, std::max(-step, toward));
+          const double lead = std::min(
+            kLeadRad, std::max(-kLeadRad, paced - measured[static_cast<std::size_t>(joint)]));
           next[static_cast<std::size_t>(joint)] =
             measured[static_cast<std::size_t>(joint)] + lead;
         }
         set_qdes(next);
+        const auto now = std::chrono::steady_clock::now();
+        if (remaining + 0.01 < best_remaining) {
+          best_remaining = remaining;
+          progress_at = now;
+        } else if (std::chrono::duration<double>(now - progress_at).count() > 20.0) {
+          break;
+        }
         if (remaining < 0.08) {
           std::array<double, 7> arrived{};
           for (int joint = 0; joint < 7; ++joint) {
@@ -3940,15 +4077,15 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       return;
     }
   }
-  say("● 右臂只在前方和侧方做软持，不会转到身后。请让开");
+  say("● 右臂走 %zu 个激励姿态，只在前方和侧方。请让开", goals.size());
   std::vector<std::array<double, kCoffeeAxisCount>> poses;
   std::vector<std::array<double, 7>> torques;
-  for (const Pose & goal_in : goals) {
+  for (std::size_t goal_index = 0; goal_index < goals.size(); ++goal_index) {
     if (gravity_calib_stop_.load()) {
       break;
     }
-    const Pose goal = clamp_to(goal_in, lower, upper);
-    say("● 右臂换到%s", goal.name);
+    const Pose goal = clamp_to(goals[goal_index], lower, upper);
+    say("● 右臂换到激励 %zu/%zu", goal_index + 1, goals.size());
     std::array<double, 7> q_sum{};
     std::array<double, 7> y_sum{};
     int sides = 0;
@@ -3960,7 +4097,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       for (int joint = 0; joint < 7; ++joint) {
         side.q[joint] = goal.q[joint] + sign * approach[joint];
       }
-      side = clamp_to(side, side_lower, side_upper);
+      side = clamp_to(side, travel_lower, travel_upper);
       const std::array<double, 7> from = command_q();
       double farthest = 0.0;
       for (int joint = 0; joint < 7; ++joint) {
@@ -4054,8 +4191,11 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
           if (joint_only >= 0 && joint != joint_only) {
             continue;
           }
-          const double error = held_y[index][static_cast<std::size_t>(joint)] -
-            tau[static_cast<std::size_t>(8 + joint)];
+          const double joint_scale = right_joint_scale_[static_cast<std::size_t>(joint)] > 0.0 ?
+            right_joint_scale_[static_cast<std::size_t>(joint)] : 1.0;
+          const double predicted = joint_scale * tau[static_cast<std::size_t>(8 + joint)] +
+            right_joint_bias_[static_cast<std::size_t>(joint)];
+          const double error = held_y[index][static_cast<std::size_t>(joint)] - predicted;
           square += error * error;
           ++count;
         }
@@ -4063,12 +4203,15 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       return count > 0 ? std::sqrt(square / count) : 1e9;
     };
   const double before_held = rms(-1);
-  std::array<double, 7> saved_scale = right_mass_scale_;
-  std::array<std::array<double, 3>, 7> saved_delta = right_com_delta_;
+  const std::array<double, 7> saved_scale = right_mass_scale_;
+  const std::array<std::array<double, 3>, 7> saved_delta = right_com_delta_;
   std::array<double, 7> scale{};
   std::array<std::array<double, 3>, 7> delta{};
   std::string error;
-  if (!gravity_.identifyRightArm(train_q, train_y, &scale, &delta, &error)) {
+  say("● 以当前基准为先验，辨识右臂质量和质心");
+  if (!gravity_.identifyRightArm(
+      train_q, train_y, &scale, &delta, &error, &right_mass_scale_, &right_com_delta_))
+  {
     say("✗ 右臂拟合失败：%s", error.c_str());
     return;
   }
@@ -4079,14 +4222,17 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
   const double after_held = rms(-1);
   if (!(after_held < before_held)) {
     gravity_.setRightArmCorrection(saved_scale, saved_delta);
-    say("! 留出姿态误差 %.3f N·m 没有小于原来的 %.3f，连杆参数保持不变",
+    say("! 留出姿态误差 %.3f N·m 没有小于原来的 %.3f，质量和质心保持基准",
       after_held, before_held);
   } else {
     rememberRightArmCorrection(scale, delta);
-    say("✓ 连杆参数留出误差 %.3f N·m，原来 %.3f", after_held, before_held);
+    say("✓ 质量和质心留出误差 %.3f N·m，原来 %.3f", after_held, before_held);
   }
   int accepted = 0;
   for (int joint = 0; joint < 7; ++joint) {
+    const double scale0 = right_joint_scale_[static_cast<std::size_t>(joint)] > 0.0 ?
+      right_joint_scale_[static_cast<std::size_t>(joint)] : 1.0;
+    const double bias0 = right_joint_bias_[static_cast<std::size_t>(joint)];
     double ata[2][2]{};
     double atb[2]{};
     for (std::size_t index = 0; index < train_q.size(); ++index) {
@@ -4102,17 +4248,19 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       atb[0] += a0 * measured / 0.05;
       atb[1] += a1 * measured / 0.05;
     }
-    ata[0][0] += 4.0;
-    atb[0] += 4.0;
-    ata[1][1] += 0.04;
+    // 先验锚在当前倍率、偏置。数据够时允许偏置相对基准移动最多 2 N·m。
+    ata[0][0] += 44.0;
+    atb[0] += 44.0 * scale0;
+    ata[1][1] += 1.56;
+    atb[1] += 1.56 * bias0;
     const double det = ata[0][0] * ata[1][1] - ata[0][1] * ata[1][0];
     if (std::abs(det) < 1e-9) {
       continue;
     }
     double joint_scale = (atb[0] * ata[1][1] - ata[0][1] * atb[1]) / det;
     double joint_bias = (ata[0][0] * atb[1] - atb[0] * ata[1][0]) / det;
-    joint_scale = std::min(1.2, std::max(0.8, joint_scale));
-    joint_bias = std::min(0.08, std::max(-0.08, joint_bias));
+    joint_scale = std::min(1.4, std::max(0.6, joint_scale));
+    joint_bias = std::min(bias0 + 2.0, std::max(bias0 - 2.0, joint_bias));
     auto joint_rms = [&](double used_scale, double used_bias) {
         double square = 0.0;
         for (std::size_t index = 0; index < held_q.size(); ++index) {
@@ -4123,10 +4271,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         }
         return std::sqrt(square / static_cast<double>(held_q.size()));
       };
-    const double previous_scale = right_joint_scale_[static_cast<std::size_t>(joint)] > 0.0 ?
-      right_joint_scale_[static_cast<std::size_t>(joint)] : 1.0;
-    const double previous = joint_rms(
-      previous_scale, right_joint_bias_[static_cast<std::size_t>(joint)]);
+    const double previous = joint_rms(scale0, bias0);
     const double candidate = joint_rms(joint_scale, joint_bias);
     if (candidate < previous) {
       right_joint_scale_[static_cast<std::size_t>(joint)] = joint_scale;
@@ -4134,7 +4279,8 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       ++accepted;
     }
   }
-  say("✓ 软持拟合结束。%d 个关节的倍率或偏置留出误差变小。按 v v 检验，按 p p 写入", accepted);
+  say("✓ 辨识结束。%d 个关节的倍率或偏置留出误差变小。高级菜单 2 检验，5 写入工作文件。封存基准不动",
+    accepted);
 }
 
 }  // namespace x1_coffee_hardware_core

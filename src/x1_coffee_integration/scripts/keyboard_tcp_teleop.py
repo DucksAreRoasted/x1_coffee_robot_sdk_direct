@@ -860,7 +860,7 @@ class KeyboardMenu:
         "gravity": "重力菜单：1 路径预览  2 自动采样并辨识  3 加载参数  4 进入补偿  5 右臂MIT手感\n2/4/5需连续选择两次；n取消/退出，Esc返回。选臂在主界面1/2完成。",
         "mit": "MIT菜单：M 进入右臂 MIT 参数模式\n1-7 选择关节；[/]选择 q_des/dq_des/Kp/Kd/tau_ff；w/s 调整；+/-调整步长；n退出；Esc返回。",
         "home": "回零菜单：1 机械零位  2 URDF零位\n需连续选择两次；Esc返回。会移动15轴。",
-        "advanced": "高级调试（旧流程，未经新PDO实机验证）：\n1 旧MIT  2 旧零重力  3 旧重力标定  4 重置旧参数  5 保存旧参数  6 零力矩\n需连续选择两次；n退出模式，Esc返回。",
+        "advanced": "高级调试：\n1 MIT  2 零重力  3 激励辨识  4 恢复封存基准  5 保存工作文件  6 零力矩\n2/3/4/5/6 需连续选择两次；n退出模式，Esc返回。保存不覆盖封存基准。",
     }
 
     def __init__(self):
@@ -1630,7 +1630,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_confirm_until:
                     node.gravity_confirm_until = now + 3.0
-                    print("\n再次选择 3：右臂进入周期同步扭矩，从两侧软持到标定姿态。请先按 n，并让开右臂。")
+                    print("\n再次选择 3：从右臂机械零位附近慢速走激励轨迹并辨识。手臂会动，请先按 n 并让开。")
                     continue
                 node.gravity_confirm_until = 0.0
                 node.call_trigger(node.gravity_calib_client, "/x1/right_arm_gravity_calib")
@@ -1639,7 +1639,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_reset_until:
                     node.gravity_reset_until = now + 3.0
-                    print("\n再次选择 4：右臂重力恢复 URDF 初值。")
+                    print("\n再次选择 4：右臂重力回到封存基准，不回到 URDF，也不写文件。")
                     continue
                 node.gravity_reset_until = 0.0
                 node.call_trigger(node.gravity_reset_client, "/x1/right_arm_gravity_reset")
@@ -1648,7 +1648,7 @@ def run_teleop() -> int:
                 now = time.monotonic()
                 if now > node.gravity_save_until:
                     node.gravity_save_until = now + 3.0
-                    print("\n再次选择 5：把当前右臂重力修正写入文件。")
+                    print("\n再次选择 5：把当前右臂重力修正写入工作文件，封存基准不动。")
                     continue
                 node.gravity_save_until = 0.0
                 node.call_trigger(node.gravity_save_client, "/x1/right_arm_gravity_save")

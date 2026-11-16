@@ -535,7 +535,9 @@ bool UrdfGravity::identifyRightArm(
   const std::vector<std::array<double, 7>> & tau_nm,
   std::array<double, 7> * mass_scale,
   std::array<std::array<double, 3>, 7> * com_delta,
-  std::string * error) const
+  std::string * error,
+  const std::array<double, 7> * prior_scale,
+  const std::array<std::array<double, 3>, 7> * prior_delta) const
 {
   if (!ready_ || mass_scale == nullptr || com_delta == nullptr || q_rad.size() != tau_nm.size() ||
     q_rad.size() < 8)
@@ -606,13 +608,25 @@ bool UrdfGravity::identifyRightArm(
   }
   double theta0[kParam]{};
   double sigma[kParam]{};
+  const bool have_prior = prior_scale != nullptr && prior_delta != nullptr;
   for (int slot = 0; slot < 7; ++slot) {
     const FlatLink & cad = cad_links_[static_cast<std::size_t>(right_link_[slot])];
-    theta0[slot * 4] = cad.mass;
-    sigma[slot * 4] = 0.30 * std::max(cad.mass, 1e-3);
+    double scale0 = 1.0;
+    if (have_prior) {
+      scale0 = std::min(2.0, std::max(0.5, (*prior_scale)[static_cast<std::size_t>(slot)]));
+    }
+    const double mass0 = scale0 * cad.mass;
+    theta0[slot * 4] = mass0;
+    // 有封存基准时先验更窄，数据仍能把质量拉开，弱激励则留在基准附近。
+    sigma[slot * 4] = (have_prior ? 0.20 : 0.30) * std::max(cad.mass, 1e-3);
     for (int axis = 0; axis < 3; ++axis) {
-      theta0[slot * 4 + 1 + axis] = cad.mass * cad.com[axis];
-      sigma[slot * 4 + 1 + axis] = 0.03 * std::max(cad.mass, 1e-3);
+      double delta = 0.0;
+      if (have_prior) {
+        delta = std::min(0.08, std::max(
+          -0.08, (*prior_delta)[static_cast<std::size_t>(slot)][axis]));
+      }
+      theta0[slot * 4 + 1 + axis] = mass0 * (cad.com[axis] + delta);
+      sigma[slot * 4 + 1 + axis] = (have_prior ? 0.025 : 0.03) * std::max(cad.mass, 1e-3);
     }
   }
   double ata[kParam][kParam]{};

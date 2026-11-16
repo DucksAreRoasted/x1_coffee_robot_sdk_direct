@@ -22,6 +22,109 @@ inline double fusedGravityNm(
   return gain * urdf_nm + amplitude_nm * std::sin(angle_rad);
 }
 
+// 在已经封存的关节倍率和偏置上只走一小步。
+// 倍率每轮最多 ±0.05，偏置每轮最多 ±0.15 N·m。
+// 不把绝对偏置夹回 ±0.08，那会清掉文件里几牛·米的基准。
+// 右臂重力激励。原点是 initial_positions.yaml 里的右臂机械零位。
+// 后续姿态只在零位附近换肩、肘和腕，并按相邻关节行程从近到远排列。
+struct RightArmSamplePose
+{
+  double q[7];
+};
+
+inline void buildRightArmGravityExcitation(
+  const double * lower, const double * upper, std::vector<RightArmSamplePose> * poses)
+{
+  if (poses == nullptr || lower == nullptr || upper == nullptr) {
+    return;
+  }
+  poses->clear();
+  const double home[7] = {-0.99, 0.00, -0.04, 0.20, 1.64, 1.15, -1.66};
+  const double delta[][7] = {
+    {0, 0, 0, 0, 0, 0, 0},
+    {0, -0.22, 0, 0, 0, 0, 0},
+    {0, -0.42, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0.28, 0, 0, 0},
+    {0, 0, 0, 0.52, 0, 0, 0},
+    {0.18, 0, 0, 0, 0, 0, 0},
+    {-0.18, 0, 0, 0, 0, 0, 0},
+    {0, -0.28, 0, 0.30, 0, 0, 0},
+    {0, -0.42, 0.16, 0.48, 0, 0, 0},
+    {0, -0.15, -0.16, 0.22, 0.20, 0.14, -0.16},
+    {0, -0.32, 0.16, 0.40, -0.20, -0.14, 0.16},
+    {0.16, -0.36, 0, 0.34, 0.16, -0.12, 0.14},
+    {-0.16, -0.18, 0.14, 0.42, -0.16, 0.12, -0.14},
+    {0, -0.40, -0.14, 0.50, 0.14, 0.10, 0.12},
+    {0.12, -0.10, 0, 0.16, -0.18, 0.16, -0.18},
+    {0, -0.34, 0.12, 0.24, 0.10, -0.16, 0.12},
+  };
+  constexpr int kCount = static_cast<int>(sizeof(delta) / sizeof(delta[0]));
+  RightArmSamplePose raw[kCount]{};
+  for (int index = 0; index < kCount; ++index) {
+    for (int joint = 0; joint < 7; ++joint) {
+      const double value = home[joint] + delta[index][joint];
+      raw[index].q[joint] = std::min(upper[joint], std::max(lower[joint], value));
+    }
+  }
+  bool used[kCount]{};
+  int current = 0;
+  double nearest = 1e9;
+  for (int index = 0; index < kCount; ++index) {
+    double step = 0.0;
+    for (int joint = 0; joint < 7; ++joint) {
+      step = std::max(step, std::abs(raw[index].q[joint] - home[joint]));
+    }
+    if (step < nearest) {
+      nearest = step;
+      current = index;
+    }
+  }
+  poses->reserve(static_cast<std::size_t>(kCount));
+  for (int placed = 0; placed < kCount; ++placed) {
+    poses->push_back(raw[current]);
+    used[current] = true;
+    int next = -1;
+    double next_step = 1e9;
+    for (int index = 0; index < kCount; ++index) {
+      if (used[index]) {
+        continue;
+      }
+      double step = 0.0;
+      for (int joint = 0; joint < 7; ++joint) {
+        step = std::max(step, std::abs(raw[index].q[joint] - raw[current].q[joint]));
+      }
+      if (step < next_step) {
+        next_step = step;
+        next = index;
+      }
+    }
+    if (next < 0) {
+      break;
+    }
+    current = next;
+  }
+}
+
+inline void trimJointGravity(
+  double scale, double bias, double fitted_scale, double fitted_bias,
+  double * scale_out, double * bias_out)
+{
+  constexpr double kScaleStep = 0.05;
+  constexpr double kBiasStepNm = 0.15;
+  const double base_scale = scale > 0.0 ? scale : 1.0;
+  const double next_scale = std::min(
+    1.2, std::max(0.8, base_scale + std::min(
+      kScaleStep, std::max(-kScaleStep, fitted_scale - base_scale))));
+  const double next_bias = bias + std::min(
+    kBiasStepNm, std::max(-kBiasStepNm, fitted_bias - bias));
+  if (scale_out != nullptr) {
+    *scale_out = next_scale;
+  }
+  if (bias_out != nullptr) {
+    *bias_out = next_bias;
+  }
+}
+
 
 // 由 URDF 的质量、重心和关节轴计算当前姿态的静重力矩。
 // 夹爪暂按 1 kg 点质量放在末端坐标系原点，手册给出重心后再改。
@@ -49,12 +152,15 @@ public:
     const std::array<double, 7> & mass_scale,
     const std::array<std::array<double, 3>, 7> & com_delta);
   // 用静止姿态上的右臂力矩辨识质量倍率和质心偏移。tau 单位 N·m，对应 r1..r7。
+  // prior 为空时先验是 CAD。给出封存基准时，先验是这组倍率和质心偏移。
   bool identifyRightArm(
     const std::vector<std::array<double, kCoffeeAxisCount>> & q_rad,
     const std::vector<std::array<double, 7>> & tau_nm,
     std::array<double, 7> * mass_scale,
     std::array<std::array<double, 3>, 7> * com_delta,
-    std::string * error) const;
+    std::string * error,
+    const std::array<double, 7> * prior_scale = nullptr,
+    const std::array<std::array<double, 3>, 7> * prior_delta = nullptr) const;
 
 private:
   struct Link

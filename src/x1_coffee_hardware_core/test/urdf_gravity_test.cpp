@@ -32,6 +32,94 @@ TEST(UrdfGravity, fusedTorqueKeepsTheModelAndAddsTheSingleJointSine)
   EXPECT_NEAR(fusedGravityNm(10.0, 1.0, -2.0, 0.0), 10.0, 1e-9);
 }
 
+TEST(UrdfGravity, excitationStartsAtMechanicalZeroAndStepsAreShort)
+{
+  const double home[7] = {-0.99, 0.00, -0.04, 0.20, 1.64, 1.15, -1.66};
+  const double lower[7] = {-1.20, -1.55, -3.09, -2.04, -3.09, -1.70, -6.23};
+  const double upper[7] = {1.30, 0.08, 3.09, 1.52, 3.09, 1.70, 6.23};
+  std::vector<x1_coffee_hardware_core::RightArmSamplePose> poses;
+  x1_coffee_hardware_core::buildRightArmGravityExcitation(lower, upper, &poses);
+  ASSERT_EQ(poses.size(), 16u);
+  for (int joint = 0; joint < 7; ++joint) {
+    EXPECT_NEAR(poses.front().q[joint], home[joint], 0.03);
+  }
+  double max_step = 0.0;
+  double pitch_span = 0.0;
+  double elbow_span = 0.0;
+  for (std::size_t index = 0; index < poses.size(); ++index) {
+    for (int joint = 0; joint < 7; ++joint) {
+      EXPECT_GE(poses[index].q[joint], lower[joint] - 1e-9);
+      EXPECT_LE(poses[index].q[joint], upper[joint] + 1e-9);
+    }
+    pitch_span = std::max(pitch_span, std::abs(poses[index].q[1] - home[1]));
+    elbow_span = std::max(elbow_span, std::abs(poses[index].q[3] - home[3]));
+    if (index == 0) {
+      continue;
+    }
+    for (int joint = 0; joint < 7; ++joint) {
+      max_step = std::max(
+        max_step, std::abs(poses[index].q[joint] - poses[index - 1].q[joint]));
+    }
+  }
+  EXPECT_GT(pitch_span, 0.35);
+  EXPECT_GT(elbow_span, 0.40);
+  EXPECT_LT(max_step, 0.45);
+}
+
+TEST(UrdfGravity, priorKeepsAMatchingBaseline)
+{
+  UrdfGravity truth;
+  std::string error;
+  ASSERT_TRUE(truth.load(X1_GRAVITY_URDF, &error)) << error;
+  std::array<double, 7> scale{};
+  scale.fill(1.0);
+  scale[3] = 1.25;
+  std::array<std::array<double, 3>, 7> delta{};
+  delta[3][1] = 0.02;
+  ASSERT_TRUE(truth.setRightArmCorrection(scale, delta));
+  std::vector<x1_coffee_hardware_core::RightArmSamplePose> excitation;
+  const double lower[7] = {-1.20, -1.55, -3.09, -2.04, -3.09, -1.70, -6.23};
+  const double upper[7] = {1.30, 0.08, 3.09, 1.52, 3.09, 1.70, 6.23};
+  x1_coffee_hardware_core::buildRightArmGravityExcitation(lower, upper, &excitation);
+  std::vector<std::array<double, kCoffeeAxisCount>> poses;
+  std::vector<std::array<double, 7>> torques;
+  for (const auto & sample : excitation) {
+    std::array<double, kCoffeeAxisCount> q{};
+    for (int joint = 0; joint < 7; ++joint) {
+      q[static_cast<std::size_t>(8 + joint)] = sample.q[joint];
+    }
+    std::array<double, kCoffeeAxisCount> tau{};
+    ASSERT_TRUE(truth.torques(q, &tau));
+    std::array<double, 7> right{};
+    for (int joint = 0; joint < 7; ++joint) {
+      right[static_cast<std::size_t>(joint)] = tau[static_cast<std::size_t>(8 + joint)];
+    }
+    poses.push_back(q);
+    torques.push_back(right);
+  }
+  UrdfGravity cad;
+  ASSERT_TRUE(cad.load(X1_GRAVITY_URDF, &error)) << error;
+  std::array<double, 7> found_scale{};
+  std::array<std::array<double, 3>, 7> found_delta{};
+  ASSERT_TRUE(cad.identifyRightArm(
+    poses, torques, &found_scale, &found_delta, &error, &scale, &delta)) << error;
+  EXPECT_NEAR(found_scale[3], 1.25, 0.08);
+  EXPECT_NEAR(found_delta[3][1], 0.02, 0.02);
+}
+
+TEST(UrdfGravity, trimStaysNearTheSealedBias)
+{
+  using x1_coffee_hardware_core::trimJointGravity;
+  double scale = 0.0;
+  double bias = 0.0;
+  trimJointGravity(1.0, -2.465, 0.2, 0.0, &scale, &bias);
+  EXPECT_NEAR(scale, 0.95, 1e-9);
+  EXPECT_NEAR(bias, -2.315, 1e-9);
+  trimJointGravity(1.0, -2.958, 1.02, -2.90, &scale, &bias);
+  EXPECT_NEAR(scale, 1.02, 1e-9);
+  EXPECT_NEAR(bias, -2.90, 1e-9);
+}
+
 TEST(UrdfGravity, zeroPoseAndBentPoseMatchThePointMassModel)
 {
   UrdfGravity gravity;
