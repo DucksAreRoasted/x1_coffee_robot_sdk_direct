@@ -946,6 +946,18 @@ def run_teleop() -> int:
         side: load_chain(urdf_path, tip, joints)
         for side, (_, joints, tip) in ARMS.items()
     }
+    # 实机腰部下方是连续钢板，URDF 的柱状外形不足以代表其碰撞包络。
+    # 键盘/PVT 轨迹统一保留额外高度，避免末端从腰轴下方穿过钢板。
+    waist_axis_z = 0.677
+    try:
+        root = ET.parse(urdf_path).getroot()
+        waist = next(j for j in root.findall("joint") if j.get("name") == "Joint_Body")
+        xyz = _numbers(waist.find("origin").get("xyz"), [0.0, 0.0, waist_axis_z])
+        waist_axis_z = float(xyz[2])
+    except (ET.ParseError, StopIteration, AttributeError, TypeError, ValueError):
+        # 解析失败时使用当前模型的已知轴高，不能退化为无约束。
+        pass
+    waist_plate_clearance = 0.06
 
     class Teleop(Node):
         def __init__(self) -> None:
@@ -1311,6 +1323,13 @@ def run_teleop() -> int:
                 }
                 for name in names:
                     goal[name] = positions[name]
+                tcp = _origin_of(chains[self.side].fk(goal))
+                if tcp[2] < waist_axis_z + waist_plate_clearance:
+                    print(
+                        f"\n轨迹被拒绝：{self.side} TCP 高度 {tcp[2]:.3f} m，"
+                        f"低于实机腰部钢板安全面 {waist_axis_z + waist_plate_clearance:.3f} m。"
+                    )
+                    return False
                 rows.append([goal[name] for name in COFFEE_JOINTS])
             start = {name: self.measured.get(name, rows[-1][index]) for index, name in enumerate(COFFEE_JOINTS)}
             final_goal = {name: rows[-1][index] for index, name in enumerate(COFFEE_JOINTS)}
