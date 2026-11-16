@@ -852,14 +852,14 @@ class KeyboardMenu:
     ITEMS = {
         "gravity": {"1": "f", "2": "x", "3": "c", "4": "t", "5": "H"},
         "mit": {"M": "M", "m": "M"},
-        "home": {"1": "h", "2": "0"},
+        "home": {"h": "h", "1": "h", "2": "0"},
         "advanced": {"1": "m", "2": "v", "3": "g", "4": "r", "5": "p", "6": "z"},
     }
     TEXT = {
         "main": HELP,
         "gravity": "重力菜单：1 路径预览  2 自动采样并辨识  3 加载参数  4 进入补偿  5 右臂MIT手感\n2/4/5需连续选择两次；n取消/退出，Esc返回。选臂在主界面1/2完成。",
         "mit": "MIT菜单：M 进入右臂 MIT 参数模式\n1-7 选择关节；[/]选择 q_des/dq_des/Kp/Kd/tau_ff；w/s 调整；+/-调整步长；n退出；Esc返回。",
-        "home": "回零菜单：1 机械零位  2 URDF零位\n需连续选择两次；Esc返回。会移动15轴。",
+        "home": "回零菜单：h 或 1 机械零位  2 URDF零位\n需连续选择两次；Esc返回。会移动15轴。",
         "advanced": "高级调试：\n1 MIT  2 零重力  3 激励辨识  4 恢复封存基准  5 保存工作文件  6 零力矩\n2/3/4/5/6 需连续选择两次；n退出模式，Esc返回。保存不覆盖封存基准。",
     }
 
@@ -890,7 +890,8 @@ class KeyboardMenu:
         menus = {"g": "gravity", "h": "home", "`": "advanced", "M": "mit", "m": "mit"}
         if key in menus:
             self.mode = menus[key]
-            return None
+            # 第一下 h 既打开回零菜单，也算机械零位的第一次确认。再按 h 才会动。
+            return "h" if key == "h" else None
         # 旧顶层调试快捷键不再生效，避免无菜单提示时直接触发。
         return key if key in "12wsadqeikjluo[]M+-" else None
 
@@ -1566,7 +1567,7 @@ def run_teleop() -> int:
                 if now > node.home_confirm_until:
                     node.home_confirm_until = now + 3.0
                     node.zero_confirm_until = 0.0
-                    print("\n再次选择 1：15 轴回到机械零位。请让开手臂。")
+                    print("\n再按一次 h：15 轴回到机械零位。请让开手臂。")
                     continue
                 node.home_confirm_until = 0.0
                 node.zero_confirm_until = 0.0

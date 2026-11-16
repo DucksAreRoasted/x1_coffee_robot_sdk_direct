@@ -3863,15 +3863,15 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       }
       return q;
     };
-  // 激励轨迹大约 0.05 rad/s，参考角最多领先实测 0.02 rad。
-  // 还在靠近目标就继续等；连续 20 秒没有靠近超过 0.01 rad 才算没跟上。
+  // 参考角大约 0.05 rad/s。跟上之后领先不超过 0.06 rad，力矩不会被 0.12 rad 的误差顶满。
+  // 领先太小（0.02 rad）时静摩擦和重力残差按住关节，20 秒误差不降就被误判没跟上。
   auto glide = [&](const Pose & target, bool soft, double) -> bool {
       {
         std::lock_guard<std::mutex> lock(sample_mu_);
         mit_soft_hold_ = soft;
       }
       constexpr double kSpeedRadPerSec = 0.05;
-      constexpr double kLeadRad = 0.02;
+      constexpr double kLeadRad = 0.06;
       constexpr double kStepSec = 0.02;
       const auto began = std::chrono::steady_clock::now();
       double farthest = 0.0;
@@ -3885,6 +3885,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       const auto deadline = began + std::chrono::duration<double>(
         std::max(90.0, 3.0 * farthest / kSpeedRadPerSec + 30.0));
       double best_remaining = farthest;
+      int worst = 0;
       auto progress_at = began;
       while (!gravity_calib_stop_.load() && std::chrono::steady_clock::now() < deadline) {
         const std::array<double, 7> measured = measured_q();
@@ -3894,7 +3895,10 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         const double step = kSpeedRadPerSec * kStepSec;
         for (int joint = 0; joint < 7; ++joint) {
           const double error = target.q[joint] - measured[static_cast<std::size_t>(joint)];
-          remaining = std::max(remaining, std::abs(error));
+          if (std::abs(error) >= remaining) {
+            remaining = std::abs(error);
+            worst = joint;
+          }
           const double toward = target.q[joint] - command[static_cast<std::size_t>(joint)];
           const double paced = command[static_cast<std::size_t>(joint)] +
             std::min(step, std::max(-step, toward));
@@ -3905,11 +3909,13 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         }
         set_qdes(next);
         const auto now = std::chrono::steady_clock::now();
-        if (remaining + 0.01 < best_remaining) {
+        if (remaining + 0.002 < best_remaining) {
           best_remaining = remaining;
           progress_at = now;
-        } else if (std::chrono::duration<double>(now - progress_at).count() > 20.0) {
-          break;
+        } else if (std::chrono::duration<double>(now - progress_at).count() > 30.0) {
+          say("✗ 右臂 r%d 误差停在 %.3f rad，30 秒没有靠近，标定停止", worst + 1, remaining);
+          gravity_calib_stop_.store(true);
+          return false;
         }
         if (remaining < 0.08) {
           std::array<double, 7> arrived{};
@@ -3922,7 +3928,7 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
       }
       if (!gravity_calib_stop_.load()) {
-        say("✗ 右臂力矩跟踪没有在限时内跟上，标定停止");
+        say("✗ 右臂 r%d 误差 %.3f rad，限时内没有跟上，标定停止", worst + 1, best_remaining);
         gravity_calib_stop_.store(true);
       }
       return false;
