@@ -3885,6 +3885,8 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
       constexpr double kSpeedRadPerSec = 0.05;
       constexpr double kMaxLeadRad = 0.12;
       constexpr double kStepSec = 0.02;
+      constexpr double kCruiseNoProgressSec = 8.0;
+      constexpr double kRecoveryNoProgressSec = 12.0;
       const auto began = std::chrono::steady_clock::now();
       double farthest = 0.0;
       {
@@ -3930,7 +3932,8 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
         if (remaining + 0.002 < best_remaining) {
           best_remaining = remaining;
           progress_at = now;
-        } else if (std::chrono::duration<double>(now - progress_at).count() > 30.0) {
+        } else if (std::chrono::duration<double>(now - progress_at).count() >
+                   (hard_recovery ? kRecoveryNoProgressSec : kCruiseNoProgressSec)) {
           // 巡航弹簧不足以克服某个姿态的静摩擦时，先做一次短时硬跟踪恢复。
           // 仍受全局 MIT 力矩限幅约束；恢复失败才终止采样，避免反复人工调单轴增益。
           if (!hard_recovery) {
@@ -3940,9 +3943,17 @@ void SoemEthercatTransport::runRightArmGravityCalibration()
               mit_cruise_hold_ = false;
             }
             progress_at = now;
-            say("! 右臂 r%d 长时间无进展，切换一次硬跟踪恢复", worst + 1);
+            say("! 右臂 r%d 巡航 %.1fs 无进展，切换一次硬跟踪恢复；误差 %.3f rad",
+              worst + 1, kCruiseNoProgressSec, remaining);
           } else {
-            say("✗ 右臂 r%d 误差停在 %.3f rad，恢复跟踪仍无进展，标定停止", worst + 1, remaining);
+            bool saturated = false;
+            {
+              std::lock_guard<std::mutex> lock(sample_mu_);
+              saturated = !mit_balance_ok_[static_cast<std::size_t>(worst)];
+            }
+            say("✗ 右臂 r%d 恢复 %.1fs 仍无进展，误差 %.3f rad，力矩%s，标定停止",
+              worst + 1, kRecoveryNoProgressSec, remaining,
+              saturated ? "接近上限" : "未接近上限");
             gravity_calib_stop_.store(true);
             return false;
           }
