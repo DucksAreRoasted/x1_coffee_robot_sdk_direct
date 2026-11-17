@@ -49,6 +49,14 @@
           filename="package://arm_describle/meshes0408/Waist.STL" />
       </geometry>
     </collision>
+    <!-- 实机底部钢板沿腰部立柱扫到 Joint_Body 转轴的最小包围体。
+         仅用于碰撞检查，不改变 Waist 的 visual 或动力学惯量。 -->
+    <collision name="waist_plate_to_axis_keepout">
+      <origin xyz="0 0 0.33857" rpy="0 0 0" />
+      <geometry>
+        <box size="0.259 0.174 0.67714" />
+      </geometry>
+    </collision>
   </link>
   <link
     name="Body">
