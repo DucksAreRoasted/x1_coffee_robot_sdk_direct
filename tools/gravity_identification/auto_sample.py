@@ -78,25 +78,34 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
     for j in moving:
         # 目标为正反接近点预留 0.04 rad，再为软限位保留 0.05 rad。
         # 先求可用区间再采样，不裁剪已生成姿态，避免重复点和单侧接近。
-        lo=max(seed[j]-target_radius,bounds[j][0]+.09)
-        hi=min(seed[j]+target_radius,bounds[j][1]-.09)
+        escape_radius=max(target_radius,.35)
+        lo=max(seed[j]-escape_radius,bounds[j][0]+.09)
+        hi=min(seed[j]+escape_radius,bounds[j][1]-.09)
         if hi-lo < .04:
             raise ValueError(f'{JOINTS[j]} 可用辨识区间仅 {hi-lo:.4f} rad，请先人工移到更居中的安全姿态')
         low.append(lo);high.append(hi)
     rng=np.random.default_rng(17); plan=[]
     # 启动姿态可能仍靠近身体；只提示并允许规划第一段向外侧移动。
     check_tcp_above_waist_axis(model, seed, side, enforce_radial=False)
-    # 启动姿态可能因旧模型/保守净距被判在躯干附近；允许第一组动作先向外退出。
-    # 严格净距从即将执行的目标点和后续插值点开始检查。
+    # 启动姿态可能因旧模型/保守净距被判在躯干附近；仅在确实如此时
+    # 扩大第一组逃逸动作，正常安全起点仍保持原有局部辨识包络。
+    startup_near_body=False
+    if clearance is not None:
+        try: clearance(seed)
+        except ValueError: startup_near_body=True
     attempts=0
     while len(plan)<pose_count*4:
         attempts+=1
         if attempts>1000:raise ValueError('无法生成足够远离躯干的姿态，请先调整起点；不会自动缩小净距')
-        i=len(plan)//4;q=seed.copy();q[moving]=rng.uniform(low,high)
+        i=len(plan)//4;q=seed.copy()
+        radius=.35 if (not plan and startup_near_body) else target_radius
+        q[moving]=rng.uniform(
+            [max(seed[j]-radius,bounds[j][0]+.09) for j in moving],
+            [min(seed[j]+radius,bounds[j][1]-.09) for j in moving])
         # 结构化肩部激励：分别覆盖第1轴、第2轴及两轴耦合，
         # 用于前平举/侧平举方向的重力回归；实际正负方向仍由 URDF 和反馈决定。
         excitation=i % 3
-        shoulder_delta=0.12
+        shoulder_delta=.28 if (not plan and startup_near_body) else .12
         if excitation == 0:
             q[moving[0]]=np.clip(seed[moving[0]]+shoulder_delta,low[0],high[0])
         elif excitation == 1:
@@ -116,7 +125,7 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
                     # 不把当前已存在的启动点重新判为“侵入”；只检查实际将要发送的路径点。
                     points=path_points(previous,step['q'])[1:]
                     # 第一组允许从当前姿态向外退出；目标点仍必须通过净距检查。
-                    if not plan and points:
+                    if not plan and startup_near_body and points:
                         points=[points[-1]]
                     for point in points:clearance(point)
                     previous=step['q']
@@ -129,7 +138,7 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
         plan.extend(block)
     # 腰和未选手臂保持原位；只对会移动的手臂要求额外限位余量。
     for step in plan:
-        check_local_pose(seed,step['q'],side,target_radius+.05)
+        check_local_pose(seed,step['q'],side,(.35 if step['pose_id']=='pose01' else target_radius)+.05)
         for j in moving:
             if not bounds[j][0]+.05-1e-12 <= step['q'][j] <= bounds[j][1]-.05+1e-12:
                 raise ValueError('采样姿态接近或超过限位 '+JOINTS[j])

@@ -1174,6 +1174,9 @@ def run_teleop() -> int:
                 answer.values[3].double_value)
 
         def start_sample(self, execute):
+            if self.sample_process is not None and self.sample_process.poll() is None:
+                print("\n已有自动采样在运行，忽略重复启动请求。")
+                return
             from ament_index_python.packages import get_package_share_directory
             tool_dir = Path(get_package_share_directory("x1_coffee_integration")) / "gravity_identification"
             try:
