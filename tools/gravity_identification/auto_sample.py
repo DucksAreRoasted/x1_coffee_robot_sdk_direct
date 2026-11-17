@@ -300,7 +300,15 @@ def main():
     try:
         print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
         end=time.monotonic()+10
-        while not latest and time.monotonic()<end:spin()
+        next_notice=time.monotonic()+1
+        while len(latest)<15 and time.monotonic()<end:
+            spin()
+            if time.monotonic()>=next_notice:
+                print(f'[准备] 已收到 {len(latest)}/15 轴反馈，剩余 {max(0,end-time.monotonic()):.0f}s。',flush=True)
+                next_notice=time.monotonic()+1
+        if len(latest)<15:
+            missing=[j for j in JOINTS if j not in latest]
+            raise RuntimeError(f'10秒内未收到完整15轴反馈；缺失: {missing}')
         health();seed=qnow();start_pose=seed.copy()
         if a.repeat_from_plan:
             source=json.loads(a.repeat_from_plan.read_text())
