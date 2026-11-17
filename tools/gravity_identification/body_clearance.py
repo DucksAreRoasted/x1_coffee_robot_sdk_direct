@@ -48,7 +48,15 @@ class BodyClearance:
             points=[]
             for collision in link.findall('collision'):
                 mesh=collision.find('geometry/mesh')
-                if mesh is None:raise ValueError('躯干净距检查需要网格碰撞几何')
+                box=collision.find('geometry/box')
+                if mesh is None and box is not None:
+                    size=np.array([float(x) for x in box.get('size','').split()])
+                    if size.shape!=(3,) or not np.isfinite(size).all() or np.any(size<=0):
+                        raise ValueError('无效 box 碰撞几何')
+                    # box 由 MoveIt 的原生碰撞检测负责；这里的网格细分检查
+                    # 只用于原始 STL，避免把保守包围体重复计入净距。
+                    continue
+                if mesh is None:raise ValueError('躯干净距检查需要网格或 box 碰撞几何')
                 prefix='package://arm_describle/'
                 filename=mesh.get('filename','')
                 if not filename.startswith(prefix):raise ValueError('未知网格包')

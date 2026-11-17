@@ -14,8 +14,8 @@ from settling import stable_window,stability_reason,StableConfirmation
 LOCAL_RADIUS_RAD=.20
 FIXED_DRIFT_RAD=.02
 TCP_AXIS_CLEARANCE_M=.03
-WAIST_FLANGE_RADIUS_M=.28
-WAIST_FLANGE_Z_BAND_M=.10
+WAIST_FLANGE_RADIUS_M=.36
+WAIST_FLANGE_Z_BAND_M=.15
 
 
 def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_M):
@@ -225,7 +225,8 @@ def main():
     model=Model(a.urdf,[1,1])
     from ament_index_python.packages import get_package_share_directory
     from body_clearance import BodyClearance
-    clearance=BodyClearance(a.urdf,get_package_share_directory('arm_describle'))
+    # 实机动作编排使用更大的躯干净距；靠近身体的姿态直接重新生成。
+    clearance=BodyClearance(a.urdf,get_package_share_directory('arm_describle'),margin=.08)
     def body_check(q):clearance.check(model,q,a.side)
     import rclpy
     from rclpy.qos import qos_profile_sensor_data
