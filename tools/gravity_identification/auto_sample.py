@@ -14,8 +14,8 @@ from settling import stable_window,stability_reason,StableConfirmation
 LOCAL_RADIUS_RAD=.20
 FIXED_DRIFT_RAD=.02
 TCP_AXIS_CLEARANCE_M=.03
-WAIST_FLANGE_RADIUS_M=.36
-WAIST_FLANGE_Z_BAND_M=.15
+WAIST_FLANGE_RADIUS_M=.45
+WAIST_FLANGE_Z_BAND_M=.25
 
 
 def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_M):
