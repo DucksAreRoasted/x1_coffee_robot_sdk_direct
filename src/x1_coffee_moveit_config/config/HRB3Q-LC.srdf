@@ -53,14 +53,6 @@
     <disable_collisions link1="Body" link2="Waist" reason="Adjacent"/>
     <disable_collisions link1="Body" link2="arml1" reason="Adjacent"/>
     <disable_collisions link1="Body" link2="armr1" reason="Adjacent"/>
-    <disable_collisions link1="Waist" link2="arml1" reason="Never"/>
-    <disable_collisions link1="Waist" link2="arml2" reason="Never"/>
-    <disable_collisions link1="Waist" link2="arml3" reason="Never"/>
-    <disable_collisions link1="Waist" link2="arml4" reason="Never"/>
-    <disable_collisions link1="Waist" link2="armr1" reason="Never"/>
-    <disable_collisions link1="Waist" link2="armr2" reason="Never"/>
-    <disable_collisions link1="Waist" link2="armr3" reason="Never"/>
-    <disable_collisions link1="Waist" link2="armr4" reason="Never"/>
     <disable_collisions link1="arml1" link2="arml2" reason="Adjacent"/>
     <disable_collisions link1="arml1" link2="arml3" reason="Never"/>
     <disable_collisions link1="arml1" link2="armr1" reason="Never"/>
