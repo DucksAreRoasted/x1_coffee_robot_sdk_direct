@@ -256,12 +256,18 @@ def main():
     signal.signal(signal.SIGINT, signal.default_int_handler)
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO);node=rclpy.create_node('x1_'+a.side+'_auto_sample')
     latest={};results={};fault=[];sent_sequences=set();last_stamp=0;received=0.;motion_started=False;seed=None
+    message_count=0; rejected_count=0; last_names=[]; last_message_size=0
     def receive(msg):
-        nonlocal last_stamp,received,latest
+        nonlocal last_stamp,received,latest,message_count,rejected_count,last_names,last_message_size
+        message_count += 1
+        last_names = [s.joint_name for s in msg.states]
+        last_message_size = len(msg.states)
         stamp=msg.header.stamp.sec*10**9+msg.header.stamp.nanosec
         states={s.joint_name:s for s in msg.states}
-        if len(msg.states)!=15 or set(states)!=set(JOINTS):fault.append('反馈轴集合错误');return
-        if stamp<=last_stamp:return
+        if len(msg.states)!=15 or set(states)!=set(JOINTS):
+            rejected_count += 1; return
+        if stamp<=last_stamp:
+            rejected_count += 1; return
         last_stamp=stamp;received=time.monotonic();latest=states
         for j,s in states.items():
             if not (s.enabled and s.position_valid and s.velocity_valid and s.position_unit=='rad' and (j not in selected or s.torque_valid)) or s.alarm or s.follow_error or s.emergency_input_active or not np.isfinite([s.position,s.velocity]).all():fault.append('无效反馈/故障 '+j)
@@ -299,16 +305,19 @@ def main():
             if not call(validity,req).valid:raise RuntimeError('MoveIt 路径采样点无效/碰撞')
     try:
         print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
+        print(f'[调试] motor_states订阅已建立；发布者={node.count_publishers("/x1/motor_states")}，订阅者={node.count_subscribers("/x1/motor_states")}，QoS=BEST_EFFORT',flush=True)
         end=time.monotonic()+10
         next_notice=time.monotonic()+1
         while len(latest)<15 and time.monotonic()<end:
             spin()
             if time.monotonic()>=next_notice:
-                print(f'[准备] 已收到 {len(latest)}/15 轴反馈，剩余 {max(0,end-time.monotonic()):.0f}s。',flush=True)
+                age='无'
+                if received: age=f'{time.monotonic()-received:.2f}s前'
+                print(f'[准备] 已收到 {len(latest)}/15 轴反馈，消息={message_count}，拒绝={rejected_count}，最近={age}，发布者={node.count_publishers("/x1/motor_states")}，剩余 {max(0,end-time.monotonic()):.0f}s。',flush=True)
                 next_notice=time.monotonic()+1
         if len(latest)<15:
             missing=[j for j in JOINTS if j not in latest]
-            raise RuntimeError(f'10秒内未收到完整15轴反馈；缺失: {missing}')
+            raise RuntimeError(f'10秒内未收到完整15轴反馈；缺失: {missing}；消息={message_count}；最近消息轴数={last_message_size}；轴名={last_names}；拒绝={rejected_count}；发布者={node.count_publishers("/x1/motor_states")}')
         health();seed=qnow();start_pose=seed.copy()
         if a.repeat_from_plan:
             source=json.loads(a.repeat_from_plan.read_text())
