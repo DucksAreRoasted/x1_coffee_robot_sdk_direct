@@ -961,6 +961,8 @@ def run_teleop() -> int:
     # 60 mm，否则会误拒绝位于法兰上方的合法 TCP。网格净距和 MoveIt
     # 碰撞检查仍负责判断法兰的实际外形，额外高度只留 20 mm 余量。
     waist_plate_clearance = 0.02
+    waist_safe_radius = 0.45
+    waist_safe_z_band = 0.25
 
     class Teleop(Node):
         def __init__(self) -> None:
@@ -1331,6 +1333,13 @@ def run_teleop() -> int:
                     print(
                         f"\n轨迹被拒绝：{self.side} TCP 高度 {tcp[2]:.3f} m，"
                         f"低于实机腰部钢板安全面 {waist_axis_z + waist_plate_clearance:.3f} m。"
+                    )
+                    return False
+                radial = (tcp[0] * tcp[0] + tcp[1] * tcp[1]) ** 0.5
+                if radial < waist_safe_radius and abs(tcp[2] - waist_axis_z) < waist_safe_z_band:
+                    print(
+                        f"\n轨迹被拒绝：{self.side} TCP 距腰轴 {radial:.3f} m，"
+                        f"小于躯干安全半径 {waist_safe_radius:.3f} m。"
                     )
                     return False
                 rows.append([goal[name] for name in COFFEE_JOINTS])
