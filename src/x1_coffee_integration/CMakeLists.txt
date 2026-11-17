@@ -21,10 +21,15 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME})
 
 # 键盘从安装目录启动离线辨识工具，不依赖源码仓库的绝对路径。
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/gravity_identification/
-  DESTINATION share/${PROJECT_NAME}/gravity_identification
-  FILES_MATCHING PATTERN "*.py" PATTERN "*.json"
-  PATTERN "test_*.py" EXCLUDE PATTERN "__pycache__" EXCLUDE)
+# 这里逐个文件安装而不是 install(DIRECTORY)：DIRECTORY 是拷贝，改完源码必须重编，
+# 否则会悄悄跑到旧副本上（踩过一次）。install(FILES) 在 --symlink-install 下是软链。
+file(GLOB GRAVITY_IDENTIFY_PY
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/gravity_identification/*.py)
+file(GLOB GRAVITY_IDENTIFY_JSON
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/gravity_identification/*.json)
+list(FILTER GRAVITY_IDENTIFY_PY EXCLUDE REGEX "/test_[^/]*\\.py$")
+install(FILES ${GRAVITY_IDENTIFY_PY} ${GRAVITY_IDENTIFY_JSON}
+  DESTINATION share/${PROJECT_NAME}/gravity_identification)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
