@@ -292,7 +292,10 @@ def main():
     def spin():rclpy.spin_once(node,timeout_sec=.02)
     def health():
         if fault:raise RuntimeError(fault[0])
-        if time.monotonic()-received>.5:raise RuntimeError('电机反馈过期')
+        # 规划阶段的网格预检查是纯 CPU 的，会连续跑几百毫秒而不 spin，
+        # 看起来像反馈断流但实际没有运动安全问题；只在真正下发运动后才把
+        # 反馈新鲜度当硬门槛。
+        if motion_started and time.monotonic()-received>.5:raise RuntimeError('电机反馈过期')
         if seed is not None:check_local_pose(seed,qnow(),a.side,a.target_radius+.05)
         if seed is not None:body_check(qnow())
     def call(client,request):
@@ -372,7 +375,9 @@ def main():
             plan=ordered
         except ValueError:saved=0.  # 重排路径贴近躯干时保留已筛选的原顺序。
         print(f'[提速] 保留{a.poses}个双向姿态；访问顺序预计减少运动 {saved:.1f}s；非采样点停稳确认0.2s。',flush=True)
-        if not validity.wait_for_service(timeout_sec=3):raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
+        # 本机 DDS 发现偶发不稳定：一次 3 秒等不到不代表服务不存在，分两段共等 23 秒。
+        if not (validity.wait_for_service(timeout_sec=3) or validity.wait_for_service(timeout_sec=20)):
+            raise RuntimeError('缺少 MoveIt /check_state_validity，拒绝运行')
         moving=arm_indices(a.side)
         print(f'[计划] {a.side}臂，{a.poses}个姿态 × 正反2次采样，共{len(plan)}段运动。',flush=True)
         planned=np.array([step['q'] for step in plan])
