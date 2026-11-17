@@ -312,6 +312,15 @@ def main():
         else:
             plan=make_plan(seed,model,a.side,a.poses,a.target_radius,body_check)
             ordered,saved=optimize_visit_order(seed,plan)
+        # 真机执行前先用 MuJoCo 做一次独立的 TCP/腰部包围体检查。
+        # 仿真只做碰撞筛选，不代替后续 MoveIt 和硬件反馈检查。
+        if a.execute:
+            from mujoco_collision_preview import preview
+            preview_rows=preview(a.urdf,{'seed':seed.tolist(),'steps':ordered},a.side)
+            sim_hits=[r for r in preview_rows if r['collision']]
+            if sim_hits:
+                raise RuntimeError(f'MuJoCo 预检发现 {len(sim_hits)} 个碰撞姿态，拒绝实机执行')
+            print(f'[MuJoCo预检] {len(preview_rows)} 个姿态通过腰部包围体检查。',flush=True)
         try:
             previous=start_pose
             for step in ordered:
