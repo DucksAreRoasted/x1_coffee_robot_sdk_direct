@@ -89,7 +89,19 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
     while len(plan)<pose_count*4:
         attempts+=1
         if attempts>1000:raise ValueError('无法生成足够远离躯干的姿态，请先调整起点；不会自动缩小净距')
-        i=len(plan)//4;q=seed.copy();q[moving]=rng.uniform(low,high);block=[]
+        i=len(plan)//4;q=seed.copy();q[moving]=rng.uniform(low,high)
+        # 结构化肩部激励：分别覆盖第1轴、第2轴及两轴耦合，
+        # 用于前平举/侧平举方向的重力回归；实际正负方向仍由 URDF 和反馈决定。
+        excitation=i % 3
+        shoulder_delta=0.12
+        if excitation == 0:
+            q[moving[0]]=np.clip(seed[moving[0]]+shoulder_delta,low[0],high[0])
+        elif excitation == 1:
+            q[moving[1]]=np.clip(seed[moving[1]]+shoulder_delta,low[1],high[1])
+        else:
+            q[moving[0]]=np.clip(seed[moving[0]]+shoulder_delta,low[0],high[0])
+            q[moving[1]]=np.clip(seed[moving[1]]+shoulder_delta,low[1],high[1])
+        block=[]
         for direction in (1,-1):
             approach=q.copy();approach[moving]-=direction*.04
             block.extend([dict(pose_id=f'pose{i+1:02}',approach=direction,record=False,q=approach.tolist()),
