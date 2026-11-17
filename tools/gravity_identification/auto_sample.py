@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """单臂自动双向采样（可选左/右）；默认只检查路径和保存计划，--execute 才发送 PVT。"""
-import argparse,csv,json,time,hashlib,signal
+import argparse,csv,json,time,hashlib,signal,select,sys
 from pathlib import Path
 import numpy as np
 from model import Model,JOINTS,origin
@@ -254,6 +254,11 @@ def main():
     from rclpy.signals import SignalHandlerOptions
     # Ctrl-C先进入取消PVT流程，保留ROS上下文用于发送停止请求。
     signal.signal(signal.SIGINT, signal.default_int_handler)
+    # 单独跑这个脚本时不会自动 source ros_lan_env.sh，节点会跑到默认域 0 上，
+    # 表现就是「/x1/motor_states 发布者=0」。这里补上和键盘脚本同一套环境自检。
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+    from x1_ros_env import ensure_ros_env
+    ensure_ros_env()
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO);node=rclpy.create_node('x1_'+a.side+'_auto_sample')
     latest={};results={};fault=[];sent_sequences=set();last_stamp=0;received=0.;motion_started=False;seed=None
     message_count=0; rejected_count=0; last_names=[]; last_message_size=0
@@ -303,13 +308,34 @@ def main():
             req.robot_state.joint_state.position=q.tolist()
             req.group_name='right_arm' if a.side=='r' else 'left_arm'
             if not call(validity,req).valid:raise RuntimeError('MoveIt 路径采样点无效/碰撞')
+    def cancelled():
+        """输入 n 回车取消。stdin 不是终端（例如被管道接走）时不处理。"""
+        if not sys.stdin or not sys.stdin.isatty():return False
+        if select.select([sys.stdin],[],[],0)[0]:
+            return sys.stdin.readline().strip().lower().startswith('n')
+        return False
     try:
-        print('[准备] 等待15轴有效反馈，最多10秒；n可取消。',flush=True)
+        # 分两段等：先等发布者出现（控制栈刚起来时 motor_state_broadcaster
+        # 要等控制器激活才有发布者，通常要十几秒），再等 15 轴数据齐。
+        print('[准备] 等待电机状态发布者出现，最多60秒；输入 n 回车可取消。',flush=True)
         print(f'[调试] motor_states订阅已建立；发布者={node.count_publishers("/x1/motor_states")}，订阅者={node.count_subscribers("/x1/motor_states")}，QoS=BEST_EFFORT',flush=True)
-        end=time.monotonic()+10
+        end=time.monotonic()+60
+        next_notice=time.monotonic()+2
+        while node.count_publishers('/x1/motor_states')==0 and time.monotonic()<end:
+            spin()
+            if cancelled():raise RuntimeError('已取消')
+            if time.monotonic()>=next_notice:
+                print(f'[准备] 还没有发布者，已等 {60-max(0,end-time.monotonic()):.0f}s；控制栈要等控制器激活后才有 /x1/motor_states。',flush=True)
+                next_notice=time.monotonic()+2
+        if node.count_publishers('/x1/motor_states')==0:
+            raise RuntimeError('60秒内没有出现 /x1/motor_states 发布者。控制栈可能没起来，'
+                               '或还在激活控制器；等下位机打印“✓ 控制器已按顺序就绪”后重试。')
+        print('[准备] 发布者已出现，等待15轴有效反馈，最多15秒；输入 n 回车可取消。',flush=True)
+        end=time.monotonic()+15
         next_notice=time.monotonic()+1
         while len(latest)<15 and time.monotonic()<end:
             spin()
+            if cancelled():raise RuntimeError('已取消')
             if time.monotonic()>=next_notice:
                 age='无'
                 if received: age=f'{time.monotonic()-received:.2f}s前'
@@ -317,7 +343,7 @@ def main():
                 next_notice=time.monotonic()+1
         if len(latest)<15:
             missing=[j for j in JOINTS if j not in latest]
-            raise RuntimeError(f'10秒内未收到完整15轴反馈；缺失: {missing}；消息={message_count}；最近消息轴数={last_message_size}；轴名={last_names}；拒绝={rejected_count}；发布者={node.count_publishers("/x1/motor_states")}')
+            raise RuntimeError(f'15秒内未收到完整15轴反馈；缺失: {missing}；消息={message_count}；最近消息轴数={last_message_size}；轴名={last_names}；拒绝={rejected_count}；发布者={node.count_publishers("/x1/motor_states")}')
         health();seed=qnow();start_pose=seed.copy()
         if a.repeat_from_plan:
             source=json.loads(a.repeat_from_plan.read_text())
