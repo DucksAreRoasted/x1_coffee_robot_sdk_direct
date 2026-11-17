@@ -86,7 +86,8 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
     rng=np.random.default_rng(17); plan=[]
     # 启动姿态可能仍靠近身体；只提示并允许规划第一段向外侧移动。
     check_tcp_above_waist_axis(model, seed, side, enforce_radial=False)
-    if clearance is not None:clearance(seed)
+    # 启动姿态可能因旧模型/保守净距被判在躯干附近；允许第一组动作先向外退出。
+    # 严格净距从即将执行的目标点和后续插值点开始检查。
     attempts=0
     while len(plan)<pose_count*4:
         attempts+=1
@@ -113,7 +114,11 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
             try:
                 for step in block:
                     # 不把当前已存在的启动点重新判为“侵入”；只检查实际将要发送的路径点。
-                    for point in path_points(previous,step['q'])[1:]:clearance(point)
+                    points=path_points(previous,step['q'])[1:]
+                    # 第一组允许从当前姿态向外退出；目标点仍必须通过净距检查。
+                    if not plan and points:
+                        points=[points[-1]]
+                    for point in points:clearance(point)
                     previous=step['q']
             except ValueError:continue
         try:
