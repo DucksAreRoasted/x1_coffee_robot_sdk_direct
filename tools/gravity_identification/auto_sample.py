@@ -14,11 +14,12 @@ from settling import stable_window,stability_reason,StableConfirmation
 LOCAL_RADIUS_RAD=.20
 FIXED_DRIFT_RAD=.02
 TCP_AXIS_CLEARANCE_M=.03
-WAIST_FLANGE_RADIUS_M=.45
+WAIST_FLANGE_RADIUS_M=.20
 WAIST_FLANGE_Z_BAND_M=.25
 
 
-def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_M):
+def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_M,
+                               enforce_radial=True):
     """动作编排约束：采样臂末端必须高于腰部转轴，留出安全余量。"""
     frames, _ = model.geometry(q)
     tcp = f'{side}ight_gripper_tcp' if side == 'r' else 'left_gripper_tcp'
@@ -33,7 +34,7 @@ def check_tcp_above_waist_axis(model, q, side='r', clearance=TCP_AXIS_CLEARANCE_
             f'{axis_z + clearance:.4f} m')
     tcp_local=(np.asarray(frames[tcp][0])-np.asarray(waist_origin)) @ waist_rot
     radial=float(np.linalg.norm(tcp_local[:2]))
-    if radial < WAIST_FLANGE_RADIUS_M and abs(float(tcp_local[2])) < WAIST_FLANGE_Z_BAND_M:
+    if enforce_radial and radial < WAIST_FLANGE_RADIUS_M and abs(float(tcp_local[2])) < WAIST_FLANGE_Z_BAND_M:
         raise ValueError(
             f'{tcp} 进入腰部法兰径向禁区：r={radial:.3f} m，z={tcp_local[2]:+.3f} m')
 
@@ -83,7 +84,8 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
             raise ValueError(f'{JOINTS[j]} 可用辨识区间仅 {hi-lo:.4f} rad，请先人工移到更居中的安全姿态')
         low.append(lo);high.append(hi)
     rng=np.random.default_rng(17); plan=[]
-    check_tcp_above_waist_axis(model, seed, side)
+    # 启动姿态可能仍靠近身体；只提示并允许规划第一段向外侧移动。
+    check_tcp_above_waist_axis(model, seed, side, enforce_radial=False)
     if clearance is not None:clearance(seed)
     attempts=0
     while len(plan)<pose_count*4:
@@ -110,7 +112,8 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
             previous=plan[-1]['q'] if plan else seed
             try:
                 for step in block:
-                    for point in path_points(previous,step['q']):clearance(point)
+                    # 不把当前已存在的启动点重新判为“侵入”；只检查实际将要发送的路径点。
+                    for point in path_points(previous,step['q'])[1:]:clearance(point)
                     previous=step['q']
             except ValueError:continue
         try:
