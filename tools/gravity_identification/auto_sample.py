@@ -179,7 +179,7 @@ def main():
     p.add_argument('--inventory',type=Path,default=Path(__file__).with_name('motor_inventory.json'))
     p.add_argument('--efficiency',type=float,default=.7,help='电流换算效率先验假设，并非实测值')
     p.add_argument('--additional-gripper-kg',type=float,nargs=2,default=[0.,0.],help='URDF之外额外负载；当前CAD已包含夹爪')
-    p.add_argument('--target-radius',type=float,default=.35,help='采样目标相对起点最大角差，默认0.35rad')
+    p.add_argument('--target-radius',type=float,default=.20,help='采样目标相对起点最大角差，默认0.20rad；避免腰部法兰包络')
     p.add_argument('--repeat-from-plan',type=Path,help='只复测历史计划，不生成辨识候选')
     p.add_argument('--repeat-pose',nargs='+',default=['pose14','pose24','pose30'])
     p.add_argument('--repeat-count',type=int,default=3)
