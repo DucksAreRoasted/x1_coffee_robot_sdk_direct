@@ -161,7 +161,8 @@ def repeat_plan(source, names, count, model, side, clearance):
                 check_local_pose(seed,step['q'],side,radius);clearance(step['q'])
                 for j in arm_indices(side):
                     limit=model.by_name[JOINTS[j]].find('limit')
-                    if not float(limit.get('lower'))+.05<=step['q'][j]<=float(limit.get('upper'))-.05:
+                    # 接近点可能正好落在软限位余量边界，允许极小浮点误差。
+                    if not float(limit.get('lower'))+.05-1e-9<=step['q'][j]<=float(limit.get('upper'))-.05+1e-9:
                         raise ValueError('复测姿态越过限位余量')
                 step['pose_id']=f'repeat{repeat+1:02}_{name}'
                 result.append(step)
