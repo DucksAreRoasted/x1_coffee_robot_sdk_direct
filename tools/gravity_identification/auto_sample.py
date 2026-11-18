@@ -428,9 +428,11 @@ def main():
                         and time.monotonic()-sent_at>=duration):break
             else:raise RuntimeError('未测量确认到位/停稳')
             if not step['record']:continue
-            print('[保持采样] 已到位，等待3秒电流/扭矩窗口连续达标3秒，最多30秒。',flush=True)
+            print('[保持采样] 已到位，等待3秒电流/扭矩统计窗口；通过后连续确认1秒，最多30秒。',flush=True)
             batch=[];hold_started=time.monotonic();end=hold_started+30;stamp_seen=0;next_notice=hold_started+2
-            confirmation=StableConfirmation(3.)
+            # 统计窗口本身仍完整保留3秒。额外确认只防止边界瞬间越过阈值，
+            # 不再重复等待一个完整窗口，避免 r6 缓慢漂移时每个姿态多等数秒。
+            confirmation=StableConfirmation(1.)
             while time.monotonic()<end:
                 spin();health()
                 if np.max(np.abs(qnow()-target))>.01 or max(abs(s.velocity) for s in latest.values())>.02:raise RuntimeError('采样期间移动')
@@ -453,7 +455,7 @@ def main():
                 if confirmation.update(time.monotonic(),not reason):break
                 if time.monotonic()>=next_notice:
                     span=(int(batch[-1]['time_ns'])-int(batch[0]['time_ns']))/1e9
-                    detail=reason or f'窗口已达标，连续确认 {time.monotonic()-confirmation.since:.1f}/3.0秒'
+                    detail=reason or f'窗口已达标，连续确认 {time.monotonic()-confirmation.since:.1f}/1.0秒'
                     print(f'[等待稳定] 已等 {time.monotonic()-hold_started:.1f}/30s；窗口 {span:.1f}s、{len(batch)}条；{detail}。',flush=True)
                     next_notice=time.monotonic()+2
             else:
