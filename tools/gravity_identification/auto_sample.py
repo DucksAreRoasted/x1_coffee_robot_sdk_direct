@@ -105,7 +105,7 @@ def make_plan(seed,model,side='r',pose_count=15,target_radius=.15,clearance=None
         # 结构化肩部激励：分别覆盖第1轴、第2轴及两轴耦合，
         # 用于前平举/侧平举方向的重力回归；实际正负方向仍由 URDF 和反馈决定。
         excitation=i % 3
-        shoulder_delta=.28 if (not plan and startup_near_body) else .12
+        shoulder_delta=.35 if (not plan and startup_near_body) else .12
         if excitation == 0:
             q[moving[0]]=np.clip(seed[moving[0]]+shoulder_delta,low[0],high[0])
         elif excitation == 1:
@@ -243,7 +243,9 @@ def main():
     from ament_index_python.packages import get_package_share_directory
     from body_clearance import BodyClearance
     # 实机动作编排使用更大的躯干净距；靠近身体的姿态直接重新生成。
-    clearance=BodyClearance(a.urdf,get_package_share_directory('arm_describle'),margin=.08)
+    # 规划阶段允许机械零点靠近躯干，保留50 mm净距；最终路径仍由
+    # MoveIt和MuJoCo分别复核，钢板碰撞体本身不缩小。
+    clearance=BodyClearance(a.urdf,get_package_share_directory('arm_describle'),margin=.05)
     def body_check(q):clearance.check(model,q,a.side)
     import rclpy
     from rclpy.qos import qos_profile_sensor_data
