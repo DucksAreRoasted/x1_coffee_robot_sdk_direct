@@ -15,9 +15,22 @@ __pycache__/
 /Gecat.log
 /CommandErrorInfo.log
 /manual.zip
+/manual/*.zip
+/manual/**/*.zip
 /manual/eRob最新手册/
 /manual/固高最新手册/
+# 本地手册原件体积大，仅供查阅，不作为源码变更提交。
+/manual/**/*.pdf
+/manual/**/*.doc
+/manual/**/*.docx
+/manual/**/*.ppt
+/manual/**/*.pptx
 *.log
+
+# 本地硬件导出、辨识结果和临时可视化产物。
+/robot_data/
+/tmp/
+*.xml
 
 # 周报、幻灯片和生成图只留在本机，不进源码存档。
 /reports/
